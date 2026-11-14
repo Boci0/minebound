@@ -5,3 +5,11 @@ edition = "2021"
 
 [dependencies]
 macroquad = { version = "0.4", default-features = false, features = ["audio"] }
+
+# quad-snd with sound decoding moved off the game thread (see vendor/quad-snd/src/mixer.rs, "minebound patch")
+[patch.crates-io]
+quad-snd = { path = "vendor/quad-snd" }
+
+# optimise dependencies in debug builds too: audio decoding is otherwise many times slower
+[profile.dev.package."*"]
+opt-level = 3
