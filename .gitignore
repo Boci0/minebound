@@ -1,0 +1,7 @@
+target/
+CLAUDE.md
+AGENTS.md
+CONTEXT.md
+.claude/
+docs/adr/
+HANDOFF.md
