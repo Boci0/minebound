@@ -6,7 +6,6 @@ use crate::{
 
 pub const FLOORS: usize = 3;
 pub const COLS: usize = 5;
-pub const CHARM_PRICE: i32 = 35;
 pub const HEAL_PRICE: i32 = 20;
 pub const HEAL_AMOUNT: i32 = 12;
 /// HP everyone recovers after a won fight
@@ -98,11 +97,23 @@ impl Run {
         self.hp += self.max_hp() - before;
     }
 
-    /// Up to `n` charms the player does not own yet.
+    /// Up to `n` charms the player does not own yet; rarer ones come up less often.
     fn offer(&mut self, n: usize) -> Vec<usize> {
-        let mut ids: Vec<usize> = (0..CHARMS.len()).filter(|i| !self.charms.contains(i)).collect();
-        self.rng.shuffle(&mut ids);
-        ids.truncate(n);
+        let mut pool: Vec<usize> = (0..CHARMS.len()).filter(|i| !self.charms.contains(i)).collect();
+        let mut ids = vec![];
+        while ids.len() < n && !pool.is_empty() {
+            let total: usize = pool.iter().map(|&i| CHARMS[i].rarity.weight()).sum();
+            let mut roll = self.rng.below(total);
+            let k = pool.iter().position(|&i| {
+                let w = CHARMS[i].rarity.weight();
+                if roll < w {
+                    return true;
+                }
+                roll -= w;
+                false
+            });
+            ids.push(pool.remove(k.expect("roll is below the total weight")));
+        }
         ids
     }
 
@@ -115,15 +126,15 @@ impl Run {
         Stage::Pick(options)
     }
 
-    fn kind_for(&mut self, col: usize, row: usize) -> NodeKind {
+    fn kind_for(&mut self, col: usize) -> NodeKind {
         if col == 0 {
             return NodeKind::Battle;
         }
         if col == COLS {
             return NodeKind::Boss;
         }
-        if col == COLS - 1 && row == 0 {
-            return NodeKind::Rest; // always a chance to heal before the boss
+        if col == COLS - 1 {
+            return NodeKind::Rest; // every path gets a chance to heal before the boss
         }
         match self.rng.below(100) {
             0..=34 => NodeKind::Battle,
@@ -141,7 +152,7 @@ impl Run {
         sizes.push(1);
         let mut map: Vec<Vec<Node>> = Vec::new();
         for (c, &n) in sizes.iter().enumerate() {
-            map.push((0..n).map(|r| Node { kind: self.kind_for(c, r), next: vec![] }).collect());
+            map.push((0..n).map(|_| Node { kind: self.kind_for(c), next: vec![] }).collect());
         }
         for c in 0..COLS {
             let (n, m) = (sizes[c], sizes[c + 1]);
@@ -311,10 +322,11 @@ impl Run {
     }
 
     pub fn buy_charm(&mut self, id: usize) -> bool {
-        if self.shards < CHARM_PRICE {
+        let price = CHARMS[id].rarity.price();
+        if self.shards < price {
             return false;
         }
-        self.shards -= CHARM_PRICE;
+        self.shards -= price;
         self.add_charm(id);
         true
     }

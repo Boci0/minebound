@@ -83,8 +83,11 @@ fn conf() -> Conf {
 async fn main() {
     // `minebound <seed>` replays a run; otherwise the clock picks one
     let fixed_seed: Option<u64> = std::env::args().nth(1).and_then(|s| s.parse().ok());
-    // Kenney Mini (CC0), built into the exe
-    ui::set_font(load_ttf_font_from_bytes(include_bytes!("../assets/fonts/kenney-mini.ttf")).ok());
+    // Kenney Mini for titles and Pixel Operator for rules text (both CC0), built into the exe
+    ui::set_fonts(
+        load_ttf_font_from_bytes(include_bytes!("../assets/fonts/kenney-mini.ttf")).ok(),
+        load_ttf_font_from_bytes(include_bytes!("../assets/fonts/pixel-operator.ttf")).ok(),
+    );
     // Tiny Dungeon by Kenney (CC0), built into the exe
     ui::set_art(Texture2D::from_file_with_format(include_bytes!("../assets/tiny-dungeon/tilemap_packed.png"), None));
     let mut sounds = vec![];
@@ -124,7 +127,7 @@ async fn main() {
                 }
                 let next = match stage {
                     Stage::Map => ui::map_screen(run).map(|(c, r)| run.enter(c, r)),
-                    Stage::Battle(b) => ui::battle_screen(b, run.floor, &mut ai_timer).then(|| run.finish_battle(b)),
+                    Stage::Battle(b) => ui::battle_screen(b, run.floor, &run.charms, &mut ai_timer).then(|| run.finish_battle(b)),
                     Stage::Pick(options) => {
                         ui::run_status(run);
                         ui::pick(options).map(|id| {
@@ -145,6 +148,10 @@ async fn main() {
                         None
                     }
                 };
+                // you may walk away from an expedition anywhere but mid-fight
+                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
+                    quit_run = true;
+                }
                 if let Some(n) = next {
                     *stage = n;
                     ui::transition();

@@ -23,8 +23,11 @@ cargo run --release
 
 - Left click a hidden tile: reveal it. Right click: flag it as a suspected mine.
 - Click a board tab: swap to that element's board (free, any time in your turn).
-- Click a lit skill: cast it. Click one of your stacks: Strike with it. Unleash all: fire everything.
+- Drag a gem from your stacks into a skill's matching socket; the skill fires when every socket is
+  full. Click a filled socket to take the gem back. Drop a gem on the enemy (or click it) to Strike.
+- Click a lit skill to cast it at once. Unleash all: fire everything.
 - End turn: keep your remaining stacks for later.
+- Retreat (top right, outside battle): abandon the run and go back to the title.
 - M: sound on or off. N: next song. Esc or the gear: volume settings.
 
 ## Rules in short
@@ -44,10 +47,12 @@ cargo run --release
 
 Every enemy bends one rule (armour, dodging your first skill, jamming your surge, stealing stacks),
 and charms reward different ways of playing a turn, so no two fights or runs ask for the same plan.
+Charms come in three rarities: common, rare and legendary. Your charms sit along the top of the
+battle screen and flash each time they take effect. The column before each boss is all rest sites.
 
 ## Credits
 
-Font: Kenney Mini by Kenney (kenney.nl), CC0.
+Fonts: Kenney Mini by Kenney (kenney.nl), CC0; Pixel Operator by Jayvee Enaguas, CC0.
 Pixel art: Tiny Dungeon by Kenney (kenney.nl), public domain (CC0). See `assets/tiny-dungeon/License.txt`.
 Sound effects: RPG Audio, Impact Sounds and Interface Sounds by Kenney (kenney.nl), CC0.
 Music: "Winter Lofi" by HoliznaCC0 (freemusicarchive.org/music/holiznacc0/winter-lofi), CC0.

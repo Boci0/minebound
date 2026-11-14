@@ -12,6 +12,15 @@ pub const PRESSURE_TURN: usize = 7;
 pub const MAX_SURGE: i32 = 5;
 pub const SURGE_PCT: i32 = 20;
 
+/// Every charm hook the battle reports through `Event::Proc`, by `Mods` field name.
+pub const HOOKS: &[&str] = &[
+    "reveals", "power", "mine_guard", "start_shield", "combo_pct", "duds", "start_stacks", "burn_bonus", "scouts",
+    "thorns", "foe_mines", "fewer_mines", "lifesteal_pct", "opening", "shield_turn", "surge_start", "surge_pct",
+    "keep_surge", "strike_bonus", "strike_burn", "first_pct", "claim_zap", "claim_heal", "claim_shield", "claim_bonus",
+    "salvage", "mine_spite", "armor", "evade", "reveal_shield", "hoard_shield", "chain", "mine_no_end", "sense", "echo",
+    "desperate",
+];
+
 #[derive(Clone)]
 pub struct Fighter {
     pub name: String,
@@ -38,6 +47,8 @@ pub struct Fighter {
     pub weak: i32,
     pub reveals_left: i32,
     pub duds: i32,
+    /// mines it will still sense (and flag) this turn
+    pub sense_left: i32,
     /// AI only: it has decided to empty its stacks this turn
     firing: bool,
     pub mods: Mods,
@@ -70,6 +81,7 @@ impl Fighter {
             weak: 0,
             reveals_left: 0,
             duds: 0,
+            sense_left: 0,
             firing: false,
             mods,
         }
@@ -82,6 +94,8 @@ pub enum Event {
     Claim,
     Mine,
     Cast { from: usize, name: &'static str, element: Element, miss: bool },
+    /// a passive of `side` just took effect; `hook` names the `Mods` field
+    Proc { side: usize, hook: &'static str },
 }
 
 /// `f[0]` is the player, `f[1]` the current enemy. Both sides obey exactly the same rules.
@@ -108,8 +122,17 @@ impl Battle {
             let e = b.f[0].elements[k];
             b.f[0].stacks.push(e);
         }
+        if b.f[0].mods.start_stacks > 0 {
+            b.proc(0, "start_stacks");
+        }
         b.start_wave();
         b
+    }
+
+    /// Reports that a passive of `side` took effect, so the screen can flash its charm.
+    fn proc(&mut self, side: usize, hook: &'static str) {
+        debug_assert!(HOOKS.contains(&hook), "unlisted hook {hook}");
+        self.events.push(Event::Proc { side, hook });
     }
 
     pub fn over(&self) -> bool {
@@ -151,12 +174,20 @@ impl Battle {
 
     /// Damage of the next skill by `s` that spends `spent` stacks (before the target's shield).
     pub fn hit_damage(&self, s: usize, spent: usize, combo: Option<&Combo>) -> i32 {
-        self.dmg(s, spent, combo, self.f[s].cast_n == 0)
+        self.dmg(s, spent, combo, self.f[s].cast_n)
     }
 
-    fn dmg(&self, s: usize, spent: usize, combo: Option<&Combo>, first: bool) -> i32 {
+    /// Below half HP, Berserker's Axe adds power.
+    fn desperate(&self, s: usize) -> bool {
         let f = &self.f[s];
-        let mut d = spent as i32 * f.power;
+        f.mods.desperate > 0 && f.hp * 2 <= f.max_hp
+    }
+
+    /// `nth`: how many skills `s` already cast this turn.
+    fn dmg(&self, s: usize, spent: usize, combo: Option<&Combo>, nth: i32) -> i32 {
+        let f = &self.f[s];
+        let power = f.power + if self.desperate(s) { f.mods.desperate } else { 0 };
+        let mut d = spent as i32 * power + nth * f.mods.chain;
         match combo {
             Some(c) => {
                 for e in c.effects {
@@ -168,7 +199,7 @@ impl Battle {
             None => d += f.mods.strike_bonus,
         }
         d = (d * (100 + self.surge_step(s) * f.surge) + 50) / 100;
-        if first {
+        if nth == 0 {
             d = (d * (100 + f.mods.first_pct) + 50) / 100;
         }
         d += self.pressure();
@@ -186,18 +217,21 @@ impl Battle {
     /// Total damage if `s` emptied its stacks now, biggest combos first.
     pub fn attack_damage(&self, s: usize) -> i32 {
         let mut stacks = self.f[s].stacks.clone();
-        let (mut total, mut first) = (0, self.f[s].cast_n == 0);
+        let (mut total, mut nth) = (0, self.f[s].cast_n);
         while let Some(c) = Self::best_combo(&stacks) {
             for e in c.needs {
                 let k = stacks.iter().position(|x| x == e).unwrap();
                 stacks.remove(k);
             }
-            total += self.dmg(s, c.needs.len(), Some(c), first);
-            first = false;
+            let echo = if c.needs.len() == 3 && self.f[s].mods.echo > 0 { 2 } else { 1 };
+            for _ in 0..echo {
+                total += self.dmg(s, c.needs.len(), Some(c), nth);
+                nth += 1;
+            }
         }
         for _ in 0..stacks.len() {
-            total += self.dmg(s, 1, None, first);
-            first = false;
+            total += self.dmg(s, 1, None, nth);
+            nth += 1;
         }
         total
     }
@@ -231,11 +265,18 @@ impl Battle {
             self.deal(s);
             self.f[s].shield += self.f[s].mods.start_shield;
             self.f[s].duds = self.f[s].mods.duds;
+            let m = self.f[s].mods.clone();
+            for (hook, v) in [("start_shield", m.start_shield), ("scouts", m.scouts), ("fewer_mines", m.fewer_mines), ("foe_mines", m.foe_mines)] {
+                if v > 0 {
+                    self.proc(s, hook);
+                }
+            }
         }
         for s in 0..2 {
             let d = self.f[s].mods.opening;
             if d > 0 {
                 self.hurt(1 - s, d);
+                self.proc(s, "opening");
             }
         }
         if !self.settle() {
@@ -274,8 +315,19 @@ impl Battle {
             self.log.push(format!("{} snatches a stack.", self.f[a].name));
         }
         self.f[1 - a].evades_left = self.f[1 - a].mods.evade;
+        let m = self.f[a].mods.clone();
+        let kept = m.keep_surge > 0 && self.f[a].surge > 0;
+        for (hook, on) in [("reveals", m.reveals > 0), ("surge_start", m.surge_start > 0), ("keep_surge", kept), ("shield_turn", m.shield_turn > 0)] {
+            if on {
+                self.proc(a, hook);
+            }
+        }
+        if self.f[a].burn > 0 && self.f[1 - a].mods.burn_bonus > 0 {
+            self.proc(1 - a, "burn_bonus");
+        }
         let f = &mut self.f[a];
         f.reveals_left = (REVEALS + f.mods.reveals).max(1);
+        f.sense_left = f.mods.sense;
         f.surge = (if f.mods.keep_surge > 0 { f.surge } else { 0 }).max(f.mods.surge_start).min(jam);
         f.cast_n = 0;
         f.firing = false;
@@ -301,6 +353,16 @@ impl Battle {
         let a = self.active;
         if self.f[a].weak > 0 {
             self.f[a].weak -= 1;
+        }
+        let f = &mut self.f[a];
+        let banked = f.reveals_left.max(0) * f.mods.reveal_shield;
+        let hoard = if f.stacks.len() >= 3 { f.stacks.len() as i32 * f.mods.hoard_shield } else { 0 };
+        f.shield += banked + hoard;
+        if banked > 0 {
+            self.proc(a, "reveal_shield");
+        }
+        if hoard > 0 {
+            self.proc(a, "hoard_shield");
         }
         self.active = 1 - a;
         if self.active == 0 {
@@ -337,6 +399,14 @@ impl Battle {
         if i >= N || !self.f[a].boards[cur].open(i) {
             return false;
         }
+        let board = &mut self.f[a].boards[cur];
+        if board.tiles[i].mine && !board.fresh && self.f[a].sense_left > 0 {
+            // Sixth Sense: the mine is found, not set off, and the reveal is not spent
+            board.tiles[i].flagged = true;
+            self.f[a].sense_left -= 1;
+            self.proc(a, "sense");
+            return true;
+        }
         let flip = self.f[a].boards[cur].flip(i, &mut self.rng);
         let jam = self.surge_cap(a);
         let f = &mut self.f[a];
@@ -351,7 +421,15 @@ impl Battle {
             f.hp = (f.hp + n * f.mods.claim_heal).min(f.max_hp);
             f.shield += n * f.mods.claim_shield;
             let zap = n * f.mods.claim_zap;
+            let m = f.mods.clone();
             self.events.push(if n > 0 { Event::Claim } else { Event::Flip });
+            if n > 0 {
+                for (hook, v) in [("claim_bonus", m.claim_bonus), ("claim_heal", m.claim_heal), ("claim_shield", m.claim_shield), ("claim_zap", m.claim_zap)] {
+                    if v > 0 {
+                        self.proc(a, hook);
+                    }
+                }
+            }
             if spent {
                 self.deal_board(a, cur);
             }
@@ -366,9 +444,9 @@ impl Battle {
         }
         self.events.push(Event::Mine);
         let name = f.name.clone();
-        if f.mods.salvage > 0 {
-            let gain = flip.broken;
-            f.stacks.extend(std::iter::repeat(element).take(gain));
+        let salvaged = f.mods.salvage > 0 && flip.broken > 0;
+        if salvaged {
+            f.stacks.extend(std::iter::repeat(element).take(flip.broken));
         }
         let d = if f.duds > 0 {
             f.duds -= 1;
@@ -377,7 +455,13 @@ impl Battle {
             f.surge = 0;
             Some((MINE_DMG - f.mods.mine_guard).max(0))
         };
-        let spite = f.mods.mine_spite;
+        let (spite, keep_going, guard) = (f.mods.mine_spite, f.mods.mine_no_end > 0, f.mods.mine_guard);
+        if salvaged {
+            self.proc(a, "salvage");
+        }
+        if d.is_none() {
+            self.proc(a, "duds");
+        }
         if spent {
             self.deal_board(a, cur);
         }
@@ -388,6 +472,9 @@ impl Battle {
         };
         self.hurt(a, d);
         self.log.push(format!("{name} hits a mine: -{d}"));
+        if guard > 0 {
+            self.proc(a, "mine_guard");
+        }
         // some opponents feed on your mistakes
         let t = 1 - a;
         for _ in 0..self.f[t].mods.foe_mine_gift.max(0) {
@@ -397,9 +484,15 @@ impl Battle {
         }
         if spite > 0 {
             self.hurt(t, spite);
+            self.proc(a, "mine_spite");
         }
         if !self.settle() {
-            self.end_turn();
+            if keep_going {
+                self.proc(a, "mine_no_end");
+                self.tidy(a);
+            } else {
+                self.end_turn();
+            }
         }
         true
     }
@@ -434,7 +527,13 @@ impl Battle {
             let k = self.f[a].stacks.iter().position(|x| x == e).unwrap();
             self.f[a].stacks.remove(k);
         }
+        let wave = self.wave;
         self.land(a, c.needs.len(), Some(c), c.needs[0]);
+        if c.needs.len() == 3 && self.f[a].mods.echo > 0 && self.wave == wave && !self.over() {
+            // Echo Chamber: the same combo again, free
+            self.proc(a, "echo");
+            self.land(a, c.needs.len(), Some(c), c.needs[0]);
+        }
         true
     }
 
@@ -457,10 +556,12 @@ impl Battle {
         let t = 1 - a;
         let dmg = self.hit_damage(a, spent, combo);
         let name = combo.map_or("Strike", |c| c.name);
+        let nth = self.f[a].cast_n;
         self.f[a].cast_n += 1;
         if self.f[t].evades_left > 0 {
             // the whole skill whiffs: no damage, no effects, stacks still spent
             self.f[t].evades_left -= 1;
+            self.proc(t, "evade");
             self.events.push(Event::Cast { from: a, name, element, miss: true });
             self.log.push(format!("{}: {name} misses", self.f[a].name));
             self.tidy(a);
@@ -469,6 +570,25 @@ impl Battle {
         if combo.is_none() && self.f[a].mods.strike_burn > 0 {
             self.f[t].burn = self.f[t].burn.max(self.f[a].mods.strike_burn);
             self.f[t].burn_dmg = 2 + self.f[a].mods.burn_bonus;
+        }
+        let m = self.f[a].mods.clone();
+        let strike = combo.is_none();
+        for (hook, on) in [
+            ("power", m.power > 0),
+            ("strike_bonus", strike && m.strike_bonus > 0),
+            ("strike_burn", strike && m.strike_burn > 0),
+            ("combo_pct", !strike && m.combo_pct > 0),
+            ("first_pct", nth == 0 && m.first_pct > 0),
+            ("chain", nth > 0 && m.chain > 0),
+            ("surge_pct", self.f[a].surge > 0 && m.surge_pct > 0),
+            ("desperate", self.desperate(a)),
+        ] {
+            if on {
+                self.proc(a, hook);
+            }
+        }
+        if self.f[t].mods.armor > 0 {
+            self.proc(t, "armor");
         }
         let pct = 100 + self.f[a].mods.combo_pct;
         for e in combo.map_or(&[][..], |c| c.effects) {
@@ -495,9 +615,13 @@ impl Battle {
         let dealt = self.hurt(t, dmg);
         let steal = dealt * self.f[a].mods.lifesteal_pct / 100;
         self.f[a].hp = (self.f[a].hp + steal).min(self.f[a].max_hp);
+        if steal > 0 {
+            self.proc(a, "lifesteal_pct");
+        }
         let thorns = self.f[t].mods.thorns;
         if thorns > 0 {
             self.hurt(a, thorns);
+            self.proc(t, "thorns");
         }
         self.events.push(Event::Cast { from: a, name, element, miss: false });
         self.log.push(format!("{}: {name} for {dmg}", self.f[a].name));
@@ -702,6 +826,64 @@ mod tests {
         b.f[0].mods.claim_zap = 2;
         clear_a_crystal(&mut b);
         assert!(b.f[1].hp < 100, "claiming a crystal zaps the enemy");
+    }
+
+    #[test]
+    fn every_charm_flashes_on_a_hook_the_battle_reports() {
+        // these act outside battle, so nothing flashes for them
+        let between_fights = ["heal_after", "shard_pct", "max_hp"];
+        for c in CHARMS {
+            assert!(HOOKS.contains(&c.hook) || between_fights.contains(&c.hook), "{} has hook {}", c.name, c.hook);
+        }
+    }
+
+    #[test]
+    fn turn_shaping_charms() {
+        // Chain Lightning: each Strike after the first deals 3 more than the one before
+        let mut b = duel();
+        b.f[0].mods.chain = 3;
+        b.f[0].stacks = vec![Ember, Ember, Ember];
+        assert_eq!(b.attack_damage(0), 3 + 6 + 9);
+
+        // Echo Chamber: a three-element combo lands twice
+        let mut b = duel();
+        b.f[0].mods.echo = 1;
+        b.f[0].stacks = vec![Ember, Gale, Stone];
+        assert!(b.cast(combo("Eruption")));
+        assert_eq!(b.f[1].hp, 100 - 19 * 2);
+        assert!(b.events.iter().any(|e| matches!(e, Event::Proc { side: 0, hook: "echo" })));
+
+        // Hourglass and Hoarder's Sack: unused reveals and banked stacks become shield
+        let mut b = duel();
+        b.f[0].mods.reveal_shield = 2;
+        b.f[0].mods.hoard_shield = 1;
+        b.f[0].stacks = vec![Ember; 3];
+        let left = b.f[0].reveals_left;
+        b.end_turn();
+        assert_eq!(b.f[0].shield, left * 2 + 3);
+    }
+
+    #[test]
+    fn mine_charms() {
+        // Powder Keg: a mine hurts but the turn goes on
+        let mut b = duel();
+        b.f[0].mods.mine_no_end = 1;
+        clear_a_crystal(&mut b);
+        let hp = b.f[0].hp;
+        b.f[0].reveals_left = 9;
+        let mine = (0..N).find(|&i| b.f[0].board().tiles[i].mine && b.f[0].board().open(i)).unwrap();
+        assert!(b.reveal(mine));
+        assert_eq!((b.active, b.f[0].hp, b.f[0].surge), (0, hp - MINE_DMG, 0));
+
+        // Sixth Sense: the first mine each turn is flagged instead, and costs no reveal
+        let mut b = duel();
+        b.f[0].sense_left = 1;
+        clear_a_crystal(&mut b);
+        let (hp, reveals) = (b.f[0].hp, b.f[0].reveals_left);
+        let mine = (0..N).find(|&i| b.f[0].board().tiles[i].mine && b.f[0].board().open(i)).unwrap();
+        assert!(b.reveal(mine));
+        assert!(b.f[0].board().tiles[mine].flagged && !b.f[0].board().tiles[mine].revealed);
+        assert_eq!((b.f[0].hp, b.f[0].reveals_left, b.active), (hp, reveals, 0));
     }
 
     #[test]
