@@ -21,9 +21,10 @@ pub const HOOKS: &[&str] = &[
     "desperate",
 ];
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Fighter {
     pub name: String,
+    pub sprite: usize,
     pub desc: String,
     pub hp: i32,
     pub max_hp: i32,
@@ -60,31 +61,9 @@ impl Fighter {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn new(name: &str, desc: &str, hp: i32, max_hp: i32, power: i32, elements: &[Element], mods: Mods, aggro: usize) -> Fighter {
-        Fighter {
-            name: name.into(),
-            desc: desc.into(),
-            hp,
-            max_hp,
-            power: power + mods.power,
-            elements: elements.to_vec(),
-            aggro,
-            boards: vec![],
-            cur: 0,
-            stacks: vec![],
-            surge: 0,
-            cast_n: 0,
-            evades_left: 0,
-            shield: 0,
-            burn: 0,
-            burn_dmg: 0,
-            weak: 0,
-            reveals_left: 0,
-            duds: 0,
-            sense_left: 0,
-            firing: false,
-            mods,
-        }
+    pub fn new(name: &str, sprite: usize, desc: &str, hp: i32, max_hp: i32, power: i32, elements: &[Element], mods: Mods, aggro: usize) -> Fighter {
+        let (name, desc, elements) = (name.into(), desc.into(), elements.to_vec());
+        Fighter { name, sprite, desc, hp, max_hp, power: power + mods.power, elements, aggro, mods, ..Default::default() }
     }
 }
 
@@ -122,17 +101,23 @@ impl Battle {
             let e = b.f[0].elements[k];
             b.f[0].stacks.push(e);
         }
-        if b.f[0].mods.start_stacks > 0 {
-            b.proc(0, "start_stacks");
-        }
+        let head_start = b.f[0].mods.start_stacks > 0;
+        b.procs(0, &[("start_stacks", head_start)]);
         b.start_wave();
         b
     }
 
     /// Reports that a passive of `side` took effect, so the screen can flash its charm.
     fn proc(&mut self, side: usize, hook: &'static str) {
-        debug_assert!(HOOKS.contains(&hook), "unlisted hook {hook}");
-        self.events.push(Event::Proc { side, hook });
+        self.procs(side, &[(hook, true)]);
+    }
+
+    /// `proc` for each hook whose condition holds.
+    fn procs(&mut self, side: usize, hooks: &[(&'static str, bool)]) {
+        for &(hook, on) in hooks.iter().filter(|h| h.1) {
+            debug_assert!(HOOKS.contains(&hook) && on, "unlisted hook {hook}");
+            self.events.push(Event::Proc { side, hook });
+        }
     }
 
     pub fn over(&self) -> bool {
@@ -266,11 +251,7 @@ impl Battle {
             self.f[s].shield += self.f[s].mods.start_shield;
             self.f[s].duds = self.f[s].mods.duds;
             let m = self.f[s].mods.clone();
-            for (hook, v) in [("start_shield", m.start_shield), ("scouts", m.scouts), ("fewer_mines", m.fewer_mines), ("foe_mines", m.foe_mines)] {
-                if v > 0 {
-                    self.proc(s, hook);
-                }
-            }
+            self.procs(s, &[("start_shield", m.start_shield > 0), ("scouts", m.scouts > 0), ("fewer_mines", m.fewer_mines > 0), ("foe_mines", m.foe_mines > 0)]);
         }
         for s in 0..2 {
             let d = self.f[s].mods.opening;
@@ -317,14 +298,9 @@ impl Battle {
         self.f[1 - a].evades_left = self.f[1 - a].mods.evade;
         let m = self.f[a].mods.clone();
         let kept = m.keep_surge > 0 && self.f[a].surge > 0;
-        for (hook, on) in [("reveals", m.reveals > 0), ("surge_start", m.surge_start > 0), ("keep_surge", kept), ("shield_turn", m.shield_turn > 0)] {
-            if on {
-                self.proc(a, hook);
-            }
-        }
-        if self.f[a].burn > 0 && self.f[1 - a].mods.burn_bonus > 0 {
-            self.proc(1 - a, "burn_bonus");
-        }
+        self.procs(a, &[("reveals", m.reveals > 0), ("surge_start", m.surge_start > 0), ("keep_surge", kept), ("shield_turn", m.shield_turn > 0)]);
+        let burning = self.f[a].burn > 0 && self.f[1 - a].mods.burn_bonus > 0;
+        self.procs(1 - a, &[("burn_bonus", burning)]);
         let f = &mut self.f[a];
         f.reveals_left = (REVEALS + f.mods.reveals).max(1);
         f.sense_left = f.mods.sense;
@@ -358,12 +334,7 @@ impl Battle {
         let banked = f.reveals_left.max(0) * f.mods.reveal_shield;
         let hoard = if f.stacks.len() >= 3 { f.stacks.len() as i32 * f.mods.hoard_shield } else { 0 };
         f.shield += banked + hoard;
-        if banked > 0 {
-            self.proc(a, "reveal_shield");
-        }
-        if hoard > 0 {
-            self.proc(a, "hoard_shield");
-        }
+        self.procs(a, &[("reveal_shield", banked > 0), ("hoard_shield", hoard > 0)]);
         self.active = 1 - a;
         if self.active == 0 {
             self.turn += 1;
@@ -423,13 +394,8 @@ impl Battle {
             let zap = n * f.mods.claim_zap;
             let m = f.mods.clone();
             self.events.push(if n > 0 { Event::Claim } else { Event::Flip });
-            if n > 0 {
-                for (hook, v) in [("claim_bonus", m.claim_bonus), ("claim_heal", m.claim_heal), ("claim_shield", m.claim_shield), ("claim_zap", m.claim_zap)] {
-                    if v > 0 {
-                        self.proc(a, hook);
-                    }
-                }
-            }
+            let claimed = n > 0;
+            self.procs(a, &[("claim_bonus", claimed && m.claim_bonus > 0), ("claim_heal", claimed && m.claim_heal > 0), ("claim_shield", claimed && m.claim_shield > 0), ("claim_zap", zap > 0)]);
             if spent {
                 self.deal_board(a, cur);
             }
@@ -456,12 +422,7 @@ impl Battle {
             Some((MINE_DMG - f.mods.mine_guard).max(0))
         };
         let (spite, keep_going, guard) = (f.mods.mine_spite, f.mods.mine_no_end > 0, f.mods.mine_guard);
-        if salvaged {
-            self.proc(a, "salvage");
-        }
-        if d.is_none() {
-            self.proc(a, "duds");
-        }
+        self.procs(a, &[("salvage", salvaged), ("duds", d.is_none())]);
         if spent {
             self.deal_board(a, cur);
         }
@@ -472,9 +433,7 @@ impl Battle {
         };
         self.hurt(a, d);
         self.log.push(format!("{name} hits a mine: -{d}"));
-        if guard > 0 {
-            self.proc(a, "mine_guard");
-        }
+        self.procs(a, &[("mine_guard", guard > 0)]);
         // some opponents feed on your mistakes
         let t = 1 - a;
         for _ in 0..self.f[t].mods.foe_mine_gift.max(0) {
@@ -573,23 +532,19 @@ impl Battle {
         }
         let m = self.f[a].mods.clone();
         let strike = combo.is_none();
-        for (hook, on) in [
+        let (surged, desperate) = (self.f[a].surge > 0, self.desperate(a));
+        self.procs(a, &[
             ("power", m.power > 0),
             ("strike_bonus", strike && m.strike_bonus > 0),
             ("strike_burn", strike && m.strike_burn > 0),
             ("combo_pct", !strike && m.combo_pct > 0),
             ("first_pct", nth == 0 && m.first_pct > 0),
             ("chain", nth > 0 && m.chain > 0),
-            ("surge_pct", self.f[a].surge > 0 && m.surge_pct > 0),
-            ("desperate", self.desperate(a)),
-        ] {
-            if on {
-                self.proc(a, hook);
-            }
-        }
-        if self.f[t].mods.armor > 0 {
-            self.proc(t, "armor");
-        }
+            ("surge_pct", surged && m.surge_pct > 0),
+            ("desperate", desperate),
+        ]);
+        let armored = self.f[t].mods.armor > 0;
+        self.procs(t, &[("armor", armored)]);
         let pct = 100 + self.f[a].mods.combo_pct;
         for e in combo.map_or(&[][..], |c| c.effects) {
             match *e {
@@ -615,9 +570,7 @@ impl Battle {
         let dealt = self.hurt(t, dmg);
         let steal = dealt * self.f[a].mods.lifesteal_pct / 100;
         self.f[a].hp = (self.f[a].hp + steal).min(self.f[a].max_hp);
-        if steal > 0 {
-            self.proc(a, "lifesteal_pct");
-        }
+        self.procs(a, &[("lifesteal_pct", steal > 0)]);
         let thorns = self.f[t].mods.thorns;
         if thorns > 0 {
             self.hurt(a, thorns);
@@ -691,8 +644,8 @@ mod tests {
     use Element::*;
 
     fn duel() -> Battle {
-        let me = Fighter::new("Me", "", 50, 50, 3, &[Ember, Gale, Stone], Mods::default(), 3);
-        let foe = Fighter::new("Foe", "", 100, 100, 1, &[Tide, Spark], Mods::default(), 3);
+        let me = Fighter::new("Me", 0, "", 50, 50, 3, &[Ember, Gale, Stone], Mods::default(), 3);
+        let foe = Fighter::new("Foe", 0, "", 100, 100, 1, &[Tide, Spark], Mods::default(), 3);
         Battle::new(me, vec![foe], Rng::new(1))
     }
 
@@ -888,10 +841,10 @@ mod tests {
 
     #[test]
     fn next_wave_arrives_when_the_enemy_dies() {
-        let me = Fighter::new("Me", "", 50, 50, 50, &[Ember], Mods::default(), 1);
+        let me = Fighter::new("Me", 0, "", 50, 50, 50, &[Ember], Mods::default(), 1);
         let foes = vec![
-            Fighter::new("A", "", 5, 5, 1, &[Tide], Mods::default(), 1),
-            Fighter::new("B", "", 5, 5, 1, &[Tide], Mods::default(), 1),
+            Fighter::new("A", 0, "", 5, 5, 1, &[Tide], Mods::default(), 1),
+            Fighter::new("B", 0, "", 5, 5, 1, &[Tide], Mods::default(), 1),
         ];
         let mut b = Battle::new(me, foes, Rng::new(2));
         b.f[0].stacks = vec![Ember, Ember];

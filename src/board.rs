@@ -98,19 +98,14 @@ impl Board {
     /// Safe opening: if the first tile flipped on a board hides a mine, the mine moves elsewhere.
     /// The first click is never a lost turn, but it is not a free area either.
     fn clear_opening(&mut self, i: usize, rng: &mut Rng) {
-        let zone = [i];
-        let mut spare: Vec<usize> =
-            (0..N).filter(|k| !zone.contains(k) && !self.tiles[*k].mine && !self.tiles[*k].crystal && !self.tiles[*k].rock).collect();
+        let mut spare: Vec<usize> = (0..N).filter(|&k| k != i && !self.tiles[k].mine && !self.tiles[k].crystal && !self.tiles[k].rock).collect();
         rng.shuffle(&mut spare);
-        for &j in &zone {
-            if self.tiles[j].mine {
-                let Some(k) = spare.pop() else { break };
-                // a scouting flag travels with its mine
-                self.tiles[k].mine = true;
-                self.tiles[k].flagged = self.tiles[j].flagged;
-                self.tiles[j].mine = false;
-                self.tiles[j].flagged = false;
-            }
+        if let (true, Some(k)) = (self.tiles[i].mine, spare.pop()) {
+            // a scouting flag travels with its mine
+            self.tiles[k].mine = true;
+            self.tiles[k].flagged = self.tiles[i].flagged;
+            self.tiles[i].mine = false;
+            self.tiles[i].flagged = false;
         }
     }
 

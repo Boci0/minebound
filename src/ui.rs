@@ -124,7 +124,7 @@ pub fn music_volume() -> f32 {
     }
 }
 
-/// The takes of every sound, in the order of `sfx::ALL`.
+/// The takes of every sound, in the order of `sfx::SOUNDS`.
 pub fn set_sounds(sounds: Vec<Vec<Sound>>) {
     SOUNDS.with(|s| *s.borrow_mut() = sounds);
 }
@@ -134,11 +134,15 @@ pub fn quiet() -> bool {
     QUIET.with(|q| q.get())
 }
 
+/// Reads or changes the visual memory.
+fn fx<R>(f: impl FnOnce(&mut Fx) -> R) -> R {
+    FX.with(|fx| f(&mut fx.borrow_mut()))
+}
+
 /// Throws `n` squares outward from `at`.
 fn burst(at: Vec2, n: usize, speed: f32, size: f32, color: Color) {
     let now = get_time();
-    FX.with(|fx| {
-        let mut fx = fx.borrow_mut();
+    fx(|fx| {
         for _ in 0..n {
             let vel = Vec2::from_angle(gen_range(0.0, std::f32::consts::TAU)) * gen_range(0.25, 1.0) * speed;
             fx.parts.push(Part { pos: at, vel, born: now, life: gen_range(0.35, 0.9), size: size * gen_range(0.5, 1.0), color, grav: 520.0, home: None });
@@ -149,8 +153,7 @@ fn burst(at: Vec2, n: usize, speed: f32, size: f32, color: Color) {
 /// Sends `n` shards from one spot to another, like a claimed crystal flying to your stacks.
 fn stream(from: Vec2, to: Vec2, n: usize, color: Color) {
     let now = get_time();
-    FX.with(|fx| {
-        let mut fx = fx.borrow_mut();
+    fx(|fx| {
         for _ in 0..n {
             let vel = Vec2::from_angle(gen_range(0.0, std::f32::consts::TAU)) * gen_range(80.0, 260.0);
             fx.parts.push(Part { pos: from, vel, born: now, life: gen_range(0.45, 0.7), size: gen_range(5.0, 9.0), color, grav: 0.0, home: Some(to) });
@@ -159,18 +162,17 @@ fn stream(from: Vec2, to: Vec2, n: usize, color: Color) {
 }
 
 fn quake(strength: f32) {
-    FX.with(|fx| fx.borrow_mut().quake = (get_time(), strength));
+    fx(|fx| fx.quake = (get_time(), strength));
 }
 
 fn flash(color: Color) {
-    FX.with(|fx| fx.borrow_mut().flash = Some((color, get_time())));
+    fx(|fx| fx.flash = Some((color, get_time())));
 }
 
 /// Moves and draws every live particle.
 fn particles() {
     let (now, dt) = (get_time(), get_frame_time());
-    FX.with(|fx| {
-        let mut fx = fx.borrow_mut();
+    fx(|fx| {
         fx.parts.retain(|p| ((now - p.born) as f32) < p.life);
         for p in fx.parts.iter_mut() {
             let age = (now - p.born) as f32 / p.life;
@@ -196,12 +198,9 @@ fn play(s: Sfx) {
         return;
     }
     SOUNDS.with(|all| {
-        let all = all.borrow();
-        let takes = sfx::ALL.iter().position(|x| *x == s).and_then(|k| all.get(k));
-        if let Some(takes) = takes.filter(|t| !t.is_empty()) {
-            let take = &takes[gen_range(0, takes.len())];
+        if let Some(takes) = all.borrow().get(s as usize).filter(|t| !t.is_empty()) {
             let level = VOLUME.with(|v| v.get().1) as f32 / 10.0;
-            play_sound(take, PlaySoundParams { looped: false, volume: sfx::volume(s) * level });
+            play_sound(&takes[gen_range(0, takes.len())], PlaySoundParams { looped: false, volume: sfx::SOUNDS[s as usize].0 * level });
         }
     });
 }
@@ -227,11 +226,11 @@ pub fn set_art(sheet: Texture2D) {
 
 /// Call when the screen changes: forgets the old screen's effects and fades the new one in.
 pub fn transition() {
-    FX.with(|fx| *fx.borrow_mut() = Fx { fade: get_time(), ..Default::default() });
+    fx(|fx| *fx = Fx { fade: get_time(), ..Default::default() });
 }
 
 pub fn end_frame() {
-    let a = FX.with(|fx| 1.0 - (get_time() - fx.borrow().fade) / 0.25) as f32;
+    let a = fx(|fx| 1.0 - (get_time() - fx.fade) / 0.25) as f32;
     if a > 0.0 {
         draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(BG, a));
     }
@@ -246,11 +245,11 @@ fn bounce(t0: f64) -> f32 {
 /// Scale for a thing identified by `key`, bouncing in from the first frame it is drawn.
 fn pop(key: (usize, usize, usize)) -> f32 {
     let now = get_time();
-    bounce(FX.with(|fx| *fx.borrow_mut().pops.entry(key).or_insert(now)))
+    bounce(fx(|fx| *fx.pops.entry(key).or_insert(now)))
 }
 
 fn unpop(key: (usize, usize, usize)) {
-    FX.with(|fx| fx.borrow_mut().pops.remove(&key));
+    fx(|fx| fx.pops.remove(&key));
 }
 
 fn scaled(r: Rect, k: f32) -> Rect {
@@ -271,7 +270,7 @@ pub fn begin_frame() {
         QUIET.with(|q| q.set(!q.get()));
     }
     // a heavy hit shakes the whole view for a moment
-    let (t0, strength) = FX.with(|fx| fx.borrow().quake);
+    let (t0, strength) = fx(|fx| fx.quake);
     let since = (get_time() - t0) as f32;
     let jolt = if since < 0.4 {
         vec2((since * 71.0).sin(), (since * 93.0).cos()) * strength * (1.0 - since / 0.4)
@@ -484,9 +483,9 @@ fn bar(r: Rect, frac: f32, ghost: f32, c: Color) {
     }
 }
 
-fn status(run: &Run) {
+pub fn status(run: &Run) {
     plate(Rect::new(24.0, 14.0, 1232.0, 44.0), CARD);
-    sprite(sprite_of(HEROES[run.hero].name), 36.0, 20.0, 32.0, WHITE);
+    sprite(HEROES[run.hero].sprite, 36.0, 20.0, 32.0, WHITE);
     text(HEROES[run.hero].name, 78.0, 43.0, 22.0, INK);
     let mut x = 260.0;
     for (label, value, c) in [
@@ -502,7 +501,6 @@ fn status(run: &Run) {
     }
 }
 
-use crate::data::sprite as sprite_of;
 
 fn rarity_color(r: Rarity) -> Color {
     match r {
@@ -531,7 +529,7 @@ fn charm_slot(k: usize, n: usize) -> Rect {
 /// hovering one shows what it does.
 fn charm_bar(charms: &[usize]) {
     let now = get_time();
-    let times = FX.with(|fx| fx.borrow().charm_t.clone());
+    let times = fx(|fx| fx.charm_t.clone());
     let mut tip = None;
     for (k, &id) in charms.iter().enumerate() {
         let since = times.get(&id).map_or(9.0, |t| (now - t) as f32);
@@ -566,12 +564,6 @@ fn combo_icons(c: &Combo, x: f32, y: f32) -> f32 {
     cx
 }
 
-fn combo_line(c: &Combo, x: f32, y: f32, lit: bool) {
-    let cx = combo_icons(c, x, y);
-    text(c.name, cx, y + 15.0, 18.0, if lit { INK } else { MUTED });
-    text(c.desc, x, y + 33.0, 15.0, if lit { GOLD_C } else { MUTED });
-}
-
 pub fn heroes() -> Option<usize> {
     stamped("MINEBOUND", 640.0, 88.0, 68.0, INK);
     centered("Sweep your boards for power. Spend it before theirs spends you.", 640.0, 122.0, 20.0, MUTED);
@@ -583,7 +575,7 @@ pub fn heroes() -> Option<usize> {
             chosen = Some(i);
         }
         let x = r.x + 24.0;
-        sprite(sprite_of(h.name), r.right() - 84.0, r.y + 10.0 + (t * 3.0 + i as f32).sin() * 3.0, 64.0, WHITE);
+        sprite(h.sprite, r.right() - 84.0, r.y + 10.0 + (t * 3.0 + i as f32).sin() * 3.0, 64.0, WHITE);
         text(h.name, x, r.y + 46.0, 32.0, INK);
         text(&format!("HP {}    Power {}", h.hp, h.power), x, r.y + 74.0, 19.0, GOLD_C);
         for (k, &e) in h.elements.iter().enumerate() {
@@ -595,7 +587,8 @@ pub fn heroes() -> Option<usize> {
         text("SKILLS", x, y, 15.0, ACCENT);
         y += 14.0;
         for c in combos_for(&h.elements) {
-            combo_line(c, x, y, false);
+            text(c.name, combo_icons(c, x, y), y + 15.0, 18.0, MUTED);
+            text(c.desc, x, y + 33.0, 15.0, MUTED);
             y += 46.0;
         }
     }
@@ -620,12 +613,7 @@ const STAND: [Vec2; 2] = [vec2(548.0, 138.0), vec2(732.0, 138.0)];
 const SHOT_TIME: f32 = 0.2;
 
 fn hint_colour(n: usize) -> Color {
-    match n {
-        0 => MUTED,
-        1 => rgb(0x9bd8ff),
-        2 => rgb(0xa5e88f),
-        _ => rgb(0xffb070),
-    }
+    [MUTED, rgb(0x9bd8ff), rgb(0xa5e88f), rgb(0xffb070)][n.min(3)]
 }
 
 /// Draws the battle and handles input. Returns true once it is over and the player clicks Continue.
@@ -648,8 +636,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
                 flash(BAD);
             }
             Event::Cast { from, name, element, miss } => {
-                FX.with(|fx| {
-                    let mut fx = fx.borrow_mut();
+                fx(|fx| {
                     fx.shots.push((from, element, name, now));
                     if miss {
                         fx.floats.push((STAND[1 - from] - vec2(0.0, 30.0), "MISS".into(), MUTED, now));
@@ -657,20 +644,17 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
                         fx.banner = Some((name, element, from, now));
                     }
                 });
-                play(if miss {
-                    Sfx::Miss
-                } else if from == 1 {
-                    Sfx::Hurt
-                } else if name == "Strike" {
-                    Sfx::Strike
-                } else {
-                    Sfx::Skill
+                play(match (miss, from, name) {
+                    (true, ..) => Sfx::Miss,
+                    (_, 1, _) => Sfx::Hurt,
+                    (_, _, "Strike") => Sfx::Strike,
+                    _ => Sfx::Skill,
                 });
             }
             Event::Proc { side: 0, hook } => {
                 for (k, &id) in charms.iter().enumerate() {
                     if CHARMS[id].hook == hook {
-                        FX.with(|fx| fx.borrow_mut().charm_t.insert(id, now));
+                        fx(|fx| fx.charm_t.insert(id, now));
                         burst(charm_slot(k, charms.len()).center(), 12, 140.0, 5.0, GOLD_C);
                     }
                 }
@@ -681,7 +665,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
 
     // gems slotted into skill sockets stay in your stacks until the skill fires; forget any the
     // battle has since taken away (spent by Unleash, snatched by the enemy)
-    let mut sockets = FX.with(|fx| std::mem::take(&mut fx.borrow_mut().sockets));
+    let mut sockets = fx(|fx| std::mem::take(&mut fx.sockets));
     let mut reserved = [0usize; 5];
     for &e in &b.f[0].elements {
         let have = b.f[0].stacks.iter().filter(|&&x| x == e).count();
@@ -705,11 +689,10 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             })
             .collect()
     };
-    let mut drag = FX.with(|fx| fx.borrow().drag).filter(|d| b.active == 0 && !over && free.contains(&d.0));
+    let mut drag = fx(|fx| fx.drag).filter(|d| b.active == 0 && !over && free.contains(&d.0));
     let dragged = drag.map(|d| b.f[0].stacks[d.0]);
     let mut felled = false;
-    let (shake, ghost, stack_t) = FX.with(|fx| {
-        let mut fx = fx.borrow_mut();
+    let (shake, ghost, stack_t) = fx(|fx| {
         if fx.live && fx.wave != b.wave {
             fx.pops.clear(); // fresh boards
             felled = true;
@@ -770,7 +753,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         plate(panel, CARD);
         let x = panel.x + 22.0;
         let f = &b.f[s];
-        sprite(sprite_of(&f.name), x, 72.0, 36.0, WHITE);
+        sprite(f.sprite, x, 72.0, 36.0, WHITE);
         text(&f.name, x + 46.0, 100.0, 26.0, INK);
         if b.active == s && !over {
             right(if s == 0 { "YOUR TURN" } else { "ENEMY TURN" }, x + 384.0, 98.0, 15.0, side);
@@ -815,7 +798,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             } else if t.crystal {
                 block(r, WELL);
                 if t.claimed {
-                    if !FX.with(|fx| fx.borrow().pops.contains_key(&key)) {
+                    if !fx(|fx| fx.pops.contains_key(&key)) {
                         // just claimed: it shatters and the shards fly to the stack row
                         let slot = vec2(x + 15.0 + (f.stacks.len().saturating_sub(1) as f32 * 34.0).min(354.0), 633.0);
                         stream(mid, slot, 16, tint);
@@ -853,7 +836,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
                     flag = Some(i);
                 }
             } else if t.mine {
-                if !FX.with(|fx| fx.borrow().pops.contains_key(&key)) {
+                if !fx(|fx| fx.pops.contains_key(&key)) {
                     burst(mid, 36, 300.0, 10.0, BAD);
                     burst(mid, 18, 190.0, 7.0, GOLD_C);
                 }
@@ -898,12 +881,11 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     // the arena: both fighters, skills flying between them, surge underneath
     let arena = Rect::new(468.0, 64.0, 344.0, 152.0);
     plate(arena, WELL);
-    let shots: Vec<(usize, Element, &'static str, f64)> = FX.with(|fx| {
-        let mut fx = fx.borrow_mut();
+    let shots: Vec<(usize, Element, &'static str, f64)> = fx(|fx| {
         fx.shots.retain(|s| now - s.3 < 1.0);
         fx.shots.clone()
     });
-    let hit_at: [f64; 2] = FX.with(|fx| fx.borrow().hit);
+    let hit_at: [f64; 2] = fx(|fx| fx.hit);
     for s in 0..2 {
         let toward = if s == 0 { 1.0 } else { -1.0 };
         let lunge = shots.iter().filter(|c| c.0 == s).map(|c| (now - c.3) as f32 / SHOT_TIME).filter(|p| *p < 1.0).last();
@@ -916,7 +898,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         draw_rectangle(STAND[s].x - 34.0, STAND[s].y + 42.0, 68.0, 8.0, OUT);
         let dead = b.f[s].hp <= 0;
         let tint = if dead { fade(MUTED, 0.35) } else if since_hit < 0.18 { BAD } else { WHITE };
-        sprite(sprite_of(&b.f[s].name), at.x - 44.0, at.y - 44.0, 88.0, tint);
+        sprite(b.f[s].sprite, at.x - 44.0, at.y - 44.0, 88.0, tint);
     }
     for &(from, element, name, t0) in &shots {
         let p = (now - t0) as f32 / SHOT_TIME;
@@ -958,18 +940,8 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     for s in 0..2 {
         if b.active == s && !over && b.f[s].surge > 0 && b.f[s].surge >= b.surge_cap(s) && gen_range(0.0, 1.0) < 0.5 {
             let from = STAND[s] + vec2(gen_range(-34.0, 34.0), gen_range(10.0, 44.0));
-            FX.with(|fx| {
-                fx.borrow_mut().parts.push(Part {
-                    pos: from,
-                    vel: vec2(gen_range(-12.0, 12.0), gen_range(-90.0, -40.0)),
-                    born: now,
-                    life: gen_range(0.4, 0.8),
-                    size: gen_range(4.0, 8.0),
-                    color: mix(GOLD_C, BAD, gen_range(0.0, 0.7)),
-                    grav: -80.0,
-                    home: None,
-                })
-            });
+            let (vel, life, size, color) = (vec2(gen_range(-12.0, 12.0), gen_range(-90.0, -40.0)), gen_range(0.4, 0.8), gen_range(4.0, 8.0), mix(GOLD_C, BAD, gen_range(0.0, 0.7)));
+            fx(|fx| fx.parts.push(Part { pos: from, vel, born: now, life, size, color, grav: -80.0, home: None }));
         }
     }
     let surge = b.f[b.active].surge;
@@ -1132,12 +1104,11 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             gem(e, mouse(), 15.0);
         }
     }
-    FX.with(|fx| {
-        let mut fx = fx.borrow_mut();
+    fx(|fx| {
         fx.sockets = sockets;
         fx.drag = drag;
     });
-    let (banner, flashed) = FX.with(|fx| (fx.borrow().banner, fx.borrow().flash));
+    let (banner, flashed) = fx(|fx| (fx.banner, fx.flash));
     if let Some((name, element, from, t0)) = banner {
         // a combo's name slams across the whole screen, entering from the caster's side
         let p = (now - t0) as f32 / 0.8;
@@ -1157,8 +1128,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(c, 0.32 * (1.0 - p)));
         }
     }
-    FX.with(|fx| {
-        let mut fx = fx.borrow_mut();
+    fx(|fx| {
         fx.floats.retain(|f| now - f.3 < 1.0);
         for (at, label, c, t0) in &fx.floats {
             let p = (now - t0) as f32;
@@ -1324,15 +1294,11 @@ pub fn event(run: &mut Run, e: &Encounter, result: &mut Option<String>) -> bool 
 
 /// Returns true when the player asks for a new run.
 pub fn end(run: &Run, won: bool) -> bool {
-    sprite(sprite_of(HEROES[run.hero].name), 592.0, 130.0, 96.0, if won { WHITE } else { fade(MUTED, 0.5) });
+    sprite(HEROES[run.hero].sprite, 592.0, 130.0, 96.0, if won { WHITE } else { fade(MUTED, 0.5) });
     stamped(if won { "The last board is clear." } else { "Your run ends here." }, 640.0, 290.0, 52.0, if won { GOOD } else { BAD });
     let s = format!("{}    floor {} of {}    {} charms    seed {}", HEROES[run.hero].name, run.floor + 1, FLOORS, run.charms.len(), run.seed);
     centered(&s, 640.0, 340.0, 20.0, MUTED);
     button(Rect::new(540.0, 390.0, 200.0, 44.0), "New run", true, true)
-}
-
-pub fn run_status(run: &Run) {
-    status(run);
 }
 
 /// A button for use inside an open panel, where `button` ignores clicks.
@@ -1396,21 +1362,11 @@ pub fn settings() {
         for (row, (label, level)) in [("Music", &mut music), ("Sound", &mut sound)].into_iter().enumerate() {
             let y = 300.0 + row as f32 * 62.0;
             text(label, 436.0, y + 26.0, 22.0, INK);
-            // a plain local button: the shared one ignores clicks while this panel is open
-            let nudge = |r: Rect, sign: &str| {
-                let hot = r.contains(mouse());
-                block(Rect::new(r.x, r.y + 4.0, r.w, r.h), OUT);
-                block(r, if hot { mix(CARD_HI, INK, 0.25) } else { CARD_HI });
-                centered(sign, r.center().x, r.y + 27.0, 26.0, INK);
-                hot && press
-            };
-            if nudge(Rect::new(540.0, y, 40.0, 36.0), "-") {
+            if panel_button(Rect::new(540.0, y, 40.0, 36.0), "-", CARD_HI, press) {
                 *level = (*level - 1).max(0);
-                play(Sfx::Click);
             }
-            if nudge(Rect::new(804.0, y, 40.0, 36.0), "+") {
+            if panel_button(Rect::new(804.0, y, 40.0, 36.0), "+", CARD_HI, press) {
                 *level = (*level + 1).min(10);
-                play(Sfx::Click);
             }
             for k in 0..10 {
                 block(Rect::new(592.0 + k as f32 * 21.0, y + 6.0, 16.0, 24.0), if k < *level { ACCENT } else { WELL });
@@ -1418,12 +1374,7 @@ pub fn settings() {
         }
         VOLUME.with(|v| v.set((music, sound)));
         centered("M mutes everything.  N skips to the next song.", 640.0, 440.0, 15.0, MUTED);
-        let close = Rect::new(560.0, 456.0, 160.0, 36.0);
-        let hot = close.contains(mouse());
-        block(Rect::new(close.x, close.y + 4.0, close.w, close.h), OUT);
-        block(close, if hot { mix(ACCENT, INK, 0.35) } else { ACCENT });
-        centered("Close", 640.0, close.y + 25.0, 20.0, OUT);
-        toggle |= hot && press;
+        toggle |= panel_button(Rect::new(560.0, 456.0, 160.0, 36.0), "Close", ACCENT, press);
     }
     if toggle {
         play(Sfx::Click);

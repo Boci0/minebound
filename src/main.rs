@@ -91,9 +91,9 @@ async fn main() {
     // Tiny Dungeon by Kenney (CC0), built into the exe
     ui::set_art(Texture2D::from_file_with_format(include_bytes!("../assets/tiny-dungeon/tilemap_packed.png"), None));
     let mut sounds = vec![];
-    for s in sfx::ALL {
+    for (_, files) in sfx::SOUNDS {
         let mut takes = vec![];
-        for bytes in sfx::takes(s) {
+        for bytes in files {
             if let Ok(sound) = load_sound_from_bytes(bytes).await {
                 takes.push(sound);
             }
@@ -129,18 +129,18 @@ async fn main() {
                     Stage::Map => ui::map_screen(run).map(|(c, r)| run.enter(c, r)),
                     Stage::Battle(b) => ui::battle_screen(b, run.floor, &run.charms, &mut ai_timer).then(|| run.finish_battle(b)),
                     Stage::Pick(options) => {
-                        ui::run_status(run);
+                        ui::status(run);
                         ui::pick(options).map(|id| {
                             run.add_charm(id);
                             run.after_node()
                         })
                     }
                     Stage::Shop(stock) => {
-                        ui::run_status(run);
+                        ui::status(run);
                         ui::shop(run, stock).then(|| run.after_node())
                     }
                     Stage::Event(e, result) => {
-                        ui::run_status(run);
+                        ui::status(run);
                         ui::event(run, e, result).then(|| run.after_node())
                     }
                     Stage::End(won) => {

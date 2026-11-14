@@ -123,6 +123,8 @@ pub fn combos_for(elements: &[Element]) -> Vec<&'static Combo> {
 
 pub struct Hero {
     pub name: &'static str,
+    /// tile in the Tiny Dungeon sprite sheet
+    pub sprite: usize,
     pub hp: i32,
     pub power: i32,
     pub elements: [Element; 3],
@@ -133,6 +135,7 @@ pub struct Hero {
 pub static HEROES: &[Hero] = &[
     Hero {
         name: "Ashwarden",
+        sprite: 87,
         hp: 66,
         power: 3,
         elements: [Ember, Gale, Stone],
@@ -141,6 +144,7 @@ pub static HEROES: &[Hero] = &[
     },
     Hero {
         name: "Stormreader",
+        sprite: 84,
         hp: 62,
         power: 3,
         elements: [Tide, Gale, Spark],
@@ -149,6 +153,7 @@ pub static HEROES: &[Hero] = &[
     },
     Hero {
         name: "Deepforger",
+        sprite: 86,
         hp: 64,
         power: 3,
         elements: [Tide, Stone, Spark],
@@ -246,6 +251,7 @@ pub static CHARMS: &[Charm] = &[
 
 pub struct EnemyDef {
     pub name: &'static str,
+    pub sprite: usize,
     pub desc: &'static str,
     pub hp: i32,
     pub power: i32,
@@ -255,40 +261,33 @@ pub struct EnemyDef {
     pub mods: Tweak,
 }
 
-const fn foe(
-    name: &'static str,
-    desc: &'static str,
-    hp: i32,
-    power: i32,
-    elements: &'static [Element],
-    aggro: usize,
-    mods: Tweak,
-) -> EnemyDef {
-    EnemyDef { name, desc, hp, power, elements, aggro, mods }
+#[allow(clippy::too_many_arguments)]
+const fn foe(name: &'static str, sprite: usize, desc: &'static str, hp: i32, power: i32, elements: &'static [Element], aggro: usize, mods: Tweak) -> EnemyDef {
+    EnemyDef { name, sprite, desc, hp, power, elements, aggro, mods }
 }
 
 // Every enemy bends one rule, so each asks for a different answer.
 pub static NORMALS: &[EnemyDef] = &[
-    foe("Mire Hound", "Grows fiercer: +1 power every turn.", 16, 1, &[Tide, Stone], 2, |m| m.enrage = 1),
-    foe("Cinder Imp", "Gains a stack whenever you hit a mine.", 12, 2, &[Ember, Spark], 2, |m| m.foe_mine_gift = 1),
-    foe("Gust Wisp", "Slippery: the first skill each turn misses it.", 12, 1, &[Gale, Spark], 3, |m| m.evade = 1),
-    foe("Pebble Golem", "Stone hide: every hit deals 2 less.", 20, 1, &[Stone, Ember], 3, |m| m.armor = 2),
-    foe("Brine Leech", "Heals for half the damage it deals.", 16, 1, &[Tide, Gale], 2, |m| m.lifesteal_pct = 50),
-    foe("Static Moth", "Jams your surge at 2.", 12, 2, &[Spark, Tide], 3, |m| m.foe_surge_cap = 2),
-    foe("Thorn Creeper", "Every skill that hits it deals 2 back.", 18, 1, &[Stone, Gale], 3, |m| m.thorns = 2),
-    foe("Ash Rat", "Snatches one of your stacks as its turn starts.", 10, 2, &[Ember, Gale], 2, |m| m.pilfer = 1),
+    foe("Mire Hound", 123, "Grows fiercer: +1 power every turn.", 16, 1, &[Tide, Stone], 2, |m| m.enrage = 1),
+    foe("Cinder Imp", 110, "Gains a stack whenever you hit a mine.", 12, 2, &[Ember, Spark], 2, |m| m.foe_mine_gift = 1),
+    foe("Gust Wisp", 121, "Slippery: the first skill each turn misses it.", 12, 1, &[Gale, Spark], 3, |m| m.evade = 1),
+    foe("Pebble Golem", 109, "Stone hide: every hit deals 2 less.", 20, 1, &[Stone, Ember], 3, |m| m.armor = 2),
+    foe("Brine Leech", 108, "Heals for half the damage it deals.", 16, 1, &[Tide, Gale], 2, |m| m.lifesteal_pct = 50),
+    foe("Static Moth", 120, "Jams your surge at 2.", 12, 2, &[Spark, Tide], 3, |m| m.foe_surge_cap = 2),
+    foe("Thorn Creeper", 122, "Every skill that hits it deals 2 back.", 18, 1, &[Stone, Gale], 3, |m| m.thorns = 2),
+    foe("Ash Rat", 124, "Snatches one of your stacks as its turn starts.", 10, 2, &[Ember, Gale], 2, |m| m.pilfer = 1),
 ];
 
 pub static ELITES: &[EnemyDef] = &[
-    foe("The Quarrymaster", "Starts with 8 shield. Every hit deals 1 less.", 45, 2, &[Stone, Ember, Spark], 4, |m| {
+    foe("The Quarrymaster", 100, "Starts with 8 shield. Every hit deals 1 less.", 45, 2, &[Stone, Ember, Spark], 4, |m| {
         m.start_shield = 8;
         m.armor = 1
     }),
-    foe("Gale Duchess", "One extra reveal. The first skill each turn misses her.", 38, 2, &[Gale, Tide, Spark], 4, |m| {
+    foe("Gale Duchess", 99, "One extra reveal. The first skill each turn misses her.", 38, 2, &[Gale, Tide, Spark], 4, |m| {
         m.reveals = 1;
         m.evade = 1
     }),
-    foe("Kiln Tyrant", "Burns harder, and +1 power every turn.", 42, 2, &[Ember, Gale, Stone], 3, |m| {
+    foe("Kiln Tyrant", 88, "Burns harder, and +1 power every turn.", 42, 2, &[Ember, Gale, Stone], 3, |m| {
         m.burn_bonus = 1;
         m.enrage = 1
     }),
@@ -296,15 +295,15 @@ pub static ELITES: &[EnemyDef] = &[
 
 /// One per floor, in order.
 pub static BOSSES: &[EnemyDef] = &[
-    foe("Minelayer Queen", "1 extra mine in your boards. Gains a stack when you hit one.", 50, 2, &[Ember, Stone, Spark], 4, |m| {
+    foe("Minelayer Queen", 92, "1 extra mine in your boards. Gains a stack when you hit one.", 50, 2, &[Ember, Stone, Spark], 4, |m| {
         m.foe_mines = 1;
         m.foe_mine_gift = 1
     }),
-    foe("The Undertow", "Each turn: heals 2 and gains 2 shield.", 105, 3, &[Tide, Gale, Stone], 4, |m| {
+    foe("The Undertow", 112, "Each turn: heals 2 and gains 2 shield.", 105, 3, &[Tide, Gale, Stone], 4, |m| {
         m.regen = 2;
         m.shield_turn = 2
     }),
-    foe("Null Cartographer", "One extra reveal, 3 mines pre-flagged. Jams your surge at 3.", 135, 4, &[Spark, Gale, Ember], 5, |m| {
+    foe("Null Cartographer", 111, "One extra reveal, 3 mines pre-flagged. Jams your surge at 3.", 135, 4, &[Spark, Gale, Ember], 5, |m| {
         m.reveals = 1;
         m.scouts = 3;
         m.foe_surge_cap = 3
@@ -430,27 +429,3 @@ pub static ENCOUNTERS: &[Encounter] = &[
         ],
     },
 ];
-
-/// Tile number in the Tiny Dungeon sprite sheet for a hero or enemy.
-pub fn sprite(name: &str) -> usize {
-    match name {
-        "Ashwarden" => 87,
-        "Stormreader" => 84,
-        "Deepforger" => 86,
-        "Mire Hound" => 123,
-        "Cinder Imp" => 110,
-        "Gust Wisp" => 121,
-        "Pebble Golem" => 109,
-        "Brine Leech" => 108,
-        "Static Moth" => 120,
-        "Thorn Creeper" => 122,
-        "Ash Rat" => 124,
-        "The Quarrymaster" => 100,
-        "Gale Duchess" => 99,
-        "Kiln Tyrant" => 88,
-        "Minelayer Queen" => 92,
-        "The Undertow" => 112,
-        "Null Cartographer" => 111,
-        _ => 96,
-    }
-}

@@ -193,7 +193,7 @@ impl Run {
         let mut m = Mods::default();
         (d.mods)(&mut m);
         m.reveals -= slow;
-        Fighter::new(d.name, d.desc, hp, hp, power, d.elements, m, d.aggro)
+        Fighter::new(d.name, d.sprite, d.desc, hp, hp, power, d.elements, m, d.aggro)
     }
 
     fn random_normal(&mut self) -> Fighter {
@@ -223,7 +223,7 @@ impl Run {
                     _ => vec![self.enemy(&BOSSES[self.floor.min(BOSSES.len() - 1)], false, 1)],
                 };
                 let h = &HEROES[self.hero];
-                let me = Fighter::new(h.name, h.passive_desc, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
+                let me = Fighter::new(h.name, h.sprite, h.passive_desc, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
                 Stage::Battle(Battle::new(me, foes, Rng::new(self.rng.next())))
             }
             NodeKind::Encounter => Stage::Event(&ENCOUNTERS[self.rng.below(ENCOUNTERS.len())], None),
