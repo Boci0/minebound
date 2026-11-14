@@ -11,6 +11,19 @@ question: fire now, or flip one more? The enemy plays by exactly the same rules,
 Between fights you pick a route through a branching map of battles, elites, encounters, shops, rests
 and treasure, collecting charms that bend the rules, across three floors and three bosses.
 
+## Get the game
+
+You need [Git](https://git-scm.com) and [Rust](https://rustup.rs). On Windows, the Rust installer
+also asks for the Visual Studio C++ build tools; say yes. Then:
+
+```
+git clone https://github.com/Boci0/minebound.git
+cd minebound
+cargo build --release
+```
+
+The first build takes a few minutes.
+
 ## Run
 
 ```
@@ -18,6 +31,26 @@ cargo run --release
 ```
 
 `cargo run --release -- 42` replays the run with seed 42.
+
+### Update
+
+Close the game first, then, in the game's folder:
+
+```
+git pull
+cargo build --release
+```
+
+### Desktop shortcut (Windows)
+
+Build once with `cargo build --release`, then run this in PowerShell from the game's folder:
+
+```powershell
+$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Minebound.lnk"); $s.TargetPath = "$PWD\target\release\minebound.exe"; $s.WorkingDirectory = "$PWD"; $s.Save()
+```
+
+The shortcut starts the game from its folder, so the music is found. It keeps working after an
+update, since the update rebuilds the same file.
 
 ## Controls
 
