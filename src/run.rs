@@ -7,9 +7,9 @@ use crate::{
 pub const FLOORS: usize = 3;
 pub const COLS: usize = 5;
 pub const HEAL_PRICE: i32 = 20;
-pub const HEAL_AMOUNT: i32 = 12;
+pub const HEAL_AMOUNT: i32 = 18;
 /// HP everyone recovers after a won fight
-pub const BREATHER: i32 = 10;
+pub const BREATHER: i32 = 5;
 pub const SHOP_SIZE: usize = 4;
 /// the first restock; each one after costs this much more
 pub const RESTOCK_PRICE: i32 = 10;
@@ -23,11 +23,13 @@ pub enum NodeKind {
     Rest,
     Treasure,
     Boss,
+    /// a fight whose prize is a blessing
+    Shrine,
 }
 
 impl NodeKind {
     pub fn name(self) -> &'static str {
-        ["Battle", "Elite", "Encounter", "Shop", "Rest", "Treasure", "Boss"][self as usize]
+        ["Battle", "Elite", "Encounter", "Shop", "Rest", "Treasure", "Boss", "Shrine"][self as usize]
     }
 }
 
@@ -44,6 +46,10 @@ pub enum Stage {
     Pick(Vec<usize>),
     /// a boss fell: pick one of these skills (by index in `COMBOS`) to upgrade
     Upgrade(Vec<usize>),
+    /// a shrine fight was won: pick one of these blessings (by index in `BLESSINGS`), or keep yours
+    Blessing(Vec<usize>),
+    /// an elite fell: pick one of these brands (by index in `BRANDS`) and a rite to burn it onto
+    Brand(Vec<usize>),
     Shop(Shop),
     Event(&'static Encounter, Option<String>),
     End(bool),
@@ -69,6 +75,10 @@ pub struct Run {
     pub charms: Vec<usize>,
     /// upgraded skills, by index in `COMBOS`; a repeat is another level
     pub ups: Vec<usize>,
+    /// brands burnt onto rites: (index in `COMBOS`, index in `BRANDS`), one per rite
+    pub brands: Vec<(usize, usize)>,
+    /// the one blessing held, by index in `BLESSINGS`
+    pub blessing: Option<usize>,
     pub floor: usize,
     /// which of the floor's two bosses waits at the end
     pub boss: usize,
@@ -93,6 +103,8 @@ impl Run {
             shards: 20,
             charms: vec![],
             ups: vec![],
+            brands: vec![],
+            blessing: None,
             floor: 0,
             boss: 0,
             twist: 0,
@@ -113,9 +125,22 @@ impl Run {
         for &c in &self.charms {
             (CHARMS[c].apply)(&mut m);
         }
+        if let Some(b) = self.blessing {
+            (BLESSINGS[b].apply)(&mut m);
+        }
         (TWISTS[self.twist].me)(&mut m);
         (EXPEDITIONS[self.exp].me)(&mut m);
         m
+    }
+
+    /// Takes blessing `b` in place of the one held (None keeps it). Max HP gained comes as HP too.
+    pub fn take_blessing(&mut self, b: Option<usize>) -> Stage {
+        if b.is_some() {
+            let before = self.max_hp();
+            self.blessing = b;
+            self.hp = (self.hp + (self.max_hp() - before).max(0)).min(self.max_hp());
+        }
+        self.after_node()
     }
 
     pub fn boss_def(&self) -> &'static EnemyDef {
@@ -124,6 +149,22 @@ impl Run {
 
     pub fn level(&self, id: usize) -> usize {
         1 + self.ups.iter().filter(|&&u| u == id).count()
+    }
+
+    pub fn brand_of(&self, id: usize) -> Option<&'static Brand> {
+        self.brands.iter().find(|b| b.0 == id).map(|b| &BRANDS[b.1])
+    }
+
+    /// The rites this hero can make, by index in `COMBOS`.
+    pub fn rites(&self) -> Vec<usize> {
+        combos_for(&HEROES[self.hero].elements).iter().map(|c| combo_id(c)).collect()
+    }
+
+    /// Burns `brand` onto rite `id`, replacing any brand it had.
+    pub fn burn_brand(&mut self, id: usize, brand: usize) -> Stage {
+        self.brands.retain(|b| b.0 != id);
+        self.brands.push((id, brand));
+        self.after_node()
     }
 
     /// Upgrades skill `id`, then the boss's charm reward.
@@ -183,12 +224,13 @@ impl Run {
             return NodeKind::Rest; // every path gets a chance to heal before the boss
         }
         match self.rng.below(100) {
-            0..=34 => NodeKind::Battle,
-            35..=54 => NodeKind::Encounter,
-            55..=69 if col >= 2 => NodeKind::Elite,
-            55..=69 => NodeKind::Battle,
-            70..=81 => NodeKind::Shop,
-            82..=91 => NodeKind::Rest,
+            0..=29 => NodeKind::Battle,
+            30..=49 => NodeKind::Encounter,
+            50..=64 if col >= 2 => NodeKind::Elite,
+            50..=64 => NodeKind::Battle,
+            65..=74 => NodeKind::Shop,
+            75..=84 => NodeKind::Shrine,
+            85..=93 => NodeKind::Rest,
             _ => NodeKind::Treasure,
         }
     }
@@ -206,6 +248,12 @@ impl Run {
         let mut map: Vec<Vec<Node>> = Vec::new();
         for (c, &n) in sizes.iter().enumerate() {
             map.push((0..n).map(|_| Node { kind: self.kind_for(c), next: vec![] }).collect());
+        }
+        // every floor has at least one shrine, somewhere between the first fight and the rest stop
+        if !map.iter().flatten().any(|n| n.kind == NodeKind::Shrine) {
+            let c = 1 + self.rng.below(COLS - 2);
+            let r = self.rng.below(map[c].len());
+            map[c][r].kind = NodeKind::Shrine;
         }
         for c in 0..COLS {
             let (n, m) = (sizes[c], sizes[c + 1]);
@@ -242,7 +290,7 @@ impl Run {
     /// `slow`: how many fewer tiles it flips per turn than a hero. Lesser foes sweep slower.
     fn enemy(&self, d: &EnemyDef, scale: bool, slow: i32) -> Fighter {
         let floor = self.floor as i32;
-        let (hp, power) = if scale { (d.hp * (85 + 55 * floor) / 100, d.power + floor) } else { (d.hp, d.power) };
+        let (hp, power) = if scale { (d.hp * (240 + 160 * floor) / 100, d.power + floor) } else { (d.hp * 150 / 100, d.power) };
         let x = &EXPEDITIONS[self.exp];
         let hp = hp * x.hp_pct / 100;
         let mut m = Mods::default();
@@ -267,9 +315,9 @@ impl Run {
         self.note.clear();
         let kind = self.map[col][row].kind;
         match kind {
-            NodeKind::Battle | NodeKind::Elite | NodeKind::Boss => {
+            NodeKind::Battle | NodeKind::Shrine | NodeKind::Elite | NodeKind::Boss => {
                 let foes = match kind {
-                    NodeKind::Battle => {
+                    NodeKind::Battle | NodeKind::Shrine => {
                         let waves = match self.floor {
                             0 => 1 + self.rng.below(2),
                             1 => 2,
@@ -286,6 +334,7 @@ impl Run {
                 let h = &HEROES[self.hero];
                 let mut me = Fighter::new(h.name, h.sprite, h.passive_desc, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
                 me.ups = self.ups.clone();
+                me.brands = self.brands.clone();
                 Stage::Battle(Battle::new(me, foes, Rng::new(self.rng.next())))
             }
             NodeKind::Encounter => Stage::Event(&ENCOUNTERS[self.rng.below(ENCOUNTERS.len())], None),
@@ -308,7 +357,7 @@ impl Run {
         let base = match kind {
             NodeKind::Boss => 40,
             NodeKind::Elite => 25 + self.rng.below(10) as i32,
-            _ => 12 + self.rng.below(6) as i32,
+            _ => 18 + self.rng.below(7) as i32,
         };
         let shards = base * (100 + m.shard_pct) / 100;
         self.shards += shards;
@@ -317,8 +366,16 @@ impl Run {
         match kind {
             NodeKind::Battle => self.after_node(),
             NodeKind::Boss => {
-                let ids: Vec<usize> = combos_for(&HEROES[self.hero].elements).iter().map(|c| combo_id(c)).filter(|&id| self.level(id) < MAX_LEVEL).collect();
+                let ids: Vec<usize> = self.rites().into_iter().filter(|&id| self.level(id) < MAX_LEVEL).collect();
                 if ids.is_empty() { self.pick() } else { Stage::Upgrade(ids) }
+            }
+            NodeKind::Shrine => {
+                let mut pool: Vec<usize> = (0..BLESSINGS.len()).filter(|&b| Some(b) != self.blessing).collect();
+                Stage::Blessing((0..3).map(|_| pool.remove(self.rng.below(pool.len()))).collect())
+            }
+            NodeKind::Elite => {
+                let mut pool: Vec<usize> = (0..BRANDS.len()).collect();
+                Stage::Brand((0..3).map(|_| pool.remove(self.rng.below(pool.len()))).collect())
             }
             _ => self.pick(),
         }
@@ -472,6 +529,22 @@ mod tests {
     }
 
     #[test]
+    fn every_floor_has_a_shrine_and_one_blessing_is_held_at_a_time() {
+        for seed in 0..50 {
+            let (run, _) = Run::new(seed, 0, 0);
+            assert!(run.map.iter().flatten().any(|n| n.kind == NodeKind::Shrine), "seed {seed}");
+        }
+        let (mut run, _) = Run::new(1, 0, 0);
+        let (vigor, iron) = (BLESSINGS.iter().position(|b| b.name == "Vigor").unwrap(), BLESSINGS.iter().position(|b| b.name == "Iron").unwrap());
+        let (hp, max) = (run.hp, run.max_hp());
+        run.take_blessing(Some(vigor));
+        assert_eq!((run.hp, run.max_hp()), (hp + 30, max + 30), "max HP gained comes as HP too");
+        run.take_blessing(Some(iron));
+        assert_eq!((run.blessing, run.max_hp(), run.hp), (Some(iron), max, max), "the old blessing is gone");
+        assert_eq!(run.mods().armor, 3 + 3, "Ashwarden's own 3, and Iron's 3");
+    }
+
+    #[test]
     fn a_restock_never_brings_back_the_wares_it_replaces() {
         for seed in 0..50 {
             let (mut run, _) = Run::new(seed, 0, 0);
@@ -530,6 +603,11 @@ mod tests {
                     run.after_node()
                 }
                 Stage::Upgrade(ids) => run.upgrade(ids[pick.below(ids.len())]),
+                Stage::Blessing(offers) => run.take_blessing(Some(offers[pick.below(offers.len())])),
+                Stage::Brand(offers) => {
+                    let rites = run.rites();
+                    run.burn_brand(rites[pick.below(rites.len())], offers[pick.below(offers.len())])
+                }
                 Stage::Shop(mut shop) => {
                     for k in 0..shop.stock.len() {
                         run.buy(&mut shop, k);

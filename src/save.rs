@@ -12,11 +12,13 @@ pub struct Save {
     pub best: Vec<Vec<usize>>,
     /// (music, sound effects), each 0..=10
     pub volume: (i32, i32),
+    /// the rules sheet has been read once, over the first battle
+    pub rules_seen: bool,
 }
 
 impl Default for Save {
     fn default() -> Save {
-        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8) }
+        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8), rules_seen: false }
     }
 }
 
@@ -41,6 +43,7 @@ impl Save {
             match (key, nums.as_slice()) {
                 (Some("unlocked"), &[n]) => save.unlocked = n.clamp(1, EXPEDITIONS.len()),
                 (Some("volume"), &[m, s]) => save.volume = (m.min(10) as i32, s.min(10) as i32),
+                (Some("rules"), &[n]) => save.rules_seen = n > 0,
                 (Some("best"), &[x, ref heroes @ ..]) if x < EXPEDITIONS.len() => {
                     for (h, &b) in heroes.iter().enumerate().take(HEROES.len()) {
                         save.best[x][h] = b.min(CLEARED);
@@ -53,7 +56,7 @@ impl Save {
     }
 
     fn text(&self) -> String {
-        let mut s = format!("unlocked {}\nvolume {} {}\n", self.unlocked, self.volume.0, self.volume.1);
+        let mut s = format!("unlocked {}\nvolume {} {}\nrules {}\n", self.unlocked, self.volume.0, self.volume.1, self.rules_seen as u8);
         for (x, heroes) in self.best.iter().enumerate() {
             let list: Vec<String> = heroes.iter().map(|b| b.to_string()).collect();
             s += &format!("best {x} {}\n", list.join(" "));
@@ -99,6 +102,7 @@ mod tests {
         // winning an older expedition again opens nothing new
         assert_eq!(s.record(0, 0, 3, true), None);
         s.volume = (3, 10);
+        s.rules_seen = true;
         assert_eq!(Save::parse(&s.text()), s);
         assert_eq!(s.best[0], vec![CLEARED, 2, CLEARED, 0]);
         // a save from before the fourth hero still loads; the new hero starts fresh

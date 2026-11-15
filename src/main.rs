@@ -142,13 +142,13 @@ fn icon_pixels<const N: usize>(sheet: &Image, size: usize) -> [u8; N] {
     out
 }
 
-fn conf() -> Conf {
+fn conf() -> macroquad::conf::Conf {
     let icon = Image::from_file_with_format(ART, None).ok().map(|sheet| miniquad::conf::Icon {
         small: icon_pixels(&sheet, 16),
         medium: icon_pixels(&sheet, 32),
         big: icon_pixels(&sheet, 64),
     });
-    Conf {
+    let mut conf: macroquad::conf::Conf = Conf {
         window_title: "Minebound".into(),
         window_width: 1280,
         window_height: 720,
@@ -158,6 +158,11 @@ fn conf() -> Conf {
         icon,
         ..Default::default()
     }
+    .into();
+    // each draw call keeps a GPU buffer this many vertices big for good; its 5000 indices fill at
+    // about 3400 vertices of quads, so macroquad's 10000 left 60% of every buffer unused
+    conf.draw_call_vertex_capacity = 4000;
+    conf
 }
 
 #[macroquad::main(conf)]
@@ -226,7 +231,20 @@ async fn main() {
                 }
                 let next = match stage {
                     Stage::Map => ui::map_screen(run).map(|(c, r)| run.enter(c, r)),
-                    Stage::Battle(b) => ui::battle_screen(b, run.floor, &run.charms, &mut ai_timer).then(|| run.finish_battle(b)),
+                    Stage::Battle(b) => {
+                        // the very first fight waits under a sheet of rules until it is read
+                        ui::hold_for_rules(!save.rules_seen);
+                        let done = ui::battle_screen(b, run.floor, &run.charms, &mut ai_timer);
+                        if !save.rules_seen && ui::rules() {
+                            save.rules_seen = true;
+                            save.store();
+                        }
+                        if !b.over() && ui::surrender() {
+                            Some(Stage::End(false))
+                        } else {
+                            done.then(|| run.finish_battle(b))
+                        }
+                    }
                     Stage::Pick(options) => {
                         ui::status(run);
                         ui::pick(options).map(|id| {
@@ -237,6 +255,14 @@ async fn main() {
                     Stage::Upgrade(ids) => {
                         ui::status(run);
                         ui::upgrade(run, ids).map(|id| run.upgrade(id))
+                    }
+                    Stage::Blessing(offers) => {
+                        ui::status(run);
+                        ui::blessing(run, offers).map(|b| run.take_blessing(b))
+                    }
+                    Stage::Brand(offers) => {
+                        ui::status(run);
+                        ui::brand(run, offers).map(|(id, brand)| run.burn_brand(id, brand))
                     }
                     Stage::Shop(shop) => {
                         ui::status(run);
@@ -252,7 +278,7 @@ async fn main() {
                     }
                 };
                 // you may walk away from an expedition anywhere but mid-fight; how far you got still counts
-                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
+                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
                     save.record(run.exp, run.hero, run.floor + 1, false);
                     save.store();
                     quit_run = true;

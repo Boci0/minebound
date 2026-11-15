@@ -10,8 +10,9 @@
 
 You and your enemy each sweep your own boards, one board per element. Crystals are always visible;
 mines are not. Clear every safe tile around a crystal to claim a stack of that board's element, then
-spend your stacks on rites, from a plain Strike to combos that need the right mix of elements.
-Every safe flip in a row builds surge, up to double damage, so each turn asks the same question:
+spend your stacks on rites that need the right mix of elements. Some rites reach into the enemy's
+board, breaking its crystals or burying more mines. Every safe flip in a row builds surge, up to
+double damage, and every rite you cast spends a step of it, so each turn asks the same question:
 fire now, or flip one more? The enemy plays by exactly the same rules, in full view.
 
 ## Contents
@@ -28,9 +29,12 @@ fire now, or flip one more? The enemy plays by exactly the same rules, in full v
 
 - **Four heroes**, each with their own elements, rites and play style.
 - **Five elements** and 16 combo rites that need the right mix of stacks.
-- **Branching runs** across three floors: battles, elites, encounters, shops, rest sites, treasure
-  and a boss at the end of each floor.
+- **Branching runs** across three floors: battles, elites, encounters, shops, shrines, rest sites,
+  treasure and a boss at the end of each floor.
 - **38 pacts** in three rarities (common, rare, legendary) that bend the rules of a turn.
+- **12 brands**: beat an elite to burn one onto a rite and give it an extra effect.
+- **10 blessings**: win a shrine fight to take one. You hold one at a time, and each lifts a single
+  stat such as damage, shield, healing or burn.
 - **14 enemies**, each breaking one rule: armour, dodging, lifesteal, surge jamming, stack theft
   and more.
 - **Seeded runs**: replay any run exactly by its seed.
@@ -64,11 +68,12 @@ place.
 | Flag a suspected mine | Right click |
 | Switch board | Click a board tab (free, any time in your turn) |
 | Socket a gem | Drag it from your stacks into a rite's matching socket; the rite fires once every socket is full |
+| Pick a rite to fill | Right click outside the board steps down the rite list; then click a gem to send it there |
 | Take a gem back | Click the filled socket |
-| Strike | Drag a gem onto the enemy |
-| Cast everything | Unleash |
 | End your turn (unspent stacks are kept) | End turn, or Space |
+| Explain a rule word | Hover any word that floats |
 | Abandon the run | Retreat (top right, outside battle) |
+| Give up a battle (ends the run) | Surrender (bottom left, in battle) |
 | Sound on / off | M |
 | Next song | N |
 | Volume settings | Esc, or the gear icon |
@@ -77,17 +82,24 @@ place.
 
 - A number on a tile is how many mines touch it. A safe tile touching no mines opens its neighbours.
 - Your first flip on a fresh board is never a mine.
-- The number under a crystal is how many hidden tiles still surround it. Mines around it stay
-  hidden; it pays out once every safe one is revealed.
+- The number under a crystal is how many hidden tiles still surround it; the small number in its
+  corner is how many of them are mines. It pays out once every safe one is revealed.
 - A mine costs a little HP, gives no stack, ends your turn, wipes your surge and breaks the crystals
   next to it.
 - Boards keep their state while you are on another one. A board with no crystal left to claim is
   dealt again, and all boards reset each wave.
-- You get 6 reveals per turn (lesser enemies get fewer). There is no limit on the stacks you can
-  hold.
+- You get 6 reveals per turn, and never fewer than 5 whatever the penalties (lesser enemies get
+  fewer). There is no limit on the stacks you can hold.
+- Stacks are spent only through rites. Gems no rite can use yet wait in your stacks.
 - A rite deals power × stacks spent, plus its bonus, multiplied by surge (+20% per safe flip in a
-  row this turn, up to +100%). Casting does not end your turn.
-- After turn 7, every rite gains +2 damage per turn, so no fight lasts forever.
+  row this turn, up to +100%). Each rite cast spends one step of surge. Casting does not end your
+  turn.
+- Shield soaks damage first; half of it wears off at the start of its owner's next turn.
+- After turn 12, every rite gains +2 damage per turn, so no fight lasts forever.
+- Beating an elite earns a brand. Burnt onto one of your rites, it adds its effect at no extra gem
+  cost. Brands do not grow when the rite is upgraded, and a rite holds one brand at a time.
+- Every floor has at least one shrine. Win its fight to choose a blessing; taking a new one replaces
+  the one you hold.
 
 Your pacts sit at the top left of the battle screen and flash each time they take effect. The column
 before each boss is all rest sites.
@@ -131,8 +143,8 @@ and that the heroes stay roughly balanced.
 Push a version tag. GitHub Actions builds `Minebound-setup.exe` and publishes it as a release:
 
 ```
-git tag v0.2.0
-git push origin v0.2.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 The installer is defined in `installer/minebound.iss`. Never change its `AppId`: it is how a new

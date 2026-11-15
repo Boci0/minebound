@@ -68,11 +68,11 @@ struct Part {
 #[derive(Clone, Copy)]
 struct Shot {
     from: usize,
-    element: Element,
-    name: &'static str,
     t0: f64,
-    /// (index in `COMBOS`, level); None for a Strike
-    skill: Option<(usize, usize)>,
+    /// (index in `COMBOS`, level)
+    skill: (usize, usize),
+    /// the effect of the brand on that rite, if it has one
+    brand: Option<Effect>,
 }
 
 /// Shot timing, in units of `SHOT_TIME`: upgraded skills charge up first, then fire one bolt per level.
@@ -86,7 +86,7 @@ fn volley(lvl: usize, k: usize) -> f32 {
 
 /// When the last bolt of `sh` hits.
 fn lands_at(sh: &Shot) -> f64 {
-    let lvl = sh.skill.map_or(1, |s| s.1);
+    let lvl = sh.skill.1;
     sh.t0 + ((volley(lvl, lvl - 1) + 1.0) * SHOT_TIME) as f64
 }
 
@@ -132,6 +132,10 @@ struct Fx {
     sockets: std::collections::HashMap<&'static str, Vec<Element>>,
     /// the gem being dragged, by index in your stacks
     drag: Option<usize>,
+    /// where that gem was picked up: let go on the same spot, it was a click
+    drag_from: Vec2,
+    /// the rite a clicked gem goes to, by row in your rite list; right-click steps it down the list
+    aim: Option<usize>,
     /// when the next wave's enemy arrived (game time); it walks in and you wait for it
     intro: Option<f64>,
     /// when the battle ended (real time); the result panel waits for the kill to play out
@@ -156,6 +160,8 @@ thread_local! {
     /// (music, sound effects) volume, each 0..=10
     static VOLUME: std::cell::Cell<(i32, i32)> = const { std::cell::Cell::new((6, 8)) };
     static SETTINGS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// the rules sheet is up over the first battle
+    static RULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// game time and this frame's step: real time, slowed for a kill and stopped for a hit-stop
     static CLOCK: std::cell::Cell<(f64, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
     /// real times until which (slow motion, hit-stop) last
@@ -349,7 +355,6 @@ const FX_STONE: &[(f32, f32, f32)] = &[(128.0, 128.0, 128.0), (256.0, 128.0, 128
 const FX_SPARK: &[(f32, f32, f32)] = &[(512.0, 128.0, 128.0), (640.0, 128.0, 128.0), (768.0, 128.0, 128.0)];
 const FX_HEAL: &[(f32, f32, f32)] = &[(896.0, 128.0, 128.0), (768.0, 128.0, 128.0), (640.0, 0.0, 128.0)];
 const FX_FLAME: &[(f32, f32, f32)] = &[(0.0, 256.0, 128.0), (128.0, 256.0, 128.0), (256.0, 256.0, 128.0)];
-const FX_SLASH: &[(f32, f32, f32)] = &[(384.0, 256.0, 128.0), (512.0, 256.0, 128.0)];
 
 fn fx_impact(e: Element) -> &'static [(f32, f32, f32)] {
     match e {
@@ -400,6 +405,7 @@ pub fn transition() {
 }
 
 pub fn end_frame() {
+    draw_tip();
     let a = fx(|fx| 1.0 - (now() - fx.fade) / 0.25) as f32;
     if a > 0.0 {
         draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(BG, a));
@@ -494,7 +500,7 @@ fn mouse() -> Vec2 {
 
 /// True while a panel (settings, retreat) is open over the screen.
 fn modal() -> bool {
-    SETTINGS.with(|s| s.get()) || RETREAT.with(|r| r.get())
+    SETTINGS.with(|s| s.get()) || RETREAT.with(|r| r.get()) || RULES.with(|r| r.get())
 }
 
 /// A left click meant for the screen. While a panel is open it swallows every click.
@@ -562,19 +568,11 @@ fn right(s: &str, x: f32, y: f32, size: f32, c: Color) {
 
 /// Word-wraps into width `w`; returns the y of the line after the last one.
 fn wrapped(s: &str, x: f32, mut y: f32, w: f32, size: f32, c: Color) -> f32 {
-    let mut line = String::new();
-    for word in s.split(' ') {
-        let longer = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-        if !line.is_empty() && measure(&longer, size).width > w {
-            rich(&line, x, y, size, c);
-            y += size * 1.25;
-            line = word.to_string();
-        } else {
-            line = longer;
-        }
+    for line in wrap(s, w, size) {
+        rich(&line, x, y, size, c);
+        y += size * 1.25;
     }
-    rich(&line, x, y, size, c);
-    y + size * 1.25
+    y
 }
 
 // Colour, used sparingly against the grey: rules keywords, and the few names that move.
@@ -603,17 +601,88 @@ fn keyword(word: &str) -> Option<(Color, Option<Motion>)> {
     }
 }
 
-/// One line of text with its keywords in colour (and the line's own alpha).
+/// Rules words that explain themselves: (heading, explanation). They float on the page, so a
+/// player can tell they are worth hovering.
+fn glossary(word: &str) -> Option<(&'static str, &'static str)> {
+    let w = word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+    Some(match w.as_str() {
+        "burn" | "burns" | "burning" => ("Burn", "Loses 2 HP at the start of each of its turns, straight through shield, for the turns shown. A new burn keeps whichever lasts longer."),
+        "detonate" => ("Detonate", "All the burn left on the foe goes off at once: its turns times its damage. Then the burn is gone."),
+        "weak" | "weaken" | "halved" => ("Weak", "Its rites deal half damage for the turns shown."),
+        "shield" => ("Shield", "Soaks damage before HP does. Half of it wears off at the start of its owner's next turn. Burn goes straight through."),
+        "armor" => ("Armor", "Every hit on it deals this much less, down to 1."),
+        "evade" => ("Evade", "The first rite cast at it each turn misses: no damage, no effects, and the gems are still spent."),
+        "grazes" | "graze" => ("Graze", "The first rite cast at it each turn deals half damage. Everything else the rite does still lands."),
+        "surge" => ("Surge", "Each safe flip in a row adds a step, +20% rite damage, up to 5. Every rite you cast spends a step, and a mine wipes them all."),
+        "overpressure" => ("Overpressure", "From turn 13 on, every rite deals 2 more each turn, so no fight can stall forever."),
+        "power" => ("Power", "Damage for each gem a rite spends, before its bonus and surge."),
+        "duds" => ("Duds", "Mines that will be found harmlessly this wave instead of going off."),
+        "reveal" | "reveals" => ("Reveals", "Tiles you can flip this turn. Penalties never leave you fewer than 5."),
+        "crystal" | "crystals" => ("Crystal", "Clear every safe tile around it to claim a gem of its board's element. A mine beside it breaks it. The corner number counts the mines touching it."),
+        "rare" => ("Rare", "Changes how a turn plays. Offered less often than Common pacts; 45 shards in a shop."),
+        "legendary" => ("Legendary", "Bends a core rule. Offered rarely; 65 shards in a shop."),
+        _ => return None,
+    })
+}
+
+thread_local!(static TIP: std::cell::Cell<Option<(&'static str, &'static str)>> = const { std::cell::Cell::new(None) });
+
+/// Asks for `tip` to be shown by the mouse this frame, over everything else.
+fn tip(t: (&'static str, &'static str)) {
+    if !modal() {
+        TIP.with(|c| c.set(Some(t)));
+    }
+}
+
+/// Lines of `s` that fit in width `w`.
+fn wrap(s: &str, w: f32, size: f32) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    for word in s.split(' ') {
+        let line = lines.last_mut().expect("starts with one");
+        let longer = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+        if !line.is_empty() && measure(&longer, size).width > w {
+            lines.push(word.to_string());
+        } else {
+            *line = longer;
+        }
+    }
+    lines
+}
+
+/// The tooltip asked for this frame, in a plate beside the mouse and kept on screen.
+fn draw_tip() {
+    let Some((head, body)) = TIP.with(|c| c.take()) else { return };
+    let lines = wrap(body, 290.0, 15.0);
+    let h = 44.0 + lines.len() as f32 * 19.0;
+    let m = mouse();
+    let r = Rect::new((m.x + 16.0).min(VIEW.x - 330.0), if m.y + 20.0 + h > VIEW.y { m.y - 12.0 - h } else { m.y + 20.0 }, 318.0, h);
+    plate(r, CARD);
+    text(head, r.x + 14.0, r.y + 24.0, 16.0, INK);
+    for (k, line) in lines.iter().enumerate() {
+        text(line, r.x + 14.0, r.y + 46.0 + k as f32 * 19.0, 15.0, MUTED);
+    }
+}
+
+/// One line of text with its keywords in colour (and the line's own alpha). Words with a
+/// tooltip float and explain themselves when hovered.
 fn rich(s: &str, x: f32, y: f32, size: f32, c: Color) {
     let space = measure("a a", size).width - measure("aa", size).width;
     let mut at = x;
     for word in s.split(' ') {
-        match keyword(word) {
-            Some((k, Some(m))) => lively(word, at, y, size, Color { a: c.a, ..k }, m),
-            Some((k, None)) => text(word, at, y, size, Color { a: c.a, ..k }),
-            None => text(word, at, y, size, c),
+        let w = measure(word, size).width;
+        let explained = glossary(word);
+        let (col, motion) = match keyword(word) {
+            Some((k, m)) => (Color { a: c.a, ..k }, m),
+            None => (c, None),
+        };
+        match motion.or(explained.map(|_| Motion::Wave)) {
+            Some(m) => lively(word, at, y, size, col, m),
+            None => text(word, at, y, size, col),
         }
-        at += measure(word, size).width + space;
+        if let Some(t) = explained.filter(|_| Rect::new(at, y - size, w, size * 1.3).contains(mouse())) {
+            tip(t);
+        }
+        at += w + space;
     }
 }
 
@@ -756,20 +825,41 @@ fn sprite_rect(idx: usize, r: Rect, tint: Color) {
 
 /// Each element's alchemical sign as strokes, in a 20 x 20 box centred on (10, 10):
 /// fire a triangle, water one upside down, air and earth the same with a bar, spark a bolt.
+/// Fire and water carry a dot at their heart and the bars reach well past the triangle, so each
+/// pair still tells apart at chip size.
 fn sign_strokes(e: Element) -> Vec<Vec<(f32, f32)>> {
     let up = vec![(10.0, 3.0), (18.0, 17.0), (2.0, 17.0), (10.0, 3.0)];
     let down = vec![(10.0, 17.0), (18.0, 3.0), (2.0, 3.0), (10.0, 17.0)];
     match e {
-        Element::Ember => vec![up],
-        Element::Tide => vec![down],
-        Element::Gale => vec![up, vec![(0.5, 12.0), (19.5, 12.0)]],
-        Element::Stone => vec![down, vec![(0.5, 8.0), (19.5, 8.0)]],
+        Element::Ember => vec![up, vec![(10.0, 11.5), (10.0, 13.0)]],
+        Element::Tide => vec![down, vec![(10.0, 7.0), (10.0, 8.5)]],
+        Element::Gale => vec![up, vec![(-2.5, 12.0), (22.5, 12.0)]],
+        Element::Stone => vec![down, vec![(-2.5, 8.0), (22.5, 8.0)]],
         Element::Spark => vec![vec![(12.0, 2.0), (5.0, 11.0), (10.0, 11.0), (8.0, 18.0), (15.0, 9.0), (10.0, 9.0), (12.0, 2.0)]],
     }
 }
 
 fn count(v: &[Element], e: Element) -> usize {
     v.iter().filter(|&&x| x == e).count()
+}
+
+/// The gems in `slotted` beyond what `cost` asks for: the ones paying a toll.
+fn paid_toll(cost: &[Element], slotted: &[Element]) -> Vec<Element> {
+    let mut rest = slotted.to_vec();
+    for e in cost {
+        if let Some(k) = rest.iter().position(|x| x == e) {
+            rest.remove(k);
+        }
+    }
+    rest
+}
+
+/// The toll's own mark, unlike any element's sign: a ring cut by a bar. Any gem fills its socket.
+fn toll_sign(p: Vec2, r: f32, c: Color) {
+    let k = r / 9.0;
+    let w = (1.8 * k).max(1.5);
+    draw_circle_lines(p.x, p.y, 7.0 * k, w, c);
+    draw_line(p.x - 9.5 * k, p.y, p.x + 9.5 * k, p.y, w, c);
 }
 
 /// A gold shard, the currency.
@@ -835,10 +925,34 @@ fn charm_icon(id: usize, r: Rect, lit: f32) {
     sprite(c.icon.0, r.x + pad, r.y + pad, r.w - 2.0 * pad, rgb(c.icon.1));
 }
 
-/// Where charm `k` of `n` sits in the battle's charm bar.
+/// How many slots the battle's charm bar has; past that, the last one becomes "+N".
+const BAR_SLOTS: usize = 10;
+
+/// Where charm `k` of `n` sits in the battle's charm bar. Charms with no room share the "+N" slot.
 fn charm_slot(k: usize, n: usize) -> Rect {
-    let step = 38.0f32.min(396.0 / n.max(1) as f32);
-    Rect::new(56.0 + k as f32 * step, 56.0, 32.0, 32.0)
+    let k = if n > BAR_SLOTS { k.min(BAR_SLOTS - 1) } else { k };
+    Rect::new(56.0 + k as f32 * 38.0, 56.0, 32.0, 32.0)
+}
+
+/// The "+N" slot standing in for pacts there is no room for. Hovering it shows every pact's icon.
+fn more_slot(r: Rect, hidden: usize, all: &[usize]) {
+    let hot = r.contains(mouse()) && !modal();
+    block(r, if hot { CARD_HI } else { BG });
+    outline(r, if hot { INK } else { FAINT });
+    centered(&format!("+{hidden}"), r.center().x, r.center().y + 5.0, 15.0, INK);
+    if !hot {
+        return;
+    }
+    let (cols, s, pad) = (8.min(all.len()), 34.0, 12.0);
+    let rows = all.len().div_ceil(cols);
+    let (w, h) = (cols as f32 * s + 2.0 * pad - 4.0, rows as f32 * s + 2.0 * pad - 4.0);
+    // below the slot, or above it when there is no room underneath
+    let y = if r.bottom() + 12.0 + h > VIEW.y - 8.0 { r.y - 12.0 - h } else { r.bottom() + 12.0 };
+    let panel = Rect::new(r.x.min(VIEW.x - w - 20.0), y, w, h);
+    plate(panel, CARD);
+    for (k, &id) in all.iter().enumerate() {
+        charm_icon(id, Rect::new(panel.x + pad + (k % cols) as f32 * s, panel.y + pad + (k / cols) as f32 * s, 30.0, 30.0), 0.0);
+    }
 }
 
 /// Your charms along the top of a battle. Each one jumps and glows when it takes effect;
@@ -847,7 +961,8 @@ fn charm_bar(charms: &[usize]) {
     let now = now();
     let times = fx(|fx| fx.charm_t.clone());
     let mut tip = None;
-    for (k, &id) in charms.iter().enumerate() {
+    let shown = if charms.len() > BAR_SLOTS { BAR_SLOTS - 1 } else { charms.len() };
+    for (k, &id) in charms.iter().enumerate().take(shown) {
         let since = times.get(&id).map_or(9.0, |t| (now - t) as f32);
         let lit = (1.0 - since / 0.7).max(0.0);
         let r = charm_slot(k, charms.len());
@@ -857,6 +972,9 @@ fn charm_bar(charms: &[usize]) {
         if r.contains(mouse()) {
             tip = Some((id, r));
         }
+    }
+    if shown < charms.len() {
+        more_slot(charm_slot(shown, charms.len()), charms.len() - shown, charms);
     }
     if let Some((id, r)) = tip {
         let c = &CHARMS[id];
@@ -1093,7 +1211,7 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
     for rule in x.rules {
         y = wrapped(rule, lx, y + 20.0, w, 15.0, INK) - 6.0;
     }
-    y += 34.0;
+    y += 22.0;
     if !open {
         y = wrapped(&format!("Win {} to open the way here.", EXPEDITIONS[shown - 1].name), lx, y, w, 15.0, INK) + 14.0;
     }
@@ -1134,7 +1252,7 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
     for (k, &e) in h.elements.iter().enumerate() {
         gem(e, vec2(lx + 200.0 + k as f32 * 20.0, by + 87.0), 7.0);
     }
-    let descend = button(Rect::new(lx, 640.0, w, 46.0), "Descend", pick.0 < save.unlocked, true);
+    let descend = button(Rect::new(lx, 662.0, w, 46.0), "Descend", pick.0 < save.unlocked, true);
     if descend || (is_key_pressed(KeyCode::Enter) && !modal()) {
         go = Some(Go::Play);
     }
@@ -1151,7 +1269,7 @@ const STAND: [Vec2; 2] = [vec2(104.0, 348.0), vec2(640.0, 82.0)];
 const FIGHTER: [f32; 2] = [96.0, 120.0];
 /// the enemy's board, shrunk to a preview in the top right
 const PEEK: Vec2 = vec2(1082.0, 62.0);
-/// where a fight's Strike drops land: the enemy's block at the top
+/// the enemy's block at the top
 const FOE: Rect = Rect { x: 440.0, y: 14.0, w: 400.0, h: 284.0 };
 const SHOT_TIME: f32 = 0.2;
 
@@ -1174,7 +1292,8 @@ fn life(r: Rect, frac: f32, ghost: f32) {
 /// Power and whatever else a fighter has going: shield, armor, burn and so on.
 fn conditions(f: &Fighter) -> String {
     let mut st = format!("Power {}", f.power);
-    for (label, v) in [("Shield", f.shield), ("Armor", f.mods.armor), ("Evade", f.evades_left), ("Burn", f.burn), ("Weak", f.weak), ("Duds", f.duds)] {
+    let dodge = if f.mods.graze > 0 { "Graze" } else { "Evade" };
+    for (label, v) in [("Shield", f.shield), ("Armor", f.mods.armor), (dodge, f.evades_left), ("Burn", f.burn), ("Weak", f.weak), ("Duds", f.duds)] {
         if v > 0 {
             st += &format!(" · {label} {v}");
         }
@@ -1246,20 +1365,7 @@ fn draw_shots(shots: &[Shot], now: f64) {
     for sh in shots {
         let p = (now - sh.t0) as f32 / SHOT_TIME;
         let (a, z) = (STAND[sh.from], STAND[1 - sh.from]);
-        let Some((id, lvl)) = sh.skill else {
-            // Strike: a small gem, a small burst
-            let along = a + (z - a) * p.min(1.0) - vec2(0.0, (p.min(1.0) * PI).sin() * 26.0);
-            if p < 1.0 {
-                gem(sh.element, along, 14.0);
-            } else if p - step < 1.0 {
-                burst(z, 14, 220.0, 7.0, el_color(sh.element));
-                anim(FX_SLASH, z, 120.0, 0.25, WHITE);
-            }
-            if p < 4.0 {
-                stamped(sh.name, (a.x + z.x) / 2.0, (a.y + z.y) / 2.0 - 40.0, 20.0, fade(el_color(sh.element), (4.0 - p).min(1.0)));
-            }
-            continue;
-        };
+        let (id, lvl) = sh.skill;
         let c = &COMBOS[id];
         let (e1, e2) = (c.needs[0], c.needs[1]);
         let (c1, c2) = (el_color(e1), el_color(e2));
@@ -1352,7 +1458,7 @@ fn draw_shots(shots: &[Shot], now: f64) {
                     punch();
                 }
                 if k == 0 {
-                    for e in c.effects {
+                    for e in c.effects.iter().chain(&sh.brand) {
                         match e {
                             Effect::Burn(_) => {
                                 rise(z, 30, 30.0, mix(GOLD_C, BAD, 0.5));
@@ -1364,7 +1470,8 @@ fn draw_shots(shots: &[Shot], now: f64) {
                             }
                             Effect::Drain(_) => stream(z, a, 16, mix(c2, INK, 0.3)),
                             Effect::Pierce => burst(z, 28, 440.0, 8.0, ICE),
-                            Effect::Scout(_) => burst(a, 14, 160.0, 6.0, GOLD_C),
+                            Effect::Shatter(_) => burst(z, 24, 320.0, 7.0, INK),
+                            Effect::Bury(_) => burst(z, 16, 160.0, 6.0, BAD),
                             Effect::Detonate => burst(z, 36, 420.0, 9.0, rgb(0xff8a4c)),
                             Effect::Reveal(_) => burst(a, 12, 140.0, 5.0, rgb(0x5fe0c8)),
                             _ => {}
@@ -1382,7 +1489,7 @@ fn draw_shots(shots: &[Shot], now: f64) {
         }
         if (0.0..2.4).contains(&u) {
             let fadeout = 1.0 - u / 2.4;
-            for e in c.effects {
+            for e in c.effects.iter().chain(&sh.brand) {
                 match e {
                     Effect::Shield(_) => {
                         for ring in 0..lvl {
@@ -1407,8 +1514,8 @@ fn draw_shots(shots: &[Shot], now: f64) {
 /// Game seconds a new wave takes to arrive; your input waits for it.
 const WAVE_IN: f64 = 1.4;
 /// Seconds each kind of banner stays up: a turn, a wave, a skill (plus more per level).
-const TURN_BANNER: f32 = 1.2;
-const SKILL_BANNER: f32 = 1.3;
+const TURN_BANNER: f32 = 0.7;
+const SKILL_BANNER: f32 = 1.0;
 
 pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &mut f32) -> bool {
     let over = b.over();
@@ -1430,22 +1537,22 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             }
             Event::Cast { from, name, element, miss, skill } => {
                 fx(|fx| {
-                    let shot = Shot { from, element, name, t0: now, skill };
+                    let shot = Shot { from, t0: now, skill, brand: b.f[from].brand(&COMBOS[skill.0]).map(|x| x.effect) };
                     fx.shots.push(shot);
                     if miss {
                         fx.floats.push((STAND[1 - from] - vec2(0.0, 30.0), "MISS".into(), MUTED, lands_at(&shot), 30.0));
-                    } else if let Some((_, lvl)) = skill {
-                        fx.banner = Some((name, el_color(element), from, now, lvl));
+                    } else {
+                        fx.banner = Some((name, el_color(element), from, now, skill.1));
                     }
                 });
                 play(match (miss, from, name) {
                     (true, ..) => Sfx::Miss,
                     (_, 1, _) => Sfx::Hurt,
-                    (_, _, "Strike") => Sfx::Strike,
                     _ => Sfx::Skill,
                 });
                 // skills also get a voice of their own: by first element, and a charge-up once upgraded
-                if let Some((_, lvl)) = skill {
+                {
+                    let lvl = skill.1;
                     match element {
                         Element::Spark => play(Sfx::Zap),
                         Element::Gale => play(Sfx::Whoosh),
@@ -1473,7 +1580,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         let changed = fx.turn != turn;
         if changed {
             fx.turn = turn;
-            let busy = fx.banner.is_some_and(|x| x.4 > 0 && now - x.3 < 1.1);
+            let busy = fx.banner.is_some_and(|x| x.4 > 0 && now - x.3 < SKILL_BANNER as f64);
             if let (Some(s), false) = (turn, busy) {
                 fx.banner = Some((if s == 0 { "YOUR TURN" } else { "ENEMY TURN" }, if s == 0 { GOOD } else { BAD }, s, now, 0));
             }
@@ -1486,7 +1593,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     }
 
     // gems slotted into skill sockets stay in your stacks until the skill fires; forget any the
-    // battle has since taken away (spent by Unleash, snatched by the enemy)
+    // battle has since taken away (snatched by the enemy)
     let mut sockets = fx(|fx| std::mem::take(&mut fx.sockets));
     let mut reserved = [0usize; 5];
     for &e in &b.f[0].elements {
@@ -1587,14 +1694,12 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             });
         }
     }
-    let pulse = (now as f32 * 4.0).sin() * 0.5 + 0.5;
-
-    let (mut reveal, mut flag, mut swap, mut strike, mut cast) = (None, None, None, None, None);
+    let (mut reveal, mut flag, mut swap, mut cast) = (None, None, None, None);
 
     // where the run stands, top left, above your pacts
     label(&format!("FLOOR {}  ·  WAVE {}/{}  ·  TURN {}", floor + 1, b.wave, b.waves, b.turn), 56.0, 40.0);
     let note = if b.pressure() > 0 { format!("Overpressure: every rite +{}", b.pressure()) } else { format!("Overpressure after turn {PRESSURE_TURN}") };
-    text(&note, 56.0, 116.0, 15.0, if b.pressure() > 0 { INK } else { MUTED });
+    rich(&note, 56.0, 116.0, 15.0, if b.pressure() > 0 { INK } else { MUTED });
 
     // the enemy, alone at the top: name, life, and what it would throw if it fired now
     {
@@ -1609,13 +1714,10 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         label("HP", ex, 236.0);
         right(&format!("{} / {}", foe.hp.max(0), foe.max_hp), ex + FOE.w, 236.0, 16.0, INK);
         life(Rect::new(ex, 244.0, FOE.w, 8.0), foe.hp as f32 / foe.max_hp as f32, ghost[1] / foe.max_hp as f32);
-        text(&conditions(foe), ex, 276.0, 15.0, INK);
+        rich(&conditions(foe), ex, 276.0, 15.0, INK);
         let (what, signs, dmg) = match b.best_combo(1, &foe.stacks) {
-            Some(c) => (c.name, foe.cost(c), b.hit_damage(1, foe.cost(c).len(), Some(c))),
-            None => match foe.stacks.last() {
-                Some(&e) => ("Strike", vec![e], b.hit_damage(1, 1, None)),
-                None => ("nothing yet", vec![], 0),
-            },
+            Some(c) => (c.name, foe.cost(c), b.hit_damage(1, c)),
+            None => ("nothing yet", vec![], 0),
         };
         let mut x = ex + FOE.w;
         if dmg > 0 {
@@ -1666,9 +1768,14 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
                 mine_mark(r.center(), 6.0, INK);
             } else {
                 draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, rgb(0x2a2a2a));
+                // its numbers too, so you can read how its sweep is going
+                let n = fb.adjacent(i);
+                if n > 0 {
+                    centered(&n.to_string(), r.center().x, r.center().y + 5.0, 14.0, MUTED);
+                }
             }
         }
-        text(&format!("{} reveals · {} mines", foe.reveals_left, fb.mines), PEEK.x, PEEK.y + 170.0, 14.0, MUTED);
+        rich(&format!("{} reveals · {} mines", foe.reveals_left, fb.mines), PEEK.x, PEEK.y + 170.0, 14.0, MUTED);
         let mut x = PEEK.x;
         for (e, n) in by_element(&foe.elements, foe.stacks.iter().copied()) {
             sign(e, vec2(x + 8.0, 262.0), 8.0, if n > 0 { INK } else { FAINT });
@@ -1685,7 +1792,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     label("HP", hx, 506.0);
     right(&format!("{} / {}", me.hp.max(0), me.max_hp), hx + 330.0, 506.0, 16.0, INK);
     life(Rect::new(hx, 514.0, 330.0, 8.0), me.hp as f32 / me.max_hp as f32, ghost[0] / me.max_hp as f32);
-    text(&conditions(me), hx, 546.0, 15.0, INK);
+    rich(&conditions(me), hx, 546.0, 15.0, INK);
     let held = by_element(&me.elements, free.iter().map(|&k| me.stacks[k]));
     let chip_step = 78.0f32.min(330.0 / held.len().max(1) as f32);
     let chip = |j: usize| Rect::new(hx + j as f32 * chip_step, 596.0, chip_step - 10.0, 40.0);
@@ -1735,6 +1842,12 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
                 // each crystal bobs on its own beat; the number is how many tiles are left around it
                 gem(board.element, mid - vec2(0.0, 7.0 + (now as f32 * 2.6 + i as f32 * 1.7).sin() * 1.5), 13.0);
                 centered(&board.left_around(i).to_string(), mid.x, r.y + 48.0, 15.0, INK);
+                // and, in its corner, the mines touching it: a clue like any number
+                let n = board.adjacent(i);
+                if n > 0 {
+                    mine_mark(vec2(r.x + 9.0, r.y + 9.0), 4.0, MUTED);
+                    text(&n.to_string(), r.x + 15.0, r.y + 14.0, 14.0, INK);
+                }
             }
         } else if !t.revealed {
             unpop(key);
@@ -1804,7 +1917,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     }
     right(&format!("{} reveals left · {} mines", me.reveals_left, board.mines), BOARD.x + 6.0 * STEP - 2.0, 694.0, 15.0, MUTED);
 
-    // your stacks: drag a chip onto a rite's sockets, or onto the enemy to Strike
+    // your stacks: drag a chip onto a rite's sockets
     label("STACKS", hx, 584.0);
     for (j, &(e, n)) in held.iter().enumerate() {
         let r = chip(j);
@@ -1818,6 +1931,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         text(&n.to_string(), r.x + 38.0, r.center().y + 7.0, 20.0, if n > 0 { INK } else { MUTED });
         if hot && clicked() {
             drag = free.iter().rev().find(|&&k| me.stacks[k] == e).copied();
+            fx(|fx| fx.drag_from = mouse());
         }
     }
 
@@ -1832,7 +1946,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         let lunge = shots
             .iter()
             .filter(|c| c.from == s)
-            .map(|c| (now - c.t0) as f32 / SHOT_TIME - charge(c.skill.map_or(1, |k| k.1)))
+            .map(|c| (now - c.t0) as f32 / SHOT_TIME - charge(c.skill.1))
             .filter(|p| (0.0..1.0).contains(p))
             .last();
         let since_hit = (now - hit_at[s]) as f32;
@@ -1871,46 +1985,76 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     // rites, on the right: only the ones you can make. Drop gems into a rite's sockets to cast it.
     let rx = 880.0;
     label("RITES", rx, 316.0);
-    right("drag stacks onto a rite", rx + 350.0, 316.0, 14.0, MUTED);
+    right("drag gems in, or right-click to pick", rx + 350.0, 316.0, 14.0, MUTED);
     let ready = b.ready(0);
     let list = combos_for(&me.elements);
+    // right-click off the board picks the next rite down; then a click on a gem sends it there
+    let mut aim = fx(|fx| fx.aim).filter(|&i| i < list.len());
+    let on_board = Rect::new(BOARD.x, BOARD.y, W as f32 * STEP, W as f32 * STEP).contains(mouse());
+    if mine && !modal() && !on_board && !list.is_empty() && is_mouse_button_pressed(MouseButton::Right) {
+        aim = Some(aim.map_or(0, |i| (i + 1) % list.len()));
+        play(Sfx::Click);
+    }
     let rh = (300.0 / list.len().max(1) as f32).min(66.0);
     let mut y = 326.0;
     // where a dragged gem may land: (row, rite, its cost)
     let mut targets: Vec<(Rect, &'static Combo, Vec<Element>)> = vec![];
-    for c in list {
+    for (row, &c) in list.iter().enumerate() {
         let (lvl, cost) = (me.level(c), me.cost(c));
         let lit = ready.iter().any(|r| r.name == c.name);
         let slotted = sockets.get(c.name).cloned().unwrap_or_default();
         let r = Rect::new(rx - 10.0, y, 370.0, rh);
         let over_row = mine && r.contains(mouse());
-        if dragged.is_some_and(|e| count(&cost, e) > count(&slotted, e)) {
+        if dragged.is_some_and(|e| count(&cost, e) > count(&slotted, e) || paid_toll(&cost, &slotted).len() < me.mods.toll.max(0) as usize) {
             block(r, if over_row { CARD_HI } else { CARD });
         }
         draw_line(rx, y + rh, rx + 350.0, y + rh, 1.0, FAINT);
+        if mine && aim == Some(row) {
+            // the picked rite: framed, with a pointer at its left edge
+            outline(r, INK);
+            let m = vec2(r.x - 6.0, r.center().y);
+            draw_triangle(m + vec2(-10.0, -8.0), m + vec2(-10.0, 8.0), m, INK);
+        }
         let bright = lit || !slotted.is_empty();
         if lvl > 1 {
             lively(c.title(lvl), rx, y + 30.0, 24.0, fade(GOLD, if bright { 1.0 } else { 0.55 }), Motion::Wave);
         } else {
             text(c.title(lvl), rx, y + 30.0, 24.0, if bright { INK } else { MUTED });
         }
-        // one socket per gem the rite takes, right-aligned
+        if let Some(br) = me.brand(c) {
+            text(br.name, rx + measure(c.title(lvl), 24.0).width + 10.0, y + 30.0, 14.0, ACCENT);
+        }
+        // one socket per gem the rite takes, right-aligned, then the toll sockets any gem fills
         let mut unslot = None;
-        for (j, &e) in cost.iter().enumerate() {
-            let sr = Rect::new(rx + 350.0 - (cost.len() - j) as f32 * 32.0 + 6.0, y + 10.0, 26.0, 26.0);
-            let full = count(&cost[..j], e) < count(&slotted, e);
-            outline(sr, if full { INK } else { FAINT });
-            sign(e, sr.center(), if full { 9.0 } else { 7.0 }, if full { el_color(e) } else { MUTED });
-            if full && mine && drag.is_none() && sr.contains(mouse()) {
+        let toll = me.mods.toll.max(0) as usize;
+        let tolled = paid_toll(&cost, &slotted);
+        let all = cost.len() + toll;
+        for j in 0..all {
+            let sr = Rect::new(rx + 350.0 - (all - j) as f32 * 32.0 + 6.0, y + 10.0, 26.0, 26.0);
+            let gem_in = if j < cost.len() {
+                let e = cost[j];
+                (count(&cost[..j], e) < count(&slotted, e)).then_some(e)
+            } else {
+                tolled.get(j - cost.len()).copied()
+            };
+            outline(sr, if gem_in.is_some() { INK } else { FAINT });
+            match (gem_in, j < cost.len()) {
+                (Some(e), _) => sign(e, sr.center(), 9.0, el_color(e)),
+                (None, true) => sign(cost[j], sr.center(), 7.0, MUTED),
+                (None, false) => toll_sign(sr.center(), 7.0, MUTED),
+            }
+            if let Some(e) = gem_in.filter(|_| mine && drag.is_none() && sr.contains(mouse())) {
                 block(sr, fade(INK, 0.15));
                 if clicked() {
                     unslot = Some((e, sr.center()));
                 }
             }
         }
-        rich(&c.describe(lvl), rx, y + rh - 12.0, 14.0, MUTED);
+        // a brand can make the line long: shrink it rather than run into the next panel
+        let line = me.describe(c);
+        rich(&line, rx, y + rh - 12.0, if measure(&line, 14.0).width > 300.0 { 12.0 } else { 14.0 }, MUTED);
         if lit {
-            right(&format!("{} dmg", b.hit_damage(0, cost.len(), Some(c))), rx + 350.0, y + rh - 12.0, 15.0, INK);
+            right(&format!("{} dmg", b.hit_damage(0, c)), rx + 350.0, y + rh - 12.0, 15.0, INK);
         }
         if let Some((e, at)) = unslot {
             // take a gem back out of its socket
@@ -1926,51 +2070,49 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         y += rh;
     }
 
-    // a dragged gem lands where the button comes up: in a rite's socket, or on the enemy as a Strike.
+    // a dragged gem lands where the button comes up: in a rite's socket.
     // Dropped anywhere else it just goes back to your stacks; nothing fires on a click.
-    let at_enemy = FOE.contains(mouse());
     if let Some(k) = drag {
         let e = b.f[0].stacks[k];
-        // the enemy is always a drop target: an outline pulses round it while you hold a gem
-        draw_rectangle_lines(FOE.x, FOE.y, FOE.w, FOE.h, 2.0, fade(INK, 0.25 + pulse * 0.4));
-        if at_enemy {
-            block(Rect::new(FOE.x + 2.0, 150.0, FOE.w - 4.0, 70.0), BG);
-            stamped(&format!("Strike {}", b.hit_damage(0, 1, None)), 640.0, 196.0, 40.0, INK);
-        }
         if !is_mouse_button_down(MouseButton::Left) {
-            let target = targets.iter().find(|(r, _, _)| r.contains(mouse()));
-            if at_enemy {
-                strike = Some(k);
-            } else if let Some((r, c, cost)) = target {
+            // let go where it was picked up: a click, which sends it to the picked rite
+            let tapped = mouse().distance(fx(|fx| fx.drag_from)) < 6.0;
+            let target = targets.iter().find(|(r, _, _)| r.contains(mouse())).or(if tapped { aim.and_then(|i| targets.get(i)) } else { None });
+            if target.is_none() && tapped {
+                fx(|fx| fx.floats.push((mouse(), "RIGHT-CLICK TO PICK A RITE".into(), MUTED, now, 18.0)));
+            }
+            if let Some((r, c, cost)) = target {
                 let (r, c) = (*r, *c);
                 let v = sockets.entry(c.name).or_default();
-                if count(cost, e) > count(v, e) {
+                let toll = me.mods.toll.max(0) as usize;
+                let all = cost.len() + toll;
+                if count(cost, e) > count(v, e) || paid_toll(cost, v).len() < toll {
+                    // the socket it lands in: the next empty one of its element, else a toll socket
+                    let j = if count(cost, e) > count(v, e) {
+                        cost.iter().enumerate().filter(|x| *x.1 == e).nth(count(v, e)).map_or(0, |x| x.0)
+                    } else {
+                        cost.len() + paid_toll(cost, v).len()
+                    };
                     v.push(e);
-                    // the socket it lands in: the next empty one of its element
-                    let nth = count(v, e) - 1;
-                    let j = cost.iter().enumerate().filter(|x| *x.1 == e).nth(nth).map_or(0, |x| x.0);
-                    burst(vec2(rx + 350.0 - (cost.len() - j) as f32 * 32.0 + 19.0, r.y + 23.0), 14, 160.0, 6.0, el_color(e));
+                    burst(vec2(rx + 350.0 - (all - j) as f32 * 32.0 + 19.0, r.y + 23.0), 14, 160.0, 6.0, el_color(e));
                     play(Sfx::Claim);
                 } else {
                     // refused: say why instead of silently handing the gem back
-                    let why = if cost.contains(&e) { "FULL" } else { "WRONG GEM" };
+                    let why = if cost.contains(&e) || toll > 0 { "FULL" } else { "WRONG GEM" };
                     fx(|fx| fx.floats.push((mouse(), why.into(), MUTED, now, 22.0)));
                     play(Sfx::Miss);
                 }
-                if v.len() >= cost.len() {
-                    sockets.remove(c.name);
-                    cast = Some(c);
+                if v.len() >= all {
+                    cast = Some((c, sockets.remove(c.name).unwrap_or_default()));
                 }
             }
             drag = None;
         }
     }
-    if let Some(c) = cast {
+    if let Some((c, _)) = &cast {
         sockets.remove(c.name);
     }
 
-    let has_stacks = !b.f[0].stacks.is_empty();
-    let unleash = button(Rect::new(880.0, 640.0, 170.0, 44.0), &format!("Unleash {}", b.attack_damage(0)), mine && has_stacks, false);
     // with reveals still unused, Space asks twice so a stray key does not throw them away
     thread_local!(static ASKED: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::MIN) });
     let (left, asked) = (b.f[0].reveals_left, ASKED.with(|a| a.get()));
@@ -1981,15 +2123,11 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     } else if mine && now - asked < 2.0 {
         right(&format!("{left} reveals left. Space again ends the turn."), 1230.0, 708.0, 14.0, MUTED);
     }
-    let pass = button(Rect::new(1060.0, 640.0, 170.0, 44.0), "End turn", mine, true) || space_ends;
-    if unleash {
-        b.unleash();
-    } else if pass {
+    let pass = button(Rect::new(880.0, 640.0, 350.0, 44.0), "End turn", mine, true) || space_ends;
+    if pass {
         b.end_turn();
-    } else if let Some(c) = cast {
-        b.cast(c);
-    } else if let Some(k) = strike {
-        b.strike(k);
+    } else if let Some((c, paid)) = cast {
+        b.cast_with(c, &paid);
     } else if let Some(k) = swap {
         b.swap(k);
     } else if let Some(i) = reveal {
@@ -2019,11 +2157,12 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     fx(|fx| {
         fx.sockets = sockets;
         fx.drag = drag;
+        fx.aim = aim;
     });
     let (banner, flashed) = fx(|fx| (fx.banner, fx.flash));
     if let Some((name, c, from, t0, lvl)) = banner {
-        // a skill's name (or whose turn it is) slams across the whole screen from the caster's side;
-        // upgraded skills get a taller band and their level
+        // a skill's name (or whose turn it is) slams in from the caster's side along the seam above
+        // your board, so the tiles stay readable; upgraded skills get a taller band and their level
         let up = lvl.saturating_sub(1) as f32;
         let dur = if lvl == 0 { TURN_BANNER } else { SKILL_BANNER + 0.2 * up };
         let el = (now - t0) as f32;
@@ -2032,9 +2171,9 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             let a = ((dur - el) / 0.3).min(1.0);
             let arrive = (el / 0.15).min(1.0);
             let slide = (1.0 - arrive).powi(2) * 500.0 * if from == 0 { -1.0 } else { 1.0 };
-            let (size, band) = if lvl == 0 { (40.0, 56.0) } else { (60.0 + 8.0 * up, 84.0 + 14.0 * up) };
+            let (size, band) = if lvl == 0 { (30.0, 40.0) } else { (40.0 + 6.0 * up, 54.0 + 8.0 * up) };
             let cx = BOARD.x + W as f32 * STEP / 2.0 - 1.0;
-            let mid = BOARD.y + W as f32 * STEP / 2.0;
+            let mid = BOARD.y - 16.0;
             let top = mid - band / 2.0;
             let wide = (measure(name, size).width + 80.0).max(W as f32 * STEP + 40.0);
             let bx = Rect::new(cx + slide - wide / 2.0, top, wide, band);
@@ -2102,6 +2241,8 @@ fn node_look(k: NodeKind) -> usize {
         NodeKind::Rest => HD + 24,
         NodeKind::Treasure => HD + 25,
         NodeKind::Boss => HD + 26,
+        // a standing stone carved with marks
+        NodeKind::Shrine => HD + 30,
     }
 }
 
@@ -2166,7 +2307,7 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
         -1 => BAD,
         _ => GOLD_C,
     };
-    text(["FLOOR CURSE", "FLOOR TWIST", "FLOOR BLESSING"][(twist.tone + 1) as usize], x, 140.0, 15.0, ACCENT);
+    text(["FLOOR CURSE", "FLOOR TWIST", "FLOOR BOON"][(twist.tone + 1) as usize], x, 140.0, 15.0, ACCENT);
     match twist.tone {
         -1 => lively(twist.name, x, 164.0, 20.0, BLOOD, Motion::Tremble),
         1 => lively(twist.name, x, 164.0, 20.0, GOLD, Motion::Wave),
@@ -2192,26 +2333,58 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
         }
         y += 22.0;
     }
+    let mut held = None;
+    if let Some(bl) = run.blessing {
+        text("BLESSING", x, y + 18.0, 15.0, ACCENT);
+        let r = Rect::new(x - 8.0, y + 2.0, 298.0, 22.0);
+        if r.contains(mouse()) {
+            block(r, CARD_HI);
+            held = Some(&BLESSINGS[bl]);
+        }
+        text(BLESSINGS[bl].name, x + 90.0, y + 18.0, 16.0, GOLD_C);
+        y += 24.0;
+    }
     text("PACTS", x, y + 18.0, 15.0, ACCENT);
     let top = y + 28.0;
-    let (mut tip, mut tip_label) = (HEROES[run.hero].passive_desc, "PASSIVE");
-    let rows = 22.0f32.min((592.0 - top) / run.charms.len().max(1) as f32);
-    for (k, &id) in run.charms.iter().enumerate() {
-        let r = Rect::new(x - 8.0, top + k as f32 * rows, 298.0, rows);
-        let hot = r.contains(mouse());
-        if hot {
-            (tip, tip_label) = (CHARMS[id].desc, "PACT");
-            block(r, CARD_HI);
+    let (mut tip, mut tip_label) = held.map_or((HEROES[run.hero].passive_desc, "PASSIVE"), |b| (b.desc, "BLESSING"));
+    let rows = 22.0f32.min((576.0 - top) / run.charms.len().max(1) as f32);
+    let n = run.charms.len();
+    if rows >= 22.0 {
+        for (k, &id) in run.charms.iter().enumerate() {
+            let r = Rect::new(x - 8.0, top + k as f32 * rows, 298.0, rows);
+            let hot = r.contains(mouse());
+            if hot {
+                (tip, tip_label) = (CHARMS[id].desc, "PACT");
+                block(r, CARD_HI);
+            }
+            let c = &CHARMS[id];
+            sprite(c.icon.0, x, r.y + (rows - 18.0) / 2.0, 18.0, rgb(c.icon.1));
+            pact_name(id, x + 26.0, r.y + rows / 2.0 + 6.0, 16.0, if hot { INK } else { rarity_color(c.rarity) });
         }
-        let c = &CHARMS[id];
-        sprite(c.icon.0, x, r.y + (rows - 18.0) / 2.0, 18.0, rgb(c.icon.1));
-        pact_name(id, x + 26.0, r.y + rows / 2.0 + 6.0, 16.0, if hot { INK } else { rarity_color(c.rarity) });
+    } else {
+        // too many to list by name: icons, row by row, and a "+N" for any that still do not fit
+        let (s, cols) = (32.0, 9);
+        let cap = cols * ((576.0 - top) / s).floor().max(1.0) as usize;
+        let shown = if n > cap { cap - 1 } else { n };
+        let slot = |k: usize| Rect::new(x + (k % cols) as f32 * s, top + (k / cols) as f32 * s, 28.0, 28.0);
+        for (k, &id) in run.charms.iter().enumerate().take(shown) {
+            let r = slot(k);
+            let hot = r.contains(mouse());
+            if hot {
+                tip = CHARMS[id].desc;
+                tip_label = CHARMS[id].name;
+            }
+            charm_icon(id, r, if hot { 0.6 } else { 0.0 });
+        }
+        if shown < n {
+            more_slot(slot(shown), n - shown, &run.charms);
+        }
     }
-    text(tip_label, x, 612.0, 15.0, ACCENT);
-    wrapped(tip, x, 634.0, 282.0, 16.0, INK);
+    text(tip_label, x, 596.0, 15.0, ACCENT);
+    wrapped(tip, x, 618.0, 282.0, 16.0, INK);
     // kept inside the panel's 282 px column, however long the seed
     let line = format!("Seed {}  M: mute  N: next song", run.seed);
-    text(&line, x, 684.0, 14.0 * (282.0 / measure(&line, 14.0).width).min(1.0), MUTED);
+    text(&line, x, 686.0, 14.0 * (282.0 / measure(&line, 14.0).width).min(1.0), MUTED);
     chosen
 }
 
@@ -2287,17 +2460,100 @@ pub fn upgrade(run: &Run, ids: &[usize]) -> Option<usize> {
                 gem(e, p, 11.0);
             }
         }
-        let y = wrapped(&c.describe(lvl), x, r.y + 280.0, w - 40.0, 16.0, MUTED);
+        let y = wrapped(&rite_text(c, lvl, run.brand_of(id)), x, r.y + 280.0, w - 40.0, 16.0, MUTED);
         text("becomes", x, y + 6.0, 14.0, ACCENT);
-        wrapped(&c.describe(lvl + 1), x, y + 30.0, w - 40.0, 18.0, GOLD_C);
+        wrapped(&rite_text(c, lvl + 1, run.brand_of(id)), x, y + 30.0, w - 40.0, 18.0, GOLD_C);
     }
     particles();
     chosen
 }
 
+thread_local!(static BRANDING: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) });
+
+/// An elite fell: pick a brand, then the rite to burn it onto. Returns (index in `COMBOS`, index in `BRANDS`).
+pub fn brand(run: &Run, offers: &[usize]) -> Option<(usize, usize)> {
+    let Some(chosen) = BRANDING.with(|b| b.get()) else {
+        lively_centered("The elite falls", 640.0, 200.0, 44.0, GOLD, Motion::Wave);
+        centered("Take a brand. Burnt onto a rite, it adds its effect for no extra gem. A rite holds one.", 640.0, 236.0, 18.0, MUTED);
+        let x0 = 640.0 - (offers.len() as f32 * 300.0 - 20.0) / 2.0;
+        for (k, &id) in offers.iter().enumerate() {
+            let r = Rect::new(x0 + k as f32 * 300.0, 280.0, 280.0, 180.0);
+            if card(r, !modal()) {
+                BRANDING.with(|b| b.set(Some(id)));
+            }
+            stamped(BRANDS[id].name, r.center().x, r.y + 64.0, 34.0, INK);
+            let line = BRANDS[id].effect.text(1);
+            rich(&(line[..1].to_uppercase() + &line[1..]), r.x + 24.0, r.y + 124.0, 18.0, INK);
+        }
+        return None;
+    };
+    let b = &BRANDS[chosen];
+    lively_centered(&format!("Burn {} onto a rite", b.name), 640.0, 128.0, 40.0, GOLD, Motion::Wave);
+    centered("A rite holds one brand: a new one replaces the old.", 640.0, 164.0, 18.0, MUTED);
+    let ids = run.rites();
+    let n = ids.len() as f32;
+    let (w, gap) = (280.0, 20.0);
+    let x0 = 640.0 - (n * w + (n - 1.0) * gap) / 2.0;
+    let mut done = None;
+    for (k, &id) in ids.iter().enumerate() {
+        let c = &COMBOS[id];
+        let lvl = run.level(id);
+        let r = Rect::new(x0 + k as f32 * (w + gap), 196.0, w, 340.0);
+        if card(r, !modal()) {
+            done = Some((id, chosen));
+            play(Sfx::LevelUp);
+        }
+        let x = r.x + 20.0;
+        text(c.title(lvl), x, r.y + 40.0, 26.0, INK);
+        for (j, &e) in c.cost(lvl).iter().enumerate() {
+            gem(e, vec2(x + 12.0 + j as f32 * 30.0, r.y + 76.0), 11.0);
+        }
+        let old = run.brand_of(id);
+        let y = wrapped(&rite_text(c, lvl, old), x, r.y + 120.0, w - 40.0, 16.0, MUTED);
+        text(&old.map_or("becomes".into(), |o| format!("{} is replaced", o.name)), x, y + 6.0, 14.0, ACCENT);
+        wrapped(&rite_text(c, lvl, Some(b)), x, y + 30.0, w - 40.0, 18.0, GOLD_C);
+    }
+    if button(Rect::new(565.0, 576.0, 150.0, 40.0), "Back", !modal(), false) {
+        BRANDING.with(|b| b.set(None));
+    }
+    if done.is_some() {
+        BRANDING.with(|b| b.set(None));
+    }
+    done
+}
+
 /// The shopkeeper reacts to something for a few seconds.
 fn say(line: &'static str) {
     fx(|fx| fx.line = Some((line, now())));
+}
+
+/// A shrine fight was won: take one blessing, or keep the one held. Some(None) keeps it.
+pub fn blessing(run: &Run, offers: &[usize]) -> Option<Option<usize>> {
+    lively_centered("The shrine answers", 640.0, 200.0, 44.0, GOLD, Motion::Wave);
+    let held = run.blessing.map(|b| BLESSINGS[b].name);
+    let sub = match held {
+        Some(name) => format!("You hold one blessing at a time. Taking another lets {name} go."),
+        None => "Take one blessing. You hold one at a time.".into(),
+    };
+    centered(&sub, 640.0, 236.0, 18.0, MUTED);
+    let x0 = 640.0 - (offers.len() as f32 * 300.0 - 20.0) / 2.0;
+    let mut chosen = None;
+    for (k, &id) in offers.iter().enumerate() {
+        let r = Rect::new(x0 + k as f32 * 300.0, 280.0, 280.0, 180.0);
+        if card(r, !modal()) {
+            chosen = Some(Some(id));
+            play(Sfx::LevelUp);
+        }
+        text("BLESSING OF", r.x + 24.0, r.y + 40.0, 14.0, ACCENT);
+        stamped(BLESSINGS[id].name, r.center().x, r.y + 84.0, 34.0, GOLD_C);
+        wrapped(BLESSINGS[id].desc, r.x + 24.0, r.y + 124.0, r.w - 48.0, 16.0, INK);
+    }
+    if let Some(name) = held {
+        if button(Rect::new(540.0, 500.0, 200.0, 40.0), &format!("Keep {name}"), !modal(), false) {
+            chosen = Some(None);
+        }
+    }
+    chosen
 }
 
 /// Returns true when the player leaves.
@@ -2496,8 +2752,18 @@ fn panel_button(r: Rect, label: &str, primary: bool, press: bool) -> bool {
 /// The Retreat button in the run's status bar, and the question it asks. True once the player
 /// confirms: the run is abandoned and the game goes back to the title.
 pub fn retreat() -> bool {
+    give_up(Rect::new(1078.0, 20.0, 140.0, 32.0), "Retreat", ["You leave the expedition. This hero, its pacts", "and its shards are lost."])
+}
+
+/// Mid-fight: give up the battle, and with it the whole expedition. How far you got still counts.
+pub fn surrender() -> bool {
+    give_up(Rect::new(56.0, 652.0, 150.0, 36.0), "Surrender", ["The fight is lost, and the expedition with it.", "How far you got still counts."])
+}
+
+/// A button that asks first: true once the player confirms `word`.
+fn give_up(at: Rect, word: &str, lines: [&str; 2]) -> bool {
     if !RETREAT.with(|r| r.get()) {
-        if button(Rect::new(1078.0, 20.0, 140.0, 32.0), "Retreat", true, false) {
+        if button(at, word, !modal(), false) {
             RETREAT.with(|r| r.set(true));
         }
         return false;
@@ -2506,16 +2772,47 @@ pub fn retreat() -> bool {
     draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.6));
     let panel = Rect::new(390.0, 240.0, 500.0, 220.0);
     plate(panel, CARD);
-    stamped("Retreat?", 640.0, 296.0, 34.0, INK);
-    centered("You leave the expedition. This hero, its pacts", 640.0, 336.0, 16.0, MUTED);
-    centered("and its shards are lost.", 640.0, 358.0, 16.0, MUTED);
-    let quit = panel_button(Rect::new(430.0, 392.0, 200.0, 40.0), "Retreat", false, press);
+    stamped(&format!("{word}?"), 640.0, 296.0, 34.0, INK);
+    centered(lines[0], 640.0, 336.0, 16.0, MUTED);
+    centered(lines[1], 640.0, 358.0, 16.0, MUTED);
+    let quit = panel_button(Rect::new(430.0, 392.0, 200.0, 40.0), word, false, press);
     // not Esc: the settings panel answers to Esc in the same frame
     let stay = panel_button(Rect::new(650.0, 392.0, 200.0, 40.0), "Keep going", true, press);
     if quit || stay {
         RETREAT.with(|r| r.set(false));
     }
     quit
+}
+
+/// Holds the battle still under the rules sheet. Call before the battle draws.
+pub fn hold_for_rules(on: bool) {
+    RULES.with(|r| r.set(on));
+}
+
+/// How to play, on one sheet over the first battle. True once the player has read it.
+pub fn rules() -> bool {
+    let press = is_mouse_button_pressed(MouseButton::Left) && !SETTINGS.with(|s| s.get());
+    draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.7));
+    let panel = Rect::new(300.0, 96.0, 680.0, 528.0);
+    plate(panel, CARD);
+    stamped("How to play", 640.0, 150.0, 38.0, INK);
+    let mut y = 196.0;
+    for line in [
+        "Each board holds crystals of one element. Clear every safe tile around a crystal to claim a gem of that element.",
+        "Numbers count the mines touching a tile. A crystal shows its count in the corner. Right-click a tile to flag it.",
+        "A mine costs HP, wipes your surge, breaks the crystals beside it and ends your turn.",
+        "Safe flips in a row build surge: +20% rite damage per step. Every rite you cast spends a step, so think about when to fire.",
+        "Drag gems into a rite's sockets to cast it. Gems no rite can use wait in your stacks.",
+        "Swap boards with the tabs under yours; it is free. Some rites reach into the enemy's board.",
+        "Words that float can be hovered for what they mean.",
+    ] {
+        y = wrapped(line, panel.x + 40.0, y, panel.w - 80.0, 17.0, INK) + 12.0;
+    }
+    let ok = panel_button(Rect::new(540.0, panel.bottom() - 64.0, 200.0, 40.0), "Got it", true, press);
+    if ok {
+        RULES.with(|r| r.set(false));
+    }
+    ok
 }
 
 /// The gear in the corner and, when open, the volume panel. Drawn last, over every screen.

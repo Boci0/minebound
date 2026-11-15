@@ -42,9 +42,13 @@ pub struct Atlas {
     texture: miniquad::TextureId,
     image: Image,
     pub sprites: HashMap<SpriteKey, Sprite>,
-    cursor_x: u16,
-    cursor_y: u16,
-    max_line_height: u16,
+    /// minebound patch: glyphs sit on shelves (top, height, next free x), each holding glyphs of
+    /// about one size. One row for every size, as before, left most of a row above small text empty.
+    shelves: Vec<(u16, u16, u16)>,
+    /// where the next shelf starts
+    bottom: u16,
+    /// the rows changed since the last upload, sent up alone instead of the whole atlas
+    changed: Option<(u16, u16)>,
 
     pub dirty: bool,
 
@@ -78,10 +82,10 @@ impl Atlas {
         Atlas {
             image,
             texture,
-            cursor_x: 0,
-            cursor_y: 0,
+            shelves: vec![],
+            bottom: 0,
+            changed: None,
             dirty: false,
-            max_line_height: 0,
             sprites: HashMap::new(),
             filter,
             unique_id: Self::UNIQUENESS_OFFSET,
@@ -119,8 +123,7 @@ impl Atlas {
         self.texture
     }
 
-    /// Sends the atlas to the GPU if it changed. A grown atlas is resized in place, so draw calls
-    /// already made with its texture stay valid.
+    /// Sends the atlas to the GPU if it changed: the changed rows only, or all of it once it grew.
     pub fn flush(&mut self) {
         if !self.dirty {
             return;
@@ -128,11 +131,14 @@ impl Atlas {
         self.dirty = false;
         let ctx = get_quad_context();
         let (texture_width, texture_height) = ctx.texture_size(self.texture);
+        let row = self.image.width as usize * 4;
         if texture_width != self.image.width as _ || texture_height != self.image.height as _ {
             ctx.texture_resize(self.texture, self.image.width as _, self.image.height as _, Some(&self.image.bytes[..]));
-        } else {
-            ctx.texture_update(self.texture, &self.image.bytes);
+        } else if let Some((top, end)) = self.changed {
+            let rows = &self.image.bytes[top as usize * row..end as usize * row];
+            ctx.texture_update_part(self.texture, 0, top as _, self.image.width as _, (end - top) as _, rows);
         }
+        self.changed = None;
     }
 
     pub fn get_uv_rect(&self, key: SpriteKey) -> Option<Rect> {
@@ -149,71 +155,67 @@ impl Atlas {
         })
     }
 
-    pub fn cache_sprite(&mut self, key: SpriteKey, sprite: Image) {
-        let (width, height) = (sprite.width as usize, sprite.height as usize);
-
-        let x = if self.cursor_x + (width as u16) < self.image.width {
-            if height as u16 > self.max_line_height {
-                self.max_line_height = height as u16;
+    /// Where a `w` x `h` slot goes: the snuggest shelf with room, or a new shelf at the bottom.
+    fn place(&mut self, w: u16, h: u16) -> Option<(u16, u16)> {
+        let width = self.image.width;
+        // a shelf takes glyphs a little shorter than itself, not much: that space would be lost
+        let fit = (0..self.shelves.len())
+            .filter(|&i| {
+                let (_, sh, sx) = self.shelves[i];
+                sh >= h && sh <= h + h / 4 + 2 && sx as u32 + w as u32 <= width as u32
+            })
+            .min_by_key(|&i| self.shelves[i].1);
+        let i = match fit {
+            Some(i) => i,
+            None if self.bottom as u32 + h as u32 <= self.image.height as u32 && w <= width => {
+                self.shelves.push((self.bottom, h, 0));
+                self.bottom += h;
+                self.shelves.len() - 1
             }
-            let res = self.cursor_x + Self::GAP;
-            self.cursor_x += width as u16 + Self::GAP * 2;
-            res
-        } else {
-            self.cursor_y += self.max_line_height + Self::GAP * 2;
-            self.cursor_x = width as u16 + Self::GAP;
-            self.max_line_height = height as u16;
-            Self::GAP
+            None => return None,
         };
-        let y = self.cursor_y;
+        let (y, _, x) = self.shelves[i];
+        self.shelves[i].2 += w;
+        Some((x, y))
+    }
 
-        // texture bounds exceeded
-        if y + sprite.height > self.image.height || x + sprite.width > self.image.width {
-            // reset glyph cache state
-            let sprites = self.sprites.drain().collect::<Vec<_>>();
-            self.cursor_x = 0;
-            self.cursor_y = 0;
-            self.max_line_height = 0;
-
-            let old_image = self.image.clone();
-
-            // increase font texture size
-            // note: if we tried to fit gigantic texture into a small atlas,
-            // new_width will still be not enough. But its fine, it will
-            // be regenerated on the recursion call.
-            let new_width = self.image.width * 2;
-            let new_height = self.image.height * 2;
-
-            self.image =
-                Image::gen_image_color(new_width, new_height, Color::new(0.0, 0.0, 0.0, 0.0));
-
-            // recache all previously cached symbols
-            for (key, sprite) in sprites {
-                let image = old_image.sub_image(sprite.rect);
-                self.cache_sprite(key, image);
-            }
-
-            // cache the new sprite
-            self.cache_sprite(key, sprite);
-        } else {
-            self.dirty = true;
-
-            for j in 0..height {
-                for i in 0..width {
-                    self.image.set_pixel(
-                        x as u32 + i as u32,
-                        y as u32 + j as u32,
-                        sprite.get_pixel(i as u32, j as u32),
-                    );
-                }
-            }
-
-            self.sprites.insert(
-                key,
-                Sprite {
-                    rect: Rect::new(x as f32, y as f32, width as f32, height as f32),
-                },
-            );
+    /// Doubles the atlas's shorter side (or its width, for a glyph wider than it). Everything
+    /// already placed keeps its spot, so nothing is packed again.
+    fn grow(&mut self, glyph_width: u16) {
+        let (w, h) = (self.image.width, self.image.height);
+        let (nw, nh) = if glyph_width > w || w < h { (w * 2, h) } else { (w, h * 2) };
+        let mut bytes = vec![0u8; nw as usize * nh as usize * 4];
+        for (y, old) in self.image.bytes.chunks_exact(w as usize * 4).enumerate() {
+            let at = y * nw as usize * 4;
+            bytes[at..at + old.len()].copy_from_slice(old);
         }
+        self.image = Image { width: nw, height: nh, bytes };
+        self.dirty = true;
+    }
+
+    pub fn cache_sprite(&mut self, key: SpriteKey, sprite: Image) {
+        let (width, height) = (sprite.width, sprite.height);
+        let (x, y) = loop {
+            if let Some(at) = self.place(width + Self::GAP, height + Self::GAP) {
+                break at;
+            }
+            self.grow(width + Self::GAP);
+        };
+
+        self.dirty = true;
+        let (row, line) = (self.image.width as usize * 4, width as usize * 4);
+        for j in 0..height as usize {
+            let at = (y as usize + j) * row + x as usize * 4;
+            self.image.bytes[at..at + line].copy_from_slice(&sprite.bytes[j * line..(j + 1) * line]);
+        }
+        let end = y + height;
+        self.changed = Some(self.changed.map_or((y, end), |(top, bottom)| (top.min(y), bottom.max(end))));
+
+        self.sprites.insert(
+            key,
+            Sprite {
+                rect: Rect::new(x as f32, y as f32, width as f32, height as f32),
+            },
+        );
     }
 }

@@ -1,5 +1,5 @@
 ; Windows installer, built by .github/workflows/release.yml:
-;   iscc /DVersion=0.2.0 installer\minebound.iss
+;   iscc /DVersion=1.0.0 installer\minebound.iss
 ; Installs for the current user only (no admin prompt), with a Start menu entry, an optional
 ; desktop shortcut and an uninstaller. Running a newer setup upgrades the installed game in place.
 

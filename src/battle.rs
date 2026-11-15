@@ -7,7 +7,9 @@ use crate::{
 pub const MINE_DMG: i32 = 2;
 pub const BASE_MINES: i32 = 5;
 pub const REVEALS: i32 = 6;
-pub const PRESSURE_TURN: usize = 7;
+/// The fewest reveals a player turn can have, however many penalties stack.
+pub const MIN_REVEALS: i32 = 5;
+pub const PRESSURE_TURN: usize = 12;
 /// Safe reveals in a row that count toward surge; each adds `SURGE_PCT` to skill damage.
 pub const MAX_SURGE: i32 = 5;
 pub const SURGE_PCT: i32 = 20;
@@ -16,7 +18,7 @@ pub const SURGE_PCT: i32 = 20;
 pub const HOOKS: &[&str] = &[
     "reveals", "power", "mine_guard", "start_shield", "combo_pct", "duds", "start_stacks", "burn_bonus", "scouts",
     "thorns", "foe_mines", "fewer_mines", "lifesteal_pct", "opening", "shield_turn", "surge_start", "surge_pct",
-    "keep_surge", "strike_bonus", "strike_burn", "first_pct", "claim_zap", "claim_heal", "claim_shield", "claim_bonus",
+    "keep_surge", "rite_bonus", "rite_burn", "first_pct", "claim_zap", "claim_heal", "claim_shield", "claim_bonus",
     "salvage", "mine_spite", "armor", "evade", "reveal_shield", "hoard_shield", "chain", "mine_no_end", "sense", "echo",
     "desperate",
 ];
@@ -55,6 +57,8 @@ pub struct Fighter {
     pub mods: Mods,
     /// skills upgraded by boss kills, by index in `COMBOS`; a repeat is another level
     pub ups: Vec<usize>,
+    /// brands burnt onto rites: (index in `COMBOS`, index in `BRANDS`), one per rite
+    pub brands: Vec<(usize, usize)>,
 }
 
 impl Fighter {
@@ -71,6 +75,44 @@ impl Fighter {
     pub fn level(&self, c: &Combo) -> usize {
         let id = combo_id(c);
         1 + self.ups.iter().filter(|&&u| u == id).count()
+    }
+
+    pub fn brand(&self, c: &Combo) -> Option<&'static Brand> {
+        let id = combo_id(c);
+        self.brands.iter().find(|b| b.0 == id).map(|b| &BRANDS[b.1])
+    }
+
+    /// What `c` does for this fighter, each effect with the level it works at: the rite's own grow
+    /// with it, a brand's stay at 1.
+    pub fn effects<'a>(&'a self, c: &'a Combo) -> impl Iterator<Item = (Effect, usize)> + 'a {
+        let lvl = self.level(c);
+        c.effects.iter().map(move |&e| (e, lvl)).chain(self.brand(c).map(|b| (b.effect, 1)))
+    }
+
+    pub fn describe(&self, c: &Combo) -> String {
+        rite_text(c, self.level(c), self.brand(c))
+    }
+
+    /// The gems `c` would take out of `stacks`: its cost, plus the toll paid in whatever element is most
+    /// plentiful after that. None if the stacks fall short.
+    pub fn payment(&self, c: &Combo, stacks: &[Element]) -> Option<Vec<Element>> {
+        let mut paid = self.cost(c);
+        if !pays(stacks, &paid) {
+            return None;
+        }
+        let mut rest = stacks.to_vec();
+        spend(&mut rest, &paid);
+        for _ in 0..self.mods.toll.max(0) {
+            let e = *rest.iter().max_by_key(|&&e| rest.iter().filter(|&&x| x == e).count())?;
+            spend(&mut rest, &[e]);
+            paid.push(e);
+        }
+        Some(paid)
+    }
+
+    /// True if `paid` covers `c`'s cost and toll exactly, whichever gems pay the toll.
+    pub fn fits(&self, c: &Combo, paid: &[Element]) -> bool {
+        paid.len() == self.cost(c).len() + self.mods.toll.max(0) as usize && pays(paid, &self.cost(c))
     }
 
     /// The gems `c` takes from this fighter, at its level.
@@ -96,8 +138,8 @@ pub enum Event {
     Flip,
     Claim,
     Mine,
-    /// `skill`: (index in `COMBOS`, level), or None for a Strike
-    Cast { from: usize, name: &'static str, element: Element, miss: bool, skill: Option<(usize, usize)> },
+    /// `skill`: (index in `COMBOS`, level)
+    Cast { from: usize, name: &'static str, element: Element, miss: bool, skill: (usize, usize) },
     /// a passive of `side` just took effect; `hook` names the `Mods` field
     Proc { side: usize, hook: &'static str },
 }
@@ -161,8 +203,9 @@ impl Battle {
 
     /// Combos `s` can pay for right now, at their level.
     pub fn ready(&self, s: usize) -> Vec<&'static Combo> {
-        COMBOS.iter().filter(|c| pays(&self.f[s].stacks, &self.f[s].cost(c))).collect()
+        COMBOS.iter().filter(|c| self.f[s].payment(c, &self.f[s].stacks).is_some()).collect()
     }
+
 
     /// Overpressure: long fights escalate, so no shield or regen build can stall forever.
     pub fn pressure(&self) -> i32 {
@@ -182,12 +225,14 @@ impl Battle {
         SURGE_PCT + self.f[s].mods.surge_pct
     }
 
-    /// Damage of the next skill by `s` that spends `spent` stacks (before the target's shield).
-    pub fn hit_damage(&self, s: usize, spent: usize, combo: Option<&Combo>) -> i32 {
-        if self.f[1 - s].evades_left > 0 {
-            return 0; // it will miss
+    /// Damage of `s` casting rite `c` next (before the target's shield).
+    pub fn hit_damage(&self, s: usize, c: &Combo) -> i32 {
+        let full = self.dmg(s, c, self.f[s].cast_n, self.f[s].surge);
+        match (self.f[1 - s].evades_left > 0, self.f[1 - s].mods.graze > 0) {
+            (true, true) => full / 2, // it will graze
+            (true, false) => 0,       // it will miss
+            _ => full,
         }
-        self.dmg(s, spent, combo, self.f[s].cast_n)
     }
 
     /// Below half HP, Berserker's Axe adds power.
@@ -196,28 +241,22 @@ impl Battle {
         f.mods.desperate > 0 && f.hp * 2 <= f.max_hp
     }
 
-    /// `nth`: how many skills `s` already cast this turn.
-    fn dmg(&self, s: usize, spent: usize, combo: Option<&Combo>, nth: i32) -> i32 {
+    /// `nth`: how many rites `s` already cast this turn; `surge`: what it holds as this one fires.
+    fn dmg(&self, s: usize, c: &Combo, nth: i32, surge: i32) -> i32 {
         let f = &self.f[s];
+        let foe = &self.f[1 - s];
         let power = f.power + if self.desperate(s) { f.mods.desperate } else { 0 };
-        let mut d = spent as i32 * power + nth * f.mods.chain;
-        match combo {
-            Some(c) => {
-                let lvl = f.level(c);
-                let foe = &self.f[1 - s];
-                for e in c.effects {
-                    let add = match *e {
-                        Effect::Damage(v) => at_level(v, lvl),
-                        Effect::PerSurge(v) => at_level(v, lvl) * f.surge,
-                        Effect::Detonate => foe.burn.max(0) * foe.burn_dmg,
-                        _ => 0,
-                    };
-                    d += add * (100 + f.mods.combo_pct) / 100;
-                }
-            }
-            None => d += f.mods.strike_bonus,
+        let mut d = f.cost(c).len() as i32 * power + nth * f.mods.chain + f.mods.rite_bonus;
+        for (e, lvl) in f.effects(c) {
+            let add = match e {
+                Effect::Damage(v) => at_level(v, lvl),
+                Effect::PerSurge(v) => at_level(v, lvl) * surge,
+                Effect::Detonate => foe.burn.max(0) * foe.burn_dmg,
+                _ => 0,
+            };
+            d += add * (100 + f.mods.combo_pct) / 100;
         }
-        d = (d * (100 + self.surge_step(s) * f.surge) + 50) / 100;
+        d = (d * (100 + self.surge_step(s) * surge) + 50) / 100;
         if nth == 0 {
             d = (d * (100 + f.mods.first_pct) + 50) / 100;
         }
@@ -230,27 +269,30 @@ impl Battle {
 
     /// The biggest combo of `s` the given stacks can pay for.
     pub fn best_combo(&self, s: usize, stacks: &[Element]) -> Option<&'static Combo> {
-        COMBOS.iter().filter(|c| pays(stacks, &self.f[s].cost(c))).max_by_key(|c| self.f[s].cost(c).len())
+        COMBOS.iter().filter(|c| self.f[s].payment(c, stacks).is_some()).max_by_key(|c| self.f[s].cost(c).len())
     }
 
-    /// Total damage if `s` emptied its stacks now, biggest combos first.
+    /// Total damage if `s` cast every rite its stacks pay for now, biggest first.
+    /// Each cast spends a surge step, and the first `evades` casts miss (or graze, for half).
     pub fn attack_damage(&self, s: usize) -> i32 {
         let mut stacks = self.f[s].stacks.clone();
-        let (mut total, mut nth, mut evades) = (0, self.f[s].cast_n, self.f[1 - s].evades_left);
-        // the first `evades` hits miss: no damage, but they still count toward the turn's rites
-        let mut hit = |d: i32, total: &mut i32| if evades > 0 { evades -= 1 } else { *total += d };
+        let (mut total, mut nth, mut surge, mut evades) = (0, self.f[s].cast_n, self.f[s].surge, self.f[1 - s].evades_left);
         while let Some(c) = self.best_combo(s, &stacks) {
-            let cost = self.f[s].cost(c);
-            spend(&mut stacks, &cost);
+            let paid = self.f[s].payment(c, &stacks).expect("best_combo checked it");
+            spend(&mut stacks, &paid);
             let echo = if c.needs.len() == 3 && self.f[s].mods.echo > 0 { 2 } else { 1 };
             for _ in 0..echo {
-                hit(self.dmg(s, cost.len(), Some(c), nth), &mut total);
-                nth += 1;
+                let full = self.dmg(s, c, nth, surge);
+                if evades > 0 {
+                    evades -= 1;
+                    if self.f[1 - s].mods.graze > 0 {
+                        total += full / 2;
+                    }
+                } else {
+                    total += full;
+                }
+                (nth, surge) = (nth + 1, (surge - 1).max(0));
             }
-        }
-        for _ in 0..stacks.len() {
-            hit(self.dmg(s, 1, None, nth), &mut total);
-            nth += 1;
         }
         total
     }
@@ -336,8 +378,13 @@ impl Battle {
         let burning = self.f[a].burn > 0 && self.f[1 - a].mods.burn_bonus > 0;
         self.procs(1 - a, &[("burn_bonus", burning)]);
         let f = &mut self.f[a];
-        f.reveals_left = (REVEALS + f.mods.reveals).max(1);
+        // penalties stack, but the player always keeps enough reveals to play a board
+        f.reveals_left = (REVEALS + f.mods.reveals).max(if a == 0 { MIN_REVEALS } else { 1 });
         f.sense_left = f.mods.sense;
+        if turn > 1 {
+            // shield wears off: half of it is gone by the start of its owner's next turn
+            f.shield /= 2;
+        }
         f.surge = (if f.mods.keep_surge > 0 { f.surge } else { 0 }).max(f.mods.surge_start).min(jam);
         f.cast_n = 0;
         f.firing = false;
@@ -378,7 +425,7 @@ impl Battle {
 
     /// Nothing left to flip and nothing left to fire: the turn passes on its own.
     fn tidy(&mut self, a: usize) {
-        if !self.over() && self.active == a && self.f[a].reveals_left <= 0 && self.f[a].stacks.is_empty() {
+        if !self.over() && self.active == a && self.f[a].reveals_left <= 0 && self.ready(a).is_empty() {
             self.end_turn();
         }
     }
@@ -501,62 +548,56 @@ impl Battle {
         }
     }
 
-    /// Strike: fire stack number `k` on its own for plain damage.
-    pub fn strike(&mut self, k: usize) -> bool {
-        let a = self.active;
-        if self.over() || k >= self.f[a].stacks.len() {
-            return false;
-        }
-        let e = self.f[a].stacks.remove(k);
-        self.land(a, 1, None, e);
-        true
-    }
-
-    /// Cast a combo skill, paying one stack of each element it needs.
+    /// Cast a combo skill, paying one stack of each element it needs (and any toll from the most plentiful).
     pub fn cast(&mut self, c: &'static Combo) -> bool {
         let a = self.active;
-        let cost = self.f[a].cost(c);
-        if self.over() || !pays(&self.f[a].stacks, &cost) {
+        match self.f[a].payment(c, &self.f[a].stacks) {
+            Some(paid) => self.cast_with(c, &paid),
+            None => false,
+        }
+    }
+
+    /// Cast `c` paying exactly the gems in `paid`, as the player chose them in its sockets.
+    pub fn cast_with(&mut self, c: &'static Combo, paid: &[Element]) -> bool {
+        let a = self.active;
+        if self.over() || !self.f[a].fits(c, paid) || !pays(&self.f[a].stacks, paid) {
             return false;
         }
-        spend(&mut self.f[a].stacks, &cost);
+        spend(&mut self.f[a].stacks, paid);
         let (wave, burn) = (self.wave, self.f[1 - a].burn);
-        self.land(a, cost.len(), Some(c), c.needs[0]);
+        self.land(a, c);
         if c.needs.len() == 3 && self.f[a].mods.echo > 0 && self.wave == wave && !self.over() {
             // Echo Chamber: the same combo again, free. An echoed Detonate sets off the same burn again.
-            if c.effects.iter().any(|e| matches!(e, Effect::Detonate)) {
+            if self.f[a].effects(c).any(|(e, _)| e == Effect::Detonate) {
                 self.f[1 - a].burn = burn;
             }
             self.proc(a, "echo");
-            self.land(a, cost.len(), Some(c), c.needs[0]);
+            self.land(a, c);
         }
         true
     }
 
-    /// Fire the single best thing the active side can afford. False when out of stacks.
+    /// Cast the biggest rite the active side can afford. False when its stacks pay for none.
     pub fn cast_best(&mut self) -> bool {
         let a = self.active;
-        match self.best_combo(a, &self.f[a].stacks) {
-            Some(c) => self.cast(c),
-            None => self.strike(self.f[a].stacks.len().wrapping_sub(1)),
-        }
+        self.best_combo(a, &self.f[a].stacks).is_some_and(|c| self.cast(c))
     }
 
-    /// Empty every stack at the current enemy, biggest combos first.
-    pub fn unleash(&mut self) {
-        let (a, wave) = (self.active, self.wave);
-        while self.active == a && self.wave == wave && self.cast_best() {}
-    }
-
-    fn land(&mut self, a: usize, spent: usize, combo: Option<&'static Combo>, element: Element) {
+    fn land(&mut self, a: usize, c: &'static Combo) {
         let t = 1 - a;
-        let dmg = self.hit_damage(a, spent, combo);
-        let lvl = combo.map_or(1, |c| self.f[a].level(c));
-        let name = combo.map_or("Strike", |c| c.title(lvl));
-        let skill = combo.map(|c| (combo_id(c), lvl));
-        let nth = self.f[a].cast_n;
+        let dmg = self.hit_damage(a, c);
+        let (lvl, element) = (self.f[a].level(c), c.needs[0]);
+        let (name, skill) = (c.title(lvl), (combo_id(c), lvl));
+        let (nth, surged) = (self.f[a].cast_n, self.f[a].surge > 0);
+        // every rite cast spends a surge step, so firing early costs the later ones damage
         self.f[a].cast_n += 1;
-        if self.f[t].evades_left > 0 {
+        self.f[a].surge = (self.f[a].surge - 1).max(0);
+        if self.f[t].evades_left > 0 && self.f[t].mods.graze > 0 {
+            // a graze: half damage (already in `dmg`), every effect still lands
+            self.f[t].evades_left -= 1;
+            self.proc(t, "evade");
+            self.log.push(format!("{}: {name} only grazes", self.f[a].name));
+        } else if self.f[t].evades_left > 0 {
             // the whole skill whiffs: no damage, no effects, stacks still spent
             self.f[t].evades_left -= 1;
             self.proc(t, "evade");
@@ -565,18 +606,17 @@ impl Battle {
             self.tidy(a);
             return;
         }
-        if combo.is_none() && self.f[a].mods.strike_burn > 0 {
-            self.f[t].burn = self.f[t].burn.max(self.f[a].mods.strike_burn);
-            self.f[t].burn_dmg = 2 + self.f[a].mods.burn_bonus;
-        }
         let m = self.f[a].mods.clone();
-        let strike = combo.is_none();
-        let (surged, desperate) = (self.f[a].surge > 0, self.desperate(a));
+        if m.rite_burn > 0 {
+            self.f[t].burn = self.f[t].burn.max(m.rite_burn);
+            self.f[t].burn_dmg = 2 + m.burn_bonus;
+        }
+        let desperate = self.desperate(a);
         self.procs(a, &[
             ("power", m.power > 0),
-            ("strike_bonus", strike && m.strike_bonus > 0),
-            ("strike_burn", strike && m.strike_burn > 0),
-            ("combo_pct", !strike && m.combo_pct > 0),
+            ("rite_bonus", m.rite_bonus > 0),
+            ("rite_burn", m.rite_burn > 0),
+            ("combo_pct", m.combo_pct > 0),
             ("first_pct", nth == 0 && m.first_pct > 0),
             ("chain", nth > 0 && m.chain > 0),
             ("surge_pct", surged && m.surge_pct > 0),
@@ -585,9 +625,10 @@ impl Battle {
         let armored = self.f[t].mods.armor > 0;
         self.procs(t, &[("armor", armored)]);
         let pct = 100 + self.f[a].mods.combo_pct;
-        let up = |v: i32| at_level(v, lvl);
-        for e in combo.map_or(&[][..], |c| c.effects) {
-            match *e {
+        let effects: Vec<(Effect, usize)> = self.f[a].effects(c).collect();
+        for (e, lvl) in effects {
+            let up = |v: i32| at_level(v, lvl);
+            match e {
                 Effect::Damage(_) => {} // already in hit_damage
                 Effect::Burn(n) => {
                     self.f[t].burn = self.f[t].burn.max(up(n));
@@ -600,14 +641,15 @@ impl Battle {
                     let keep = self.f[t].stacks.len().saturating_sub(up(n as i32) as usize);
                     self.f[t].stacks.truncate(keep);
                 }
-                Effect::Scout(n) => {
-                    let cur = self.f[a].cur;
-                    self.f[a].boards[cur].flag_mines(up(n as i32) as usize);
-                }
                 Effect::Pierce => self.f[t].shield = 0,
                 Effect::PerSurge(_) => {} // in hit_damage too
                 Effect::Detonate => self.f[t].burn = 0, // its damage is in hit_damage
                 Effect::Reveal(n) => self.f[a].reveals_left += up(n),
+                Effect::Shatter(n) => self.shatter(t, up(n as i32) as usize),
+                Effect::Bury(n) => {
+                    let cur = self.f[t].cur;
+                    self.f[t].boards[cur].bury(up(n as i32) as usize, &mut self.rng);
+                }
             }
         }
         let dealt = self.hurt(t, dmg);
@@ -626,6 +668,19 @@ impl Battle {
         }
     }
 
+    /// Breaks up to `n` of `s`'s claimable crystals on the board it has up; a board left with none is dealt anew.
+    fn shatter(&mut self, s: usize, n: usize) {
+        let cur = self.f[s].cur;
+        let board = &mut self.f[s].boards[cur];
+        let live: Vec<usize> = (0..N).filter(|&i| board.live(i)).take(n).collect();
+        for &i in &live {
+            board.tiles[i].broken = true;
+        }
+        if !live.is_empty() && board.spent() {
+            self.deal_board(s, cur);
+        }
+    }
+
     /// One move for whoever is active. Drives the enemy, and the player in simulations.
     pub fn ai_step(&mut self) {
         if self.over() {
@@ -641,7 +696,9 @@ impl Battle {
         }
         let f = &self.f[a];
         let n = f.stacks.len();
-        let lethal = n > 0 && self.attack_damage(a) >= self.f[1 - a].hp + self.f[1 - a].shield;
+        // stacks that pay for some rite: gems no rite can use yet are not ammunition
+        let armed = !self.ready(a).is_empty();
+        let lethal = armed && self.attack_damage(a) >= self.f[1 - a].hp + self.f[1 - a].shield;
         let can_reveal = f.reveals_left > 0;
         if can_reveal && !lethal {
             // weigh every open tile on every board: progress toward claiming a crystal against
@@ -664,7 +721,7 @@ impl Battle {
                 }
             }
             if let Some((k, i, score, risk)) = best {
-                if n == 0 || (risk < 0.4 && score > 0.0) {
+                if !armed || (risk < 0.4 && score > 0.0) {
                     self.swap(k);
                     self.reveal(i);
                     return;
@@ -672,7 +729,7 @@ impl Battle {
             }
         }
         // firing when it declined a risky reveal keeps a cornered fighter from stalling
-        if n > 0 && (lethal || n >= f.aggro || can_reveal) {
+        if armed && (lethal || n >= f.aggro || can_reveal) {
             self.f[a].firing = true;
             self.cast_best();
         } else {
@@ -685,6 +742,12 @@ impl Battle {
 mod tests {
     use super::*;
     use Element::*;
+
+    /// Cast every rite the stacks pay for at the current enemy, biggest first.
+    fn unleash(b: &mut Battle) {
+        let (a, wave) = (b.active, b.wave);
+        while b.active == a && b.wave == wave && b.cast_best() {}
+    }
 
     fn duel() -> Battle {
         let me = Fighter::new("Me", 0, "", 50, 50, 3, &[Ember, Gale, Stone], Mods::default(), 3);
@@ -703,10 +766,9 @@ mod tests {
         b.f[0].reveals_left = 9;
         let open = (0..N).find(|&i| b.f[0].board().open(i)).unwrap();
         assert!(b.reveal(open), "holding many stacks never blocks a flip");
-        b.f[0].stacks = vec![Ember];
         b.f[0].surge = 1;
-        // 3 power x1.2 = 3.6
-        assert_eq!(b.hit_damage(0, 1, None), 4);
+        // Wildfire: 2 stacks x 3 power x1.2 = 7.2
+        assert_eq!(b.hit_damage(0, combo("Wildfire")), 7);
     }
 
     /// Flips every safe tile around the first live crystal of the player's current board.
@@ -768,10 +830,9 @@ mod tests {
         assert_eq!((b.f[1].hp, b.f[1].burn), (94, 3));
         assert_eq!(b.f[0].stacks, vec![Stone]);
         assert_eq!(b.active, 0, "casting does not end the turn");
-        assert!(b.strike(0));
-        assert_eq!(b.f[1].hp, 91);
-        assert!(b.f[0].stacks.is_empty());
-        assert_eq!(b.events.iter().filter(|e| matches!(e, Event::Cast { .. })).count(), 2);
+        assert!(!b.cast_best(), "a lone gem pays for no rite");
+        assert_eq!((b.f[1].hp, b.f[0].stacks.clone()), (94, vec![Stone]), "and it waits in the stacks");
+        assert_eq!(b.events.iter().filter(|e| matches!(e, Event::Cast { .. })).count(), 1);
     }
 
     #[test]
@@ -791,7 +852,7 @@ mod tests {
         assert_eq!((b.f[1].hp, b.f[0].stacks.len()), (85, 0));
         assert_eq!(b.f[0].reveals_left, reveals + 2, "steam clears the view: +2 reveals at Lv 2");
         assert!(b.events.iter().any(|e| matches!(e, Event::Cast { name: "Scald Geyser", .. })));
-        assert_eq!(steam.describe(3), "+8 damage, +3 reveals");
+        assert_eq!(rite_text(steam, 3, None), "+8 damage, +3 reveals");
     }
 
     #[test]
@@ -803,9 +864,19 @@ mod tests {
         b.f[0].surge = MAX_SURGE;
         assert_eq!(b.attack_damage(0), 32);
 
-        b.unleash();
+        unleash(&mut b);
         assert_eq!(b.f[1].hp, 100 - 32);
         assert!(b.f[0].stacks.is_empty());
+        assert_eq!(b.f[0].surge, MAX_SURGE - 1, "a cast spends a surge step");
+
+        // so a second rite fires at one step less, and the preview knows it
+        let mut b = duel();
+        b.f[0].stacks = vec![Ember, Gale, Ember, Gale];
+        b.f[0].surge = MAX_SURGE;
+        let promised = b.attack_damage(0);
+        assert_eq!(promised, 12 + 11, "Wildfire at x2.0, then at x1.8");
+        unleash(&mut b);
+        assert_eq!((b.f[1].hp, b.f[0].surge), (100 - promised, MAX_SURGE - 2));
 
         // Eruption detonates the burn on the foe: 3 turns x 2 more, and the burn is gone
         let mut b = duel();
@@ -815,7 +886,7 @@ mod tests {
         assert!(b.cast(combo("Eruption")));
         assert_eq!((b.f[1].hp, b.f[1].burn), (100 - 22, 0));
 
-        // Plasma: +2 damage per surge step held
+        // Plasma: +1 damage per surge step held
         let mut b = duel();
         b.f[0].elements = vec![Ember, Spark];
         b.f[0].stacks = vec![Ember, Spark];
@@ -828,15 +899,25 @@ mod tests {
     fn enemy_rules_change_what_a_hit_does() {
         let mut b = duel();
         b.f[1].mods.armor = 2;
-        b.f[0].stacks = vec![Ember, Ember];
-        assert_eq!(b.hit_damage(0, 1, None), 1, "3 power minus 2 armor");
+        b.f[0].stacks = vec![Ember, Gale, Ember, Gale];
+        let wildfire = combo("Wildfire");
+        assert_eq!(b.hit_damage(0, wildfire), 4, "6 minus 2 armor");
         b.f[1].mods.armor = 0;
         b.f[1].evades_left = 1;
-        assert_eq!((b.hit_damage(0, 1, None), b.attack_damage(0)), (0, 3), "previews know the first hit misses");
-        b.strike(0);
+        assert_eq!((b.hit_damage(0, wildfire), b.attack_damage(0)), (0, 6), "previews know the first hit misses");
+        b.cast(wildfire);
         assert_eq!(b.f[1].hp, 100, "the first skill misses");
-        b.strike(0);
-        assert_eq!(b.f[1].hp, 97);
+        b.cast(wildfire);
+        assert_eq!(b.f[1].hp, 94);
+        // a grazer takes half from the first rite, and its effects (burn) still land
+        b.f[1].mods.graze = 1;
+        b.f[1].evades_left = 1;
+        b.f[1].burn = 0;
+        b.f[0].stacks = vec![Ember, Gale, Ember, Gale];
+        assert_eq!((b.hit_damage(0, wildfire), b.attack_damage(0)), (3, 9), "previews know the first hit grazes");
+        b.cast(wildfire);
+        assert_eq!(b.f[1].hp, 91, "the first skill grazes for half");
+        assert!(b.f[1].burn > 0, "and its burn lands");
 
         let mut b = duel();
         b.f[1].mods.foe_surge_cap = 2;
@@ -848,13 +929,20 @@ mod tests {
     #[test]
     fn charms_reward_different_plays() {
         let mut b = duel();
-        b.f[0].mods.strike_bonus = 3;
+        b.f[0].mods.rite_bonus = 3;
         b.f[0].mods.first_pct = 100;
-        b.f[0].stacks = vec![Ember, Ember];
-        // first Strike: (3 + 3) doubled, second: 3 + 3
-        assert_eq!(b.attack_damage(0), 18);
-        b.unleash();
-        assert_eq!(b.f[1].hp, 82);
+        b.f[0].stacks = vec![Ember, Gale, Ember, Gale];
+        // first Wildfire: (6 + 3) doubled, second: 6 + 3
+        assert_eq!(b.attack_damage(0), 27);
+        unleash(&mut b);
+        assert_eq!(b.f[1].hp, 73);
+
+        // Kindling (and Scaldwright): every rite sets the foe burning
+        let mut b = duel();
+        b.f[0].mods.rite_burn = 2;
+        b.f[0].stacks = vec![Ember, Stone];
+        b.cast(combo("Magma"));
+        assert_eq!(b.f[1].burn, 2);
 
         let mut b = duel();
         b.f[0].mods.claim_zap = 2;
@@ -873,11 +961,11 @@ mod tests {
 
     #[test]
     fn turn_shaping_charms() {
-        // Chain Lightning: each Strike after the first deals 3 more than the one before
+        // Chain Lightning: each rite after the first deals 3 more than the one before
         let mut b = duel();
         b.f[0].mods.chain = 3;
-        b.f[0].stacks = vec![Ember, Ember, Ember];
-        assert_eq!(b.attack_damage(0), 3 + 6 + 9);
+        b.f[0].stacks = vec![Ember, Gale, Ember, Gale, Ember, Gale];
+        assert_eq!(b.attack_damage(0), 6 + 9 + 12);
 
         // Echo Chamber: a three-element combo lands twice
         let mut b = duel();
@@ -949,19 +1037,90 @@ mod tests {
     }
 
     #[test]
+    fn shields_wear_off_and_reveals_have_a_floor() {
+        let mut b = duel();
+        b.f[0].shield = 10;
+        b.end_turn();
+        assert_eq!(b.f[0].shield, 10, "shield holds through the enemy's turn");
+        b.end_turn();
+        assert_eq!(b.f[0].shield, 5, "and is half gone when yours comes round");
+
+        let mut b = duel();
+        b.f[0].mods.reveals = -3;
+        b.f[1].mods.reveals = -3;
+        b.end_turn();
+        assert_eq!(b.f[1].reveals_left, REVEALS - 3, "enemies have no floor");
+        b.end_turn();
+        assert_eq!(b.f[0].reveals_left, MIN_REVEALS);
+    }
+
+    #[test]
+    fn a_brand_adds_its_effect_flat_and_free() {
+        let mut b = duel();
+        let wildfire = combo("Wildfire");
+        let ward = BRANDS.iter().position(|x| x.name == "Ward").unwrap();
+        b.f[0].elements = vec![Ember, Gale];
+        b.f[0].ups = vec![combo_id(wildfire)];
+        let cost = b.f[0].cost(wildfire);
+        b.f[0].brands = vec![(combo_id(wildfire), ward)];
+        assert_eq!(b.f[0].cost(wildfire), cost, "no extra gem");
+        assert_eq!(b.f[0].describe(wildfire), "Burn foe for 4 turns, gain 5 shield", "the brand stays at level 1");
+        b.f[0].stacks = cost;
+        assert!(b.cast(wildfire));
+        assert_eq!(b.f[0].shield, 5);
+    }
+
+    #[test]
+    fn a_toll_takes_one_more_gem_of_any_kind() {
+        let mut b = duel();
+        let wildfire = combo("Wildfire");
+        b.f[0].mods.toll = 1;
+        b.f[0].elements = vec![Ember, Gale, Stone];
+        b.f[0].stacks = vec![Ember, Gale];
+        assert!(b.ready(0).is_empty(), "two gems no longer pay for a two-gem rite");
+        b.f[0].stacks = vec![Ember, Gale, Stone, Stone, Ember];
+        assert!(!b.cast_with(wildfire, &[Ember, Gale]), "the toll socket must be filled");
+        assert!(b.cast_with(wildfire, &[Ember, Gale, Ember]), "any gem pays the toll");
+        assert_eq!(b.f[0].stacks, vec![Stone, Stone]);
+        b.f[0].stacks = vec![Ember, Gale, Stone, Stone, Ember];
+        assert!(b.cast(wildfire));
+        assert_eq!(b.f[0].stacks, vec![Stone, Ember], "left alone, it pays in the most plentiful gem");
+    }
+
+    #[test]
+    fn rites_reach_into_the_foes_board() {
+        // Thunderclap breaks a crystal on the board the foe has up
+        let mut b = duel();
+        b.f[0].elements = vec![Gale, Spark];
+        b.f[0].stacks = vec![Gale, Spark];
+        let live = |b: &Battle| (0..N).filter(|&i| b.f[1].board().live(i)).count();
+        let before = live(&b);
+        assert!(b.cast(combo("Thunderclap")));
+        assert_eq!(live(&b), before - 1);
+
+        // Sandstorm buries 2 more mines in it, away from the numbers already read
+        let mut b = duel();
+        b.f[0].stacks = vec![Gale, Stone];
+        let mines = |b: &Battle| b.f[1].board().tiles.iter().filter(|t| t.mine).count();
+        let before = mines(&b);
+        assert!(b.cast(combo("Sandstorm")));
+        assert_eq!((mines(&b), b.f[1].board().mines), (before + 2, before + 2));
+    }
+
+    #[test]
     fn next_wave_arrives_when_the_enemy_dies() {
-        let me = Fighter::new("Me", 0, "", 50, 50, 50, &[Ember], Mods::default(), 1);
+        let me = Fighter::new("Me", 0, "", 50, 50, 50, &[Ember, Gale], Mods::default(), 1);
         let foes = vec![
             Fighter::new("A", 0, "", 5, 5, 1, &[Tide], Mods::default(), 1),
             Fighter::new("B", 0, "", 5, 5, 1, &[Tide], Mods::default(), 1),
         ];
         let mut b = Battle::new(me, foes, Rng::new(2));
-        b.f[0].stacks = vec![Ember, Ember];
-        b.unleash();
+        b.f[0].stacks = vec![Ember, Gale, Ember, Gale];
+        unleash(&mut b);
         assert_eq!((b.wave, b.f[1].name.as_str(), b.active), (2, "B", 0));
-        assert_eq!(b.f[0].stacks.len(), 1, "unleash stops when the enemy falls");
+        assert_eq!(b.f[0].stacks.len(), 2, "unleash stops when the enemy falls");
         assert!(!b.over());
-        b.unleash();
+        unleash(&mut b);
         assert!(b.won());
     }
 }

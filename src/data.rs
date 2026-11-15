@@ -38,9 +38,11 @@ pub struct Mods {
     pub keep_surge: i32,
     /// the opponent's surge cannot pass this (0 = no limit)
     pub foe_surge_cap: i32,
+    /// every rite takes this many more gems, of any element
+    pub toll: i32,
     // skills
-    pub strike_bonus: i32,
-    pub strike_burn: i32,
+    pub rite_bonus: i32,
+    pub rite_burn: i32,
     pub first_pct: i32,
     // crystals and mines
     pub claim_zap: i32,
@@ -54,6 +56,8 @@ pub struct Mods {
     // defence and tempo
     pub armor: i32,
     pub evade: i32,
+    /// evaded rites still hit, for half damage, effects and all
+    pub graze: i32,
     pub pilfer: i32,
     pub enrage: i32,
     // charms that change how a turn plays
@@ -68,6 +72,7 @@ pub struct Mods {
 
 pub type Tweak = fn(&mut Mods);
 
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Effect {
     Damage(i32),
     Burn(i32),
@@ -75,7 +80,6 @@ pub enum Effect {
     Heal(i32),
     Weaken(i32),
     Drain(usize),
-    Scout(usize),
     Pierce,
     /// more damage for each surge step the caster holds
     PerSurge(i32),
@@ -83,6 +87,10 @@ pub enum Effect {
     Detonate,
     /// extra reveals this turn
     Reveal(i32),
+    /// breaks crystals on the foe's board
+    Shatter(usize),
+    /// plants hidden mines in the foe's board
+    Bury(usize),
 }
 use Effect::*;
 
@@ -113,35 +121,95 @@ impl Combo {
         let n = self.needs.len();
         self.needs.iter().copied().chain((0..lvl.saturating_sub(1)).map(|i| self.needs[i % n])).collect()
     }
+}
 
-    pub fn describe(&self, lvl: usize) -> String {
-        let parts: Vec<String> = self
-            .effects
-            .iter()
-            .map(|e| match *e {
-                Damage(v) => format!("+{} damage", at_level(v, lvl)),
-                Burn(n) => format!("burn foe for {} turns", at_level(n, lvl)),
-                Shield(v) => format!("gain {} shield", at_level(v, lvl)),
-                Heal(v) => format!("heal {}", at_level(v, lvl)),
-                Weaken(n) => format!("foe's attacks halved, {} turns", at_level(n, lvl)),
-                Drain(n) => {
-                    let k = at_level(n as i32, lvl);
-                    format!("foe loses {k} stack{}", if k == 1 { "" } else { "s" })
-                }
-                Scout(n) => format!("flag {} of your mines", at_level(n as i32, lvl)),
-                Pierce => "shatter foe's shield".into(),
-                PerSurge(v) => format!("+{} damage per surge", at_level(v, lvl)),
-                Detonate => "detonate foe's burn".into(),
-                Reveal(n) => {
-                    let k = at_level(n, lvl);
-                    format!("+{k} reveal{}", if k == 1 { "" } else { "s" })
-                }
-            })
-            .collect();
-        let s = parts.join(", ");
-        s[..1].to_uppercase() + &s[1..]
+/// What a rite does at `lvl`, with the brand burnt onto it, if any. A brand stays at level 1.
+pub fn rite_text(c: &Combo, lvl: usize, brand: Option<&Brand>) -> String {
+    let parts: Vec<String> = c.effects.iter().map(|&e| e.text(lvl)).chain(brand.map(|b| b.effect.text(1))).collect();
+    let s = parts.join(", ");
+    s[..1].to_uppercase() + &s[1..]
+}
+
+impl Effect {
+    pub fn text(self, lvl: usize) -> String {
+        match self {
+            Damage(v) => format!("+{} damage", at_level(v, lvl)),
+            Burn(n) => format!("burn foe for {} turns", at_level(n, lvl)),
+            Shield(v) => format!("gain {} shield", at_level(v, lvl)),
+            Heal(v) => format!("heal {}", at_level(v, lvl)),
+            Weaken(n) => format!("foe's attacks halved, {} turns", at_level(n, lvl)),
+            Drain(n) => {
+                let k = at_level(n as i32, lvl);
+                format!("foe loses {k} stack{}", if k == 1 { "" } else { "s" })
+            }
+            Pierce => "shatter foe's shield".into(),
+            PerSurge(v) => format!("+{} damage per surge", at_level(v, lvl)),
+            Detonate => "detonate foe's burn".into(),
+            Reveal(n) => {
+                let k = at_level(n, lvl);
+                format!("+{k} reveal{}", if k == 1 { "" } else { "s" })
+            }
+            Shatter(n) => {
+                let k = at_level(n as i32, lvl);
+                format!("break {k} foe crystal{}", if k == 1 { "" } else { "s" })
+            }
+            Bury(n) => {
+                let k = at_level(n as i32, lvl);
+                format!("+{k} foe mine{}", if k == 1 { "" } else { "s" })
+            }
+        }
     }
 }
+
+/// Won at a shrine fight. Only one is held at a time: taking another lets the old one go.
+/// Each lifts a single stat.
+pub struct Blessing {
+    pub name: &'static str,
+    pub desc: &'static str,
+    pub apply: Tweak,
+}
+
+const fn blessing(name: &'static str, desc: &'static str, apply: Tweak) -> Blessing {
+    Blessing { name, desc, apply }
+}
+
+pub static BLESSINGS: &[Blessing] = &[
+    blessing("Blade", "Your rites deal +6 damage.", |m| m.rite_bonus += 6),
+    blessing("Might", "+2 power: every gem a rite spends hits 2 harder.", |m| m.power += 2),
+    blessing("Bulwark", "Gain 6 shield at the start of each of your turns.", |m| m.shield_turn += 6),
+    blessing("Iron", "Every hit on you deals 3 less.", |m| m.armor += 3),
+    blessing("Mending", "Heal 4 at the start of each of your turns.", |m| m.regen += 4),
+    blessing("Cinders", "Your burns deal +3 damage each turn.", |m| m.burn_bonus += 3),
+    blessing("Leech", "Heal for 30% of the damage your rites deal.", |m| m.lifesteal_pct += 30),
+    blessing("Vigor", "+30 max HP.", |m| m.max_hp += 30),
+    blessing("Sight", "+1 reveal each turn.", |m| m.reveals += 1),
+    blessing("Surge", "Begin each turn with 2 surge.", |m| m.surge_start += 2),
+];
+
+/// Burnt onto a rite, a brand adds its effect. It costs no extra gem and does not grow with the rite.
+pub struct Brand {
+    pub name: &'static str,
+    pub effect: Effect,
+}
+
+const fn brand(name: &'static str, effect: Effect) -> Brand {
+    Brand { name, effect }
+}
+
+pub static BRANDS: &[Brand] = &[
+    brand("Edge", Damage(3)),
+    brand("Scorch", Burn(2)),
+    brand("Ward", Shield(5)),
+    brand("Mend", Heal(4)),
+    brand("Hex", Weaken(1)),
+    brand("Pilfer", Drain(1)),
+    brand("Breach", Pierce),
+    brand("Tempo", PerSurge(1)),
+    brand("Fuse", Detonate),
+    brand("Insight", Reveal(1)),
+    brand("Fracture", Shatter(1)),
+    brand("Snare", Bury(1)),
+];
 
 const fn combo(name: &'static str, up: [&'static str; 2], needs: &'static [Element], effects: &'static [Effect]) -> Combo {
     Combo { name, up, needs, effects }
@@ -151,12 +219,12 @@ pub static COMBOS: &[Combo] = &[
     combo("Steam Burst", ["Scald Geyser", "Steamquake"], &[Ember, Tide], &[Damage(4), Reveal(1)]),
     combo("Wildfire", ["Firestorm", "Inferno"], &[Ember, Gale], &[Burn(3)]),
     combo("Magma", ["Lava Lance", "Molten Core"], &[Ember, Stone], &[Pierce, Damage(3)]),
-    combo("Plasma", ["Plasma Lance", "Plasma Nova"], &[Ember, Spark], &[Damage(3), PerSurge(2)]),
+    combo("Plasma", ["Plasma Lance", "Plasma Nova"], &[Ember, Spark], &[Damage(3), PerSurge(1)]),
     combo("Mistveil", ["Mist Shroud", "Veil of Mists"], &[Tide, Gale], &[Heal(4), Damage(3)]),
     combo("Bulwark", ["Rampart", "Citadel"], &[Tide, Stone], &[Shield(7)]),
     combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Drain(2), Damage(3)]),
-    combo("Sandstorm", ["Dust Devil", "Desert Wrath"], &[Gale, Stone], &[Weaken(2)]),
-    combo("Thunderclap", ["Thunderstrike", "Skybreaker"], &[Gale, Spark], &[Scout(2), Damage(2)]),
+    combo("Sandstorm", ["Dust Devil", "Desert Wrath"], &[Gale, Stone], &[Weaken(2), Bury(2)]),
+    combo("Thunderclap", ["Thunderstrike", "Skybreaker"], &[Gale, Spark], &[Shatter(1), Damage(2)]),
     combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[Shield(4), Damage(4)]),
     combo("Eruption", ["Cataclysm", "Worldbreaker"], &[Ember, Gale, Stone], &[Damage(7), Detonate]),
     combo("Tempest", ["Hurricane", "Eye of the Storm"], &[Tide, Gale, Spark], &[Damage(6), Heal(2)]),
@@ -192,38 +260,50 @@ pub static HEROES: &[Hero] = &[
     Hero {
         name: "Ashwarden",
         sprite: HD,
-        hp: 66,
-        power: 3,
+        hp: 100,
+        power: 5,
         elements: [Ember, Gale, Stone],
-        passive: |m| m.mine_guard += 2,
-        passive_desc: "Thick soles: mines deal 2 less damage.",
+        passive: |m| {
+            m.mine_guard += 1;
+            m.armor += 3;
+        },
+        passive_desc: "Ashen hide: mines deal 1 less damage, and every hit on you 3 less.",
     },
     Hero {
         name: "Stormreader",
         sprite: HD + 1,
-        hp: 62,
-        power: 3,
+        hp: 94,
+        power: 5,
         elements: [Tide, Gale, Spark],
-        passive: |m| m.reveals += 1,
-        passive_desc: "Quick read: +1 reveal each turn.",
+        passive: |m| {
+            m.reveals += 1;
+            m.reveal_shield += 3;
+        },
+        passive_desc: "Quick read: +1 reveal each turn, and each reveal left unused at turn end becomes 3 shield.",
     },
     Hero {
         name: "Deepforger",
         sprite: HD + 2,
-        hp: 64,
-        power: 3,
+        hp: 96,
+        power: 5,
         elements: [Tide, Stone, Spark],
-        passive: |m| m.start_shield += 5,
-        passive_desc: "Plated: gain 5 shield at the start of each wave.",
+        passive: |m| {
+            m.start_shield += 10;
+            m.shield_turn += 2;
+        },
+        passive_desc: "Plated: gain 10 shield at the start of each wave and 2 more every turn.",
     },
     Hero {
         name: "Scaldwright",
         sprite: HD + 66,
-        hp: 64,
-        power: 3,
+        hp: 96,
+        power: 5,
         elements: [Ember, Tide, Spark],
-        passive: |m| m.strike_burn += 2,
-        passive_desc: "Searing touch: your Strikes burn the foe for 2 turns.",
+        passive: |m| {
+            m.rite_burn += 3;
+            m.lifesteal_pct += 15;
+        },
+        passive_desc: "Searing touch: your rites burn the foe for 3 turns and heal you for 15% of their damage.",
     },
 ];
 
@@ -267,37 +347,37 @@ const PLAIN: u32 = 0xffffff;
 
 pub static CHARMS: &[Charm] = &[
     charm("Lucky Coin", Common, (HD + 28, PLAIN), "duds", "The first mine you hit each wave is a dud.", |m| m.duds += 1),
-    charm("Dowsing Rod", Common, (HD + 29, PLAIN), "scouts", "2 mines start flagged on each of your boards.", |m| m.scouts += 2),
-    charm("Ward Stone", Common, (HD + 30, PLAIN), "start_shield", "Gain 6 shield at the start of each wave.", |m| m.start_shield += 6),
-    charm("Field Rations", Common, (HD + 31, PLAIN), "heal_after", "Heal 5 after every battle.", |m| m.heal_after += 5),
+    charm("Dowsing Rod", Common, (HD + 29, PLAIN), "scouts", "3 mines start flagged on each of your boards.", |m| m.scouts += 3),
+    charm("Ward Stone", Common, (HD + 30, PLAIN), "start_shield", "Gain 10 shield at the start of each wave.", |m| m.start_shield += 10),
+    charm("Field Rations", Common, (HD + 31, PLAIN), "heal_after", "Heal 10 after every battle.", |m| m.heal_after += 10),
     charm("Magpie Purse", Common, (HD + 32, PLAIN), "shard_pct", "+50% shards from battles.", |m| m.shard_pct += 50),
-    charm("Head Start", Common, (HD + 33, PLAIN), "start_stacks", "Begin each battle with 2 random stacks.", |m| m.start_stacks += 2),
-    charm("Bramble Coat", Common, (HD + 34, PLAIN), "thorns", "Enemy rites that hit you cost them 2 HP.", |m| m.thorns += 2),
+    charm("Head Start", Common, (HD + 33, PLAIN), "start_stacks", "Begin each battle with 3 random stacks.", |m| m.start_stacks += 3),
+    charm("Bramble Coat", Common, (HD + 34, PLAIN), "thorns", "Enemy rites that hit you cost them 4 HP.", |m| m.thorns += 4),
     charm("Saboteur Kit", Common, (HD + 35, PLAIN), "foe_mines", "+2 mines on every enemy board.", |m| m.foe_mines += 2),
     charm("Sweeper's Map", Common, (HD + 36, PLAIN), "fewer_mines", "1 fewer mine on each of your boards.", |m| m.fewer_mines += 1),
-    charm("Shell Fragment", Common, (HD + 37, PLAIN), "shield_turn", "Gain 2 shield at the start of your turn.", |m| m.shield_turn += 2),
-    charm("Whetted Shard", Common, (HD + 38, PLAIN), "strike_bonus", "Strikes deal +3 damage.", |m| m.strike_bonus += 3),
-    charm("Kindling", Common, (HD + 39, PLAIN), "strike_burn", "Strikes set the enemy burning for 2 turns.", |m| m.strike_burn += 2),
-    charm("Slow Fuse", Common, (HD + 40, PLAIN), "burn_bonus", "Your burns deal +1 damage per turn.", |m| m.burn_bonus += 1),
+    charm("Shell Fragment", Common, (HD + 37, PLAIN), "shield_turn", "Gain 4 shield at the start of your turn.", |m| m.shield_turn += 4),
+    charm("Whetted Shard", Common, (HD + 38, PLAIN), "rite_bonus", "Your rites deal +5 damage.", |m| m.rite_bonus += 5),
+    charm("Kindling", Common, (HD + 39, PLAIN), "rite_burn", "Your rites set the enemy burning for 3 turns.", |m| m.rite_burn += 3),
+    charm("Slow Fuse", Common, (HD + 40, PLAIN), "burn_bonus", "Your burns deal +2 damage per turn.", |m| m.burn_bonus += 2),
     charm("Sap Tap", Common, (HD + 41, PLAIN), "claim_heal", "Each crystal you claim heals you for 2.", |m| m.claim_heal += 2),
     charm("Crystal Skin", Common, (HD + 42, PLAIN), "claim_shield", "Each crystal you claim gives 3 shield.", |m| m.claim_shield += 3),
-    charm("Plate Scraps", Common, (HD + 43, PLAIN), "armor", "Every hit on you deals 1 less.", |m| m.armor += 1),
-    charm("Heart Root", Common, (HD + 44, PLAIN), "max_hp", "+12 max HP.", |m| m.max_hp += 12),
+    charm("Plate Scraps", Common, (HD + 43, PLAIN), "armor", "Every hit on you deals 2 less.", |m| m.armor += 2),
+    charm("Heart Root", Common, (HD + 44, PLAIN), "max_hp", "+20 max HP.", |m| m.max_hp += 20),
     // rares change how a turn is played
     charm("Quick Fingers", Rare, (HD + 45, PLAIN), "reveals", "+1 reveal each turn.", |m| m.reveals += 1),
-    charm("Resonator", Rare, (HD + 46, PLAIN), "combo_pct", "Rite damage, shield and healing are 50% stronger.", |m| m.combo_pct += 50),
-    charm("Leech Fang", Rare, (HD + 47, PLAIN), "lifesteal_pct", "Heal for 20% of the damage your rites deal.", |m| m.lifesteal_pct += 20),
-    charm("Ambush Wire", Rare, (HD + 48, PLAIN), "opening", "Deal 6 damage at the start of each wave.", |m| m.opening += 6),
-    charm("Running Start", Rare, (HD + 49, PLAIN), "surge_start", "Begin each turn with 2 surge.", |m| m.surge_start += 2),
-    charm("Overcharger", Rare, (HD + 50, PLAIN), "surge_pct", "Each surge step is worth +30% instead of +20%.", |m| m.surge_pct += 10),
+    charm("Resonator", Rare, (HD + 46, PLAIN), "combo_pct", "Rite damage, shield and healing are 75% stronger.", |m| m.combo_pct += 75),
+    charm("Leech Fang", Rare, (HD + 47, PLAIN), "lifesteal_pct", "Heal for 30% of the damage your rites deal.", |m| m.lifesteal_pct += 30),
+    charm("Ambush Wire", Rare, (HD + 48, PLAIN), "opening", "Deal 10 damage at the start of each wave.", |m| m.opening += 10),
+    charm("Running Start", Rare, (HD + 49, PLAIN), "surge_start", "Begin each turn with 3 surge.", |m| m.surge_start += 3),
+    charm("Overcharger", Rare, (HD + 50, PLAIN), "surge_pct", "Each surge step is worth +35% instead of +20%.", |m| m.surge_pct += 15),
     charm("Steady Hands", Rare, (HD + 51, PLAIN), "keep_surge", "Surge carries over between your turns. Mines still wipe it.", |m| m.keep_surge += 1),
-    charm("Opening Gambit", Rare, (HD + 52, PLAIN), "first_pct", "Your first rite each turn deals +60%.", |m| m.first_pct += 60),
-    charm("Resonant Shards", Rare, (HD + 53, PLAIN), "claim_zap", "Each crystal you claim zaps the enemy for 2.", |m| m.claim_zap += 2),
+    charm("Opening Gambit", Rare, (HD + 52, PLAIN), "first_pct", "Your first rite each turn deals +100%.", |m| m.first_pct += 100),
+    charm("Resonant Shards", Rare, (HD + 53, PLAIN), "claim_zap", "Each crystal you claim zaps the enemy for 3.", |m| m.claim_zap += 3),
     charm("Salvager", Rare, (HD + 54, PLAIN), "salvage", "Crystals you break with a mine still pay out.", |m| m.salvage += 1),
-    charm("Spite Fuse", Rare, (HD + 55, PLAIN), "mine_spite", "Mines you hit also deal 4 damage to the enemy.", |m| m.mine_spite += 4),
-    charm("Hourglass", Rare, (HD + 56, PLAIN), "reveal_shield", "Each reveal you leave unused when your turn ends becomes 2 shield.", |m| m.reveal_shield += 2),
-    charm("Hoarder's Sack", Rare, (HD + 57, PLAIN), "hoard_shield", "End your turn holding 3 or more stacks: gain 1 shield per stack.", |m| m.hoard_shield += 1),
-    charm("Chain Lightning", Rare, (HD + 58, PLAIN), "chain", "Each rite after your first in a turn deals +3 more than the one before.", |m| m.chain += 3),
+    charm("Spite Fuse", Rare, (HD + 55, PLAIN), "mine_spite", "Mines you hit also deal 6 damage to the enemy.", |m| m.mine_spite += 6),
+    charm("Hourglass", Rare, (HD + 56, PLAIN), "reveal_shield", "Each reveal you leave unused when your turn ends becomes 3 shield.", |m| m.reveal_shield += 3),
+    charm("Hoarder's Sack", Rare, (HD + 57, PLAIN), "hoard_shield", "End your turn holding 3 or more stacks: gain 2 shield per stack.", |m| m.hoard_shield += 2),
+    charm("Chain Lightning", Rare, (HD + 58, PLAIN), "chain", "Each rite after your first in a turn deals +5 more than the one before.", |m| m.chain += 5),
     charm("Powder Keg", Rare, (HD + 59, PLAIN), "mine_no_end", "Mines no longer end your turn. They still hurt and wipe surge.", |m| m.mine_no_end += 1),
     // legendaries bend a core rule
     charm("Twin Vein", Legendary, (HD + 60, PLAIN), "claim_bonus", "Crystals give 2 stacks, but your boards hold 2 more mines.", |m| {
@@ -311,7 +391,7 @@ pub static CHARMS: &[Charm] = &[
     charm("Smoke Bomb", Legendary, (HD + 62, PLAIN), "evade", "The first enemy rite each turn misses you.", |m| m.evade += 1),
     charm("Sixth Sense", Legendary, (HD + 63, PLAIN), "sense", "The first mine you flip each turn is flagged instead of going off.", |m| m.sense += 1),
     charm("Echo Chamber", Legendary, (HD + 64, PLAIN), "echo", "Your three-element rites fire twice.", |m| m.echo += 1),
-    charm("Berserker's Axe", Legendary, (HD + 65, PLAIN), "desperate", "Below half HP, +3 power.", |m| m.desperate += 3),
+    charm("Berserker's Axe", Legendary, (HD + 65, PLAIN), "desperate", "Below half HP, +4 power.", |m| m.desperate += 4),
 ];
 
 /// Sprites from here up are the 128px sigils of assets/sigils/sigils-mono.png (game-icons.net, CC BY 3.0),
@@ -339,7 +419,10 @@ const fn foe(name: &'static str, sprite: usize, desc: &'static str, hp: i32, pow
 pub static NORMALS: &[EnemyDef] = &[
     foe("Mire Hound", HD + 3, "Grows fiercer: +1 power every turn.", 16, 1, &[Tide, Stone], 2, |m| m.enrage = 1),
     foe("Cinder Imp", HD + 4, "Gains a stack whenever you hit a mine.", 12, 2, &[Ember, Spark], 2, |m| m.foe_mine_gift = 1),
-    foe("Gust Wisp", HD + 5, "Slippery: the first rite each turn misses it.", 12, 1, &[Gale, Spark], 3, |m| m.evade = 1),
+    foe("Gust Wisp", HD + 5, "Slippery: the first rite each turn only grazes it, for half damage.", 12, 1, &[Gale, Spark], 3, |m| {
+        m.evade = 1;
+        m.graze = 1
+    }),
     foe("Pebble Golem", HD + 6, "Stone hide: every hit deals 2 less.", 20, 1, &[Stone, Ember], 3, |m| m.armor = 2),
     foe("Brine Leech", HD + 7, "Heals for half the damage it deals.", 16, 1, &[Tide, Gale], 2, |m| m.lifesteal_pct = 50),
     foe("Static Moth", HD + 8, "Jams your surge at 2.", 12, 2, &[Spark, Tide], 3, |m| m.foe_surge_cap = 2),
@@ -352,9 +435,10 @@ pub static ELITES: &[EnemyDef] = &[
         m.start_shield = 8;
         m.armor = 1
     }),
-    foe("Gale Duchess", HD + 12, "One extra reveal. The first rite each turn misses her.", 38, 2, &[Gale, Tide, Spark], 4, |m| {
+    foe("Gale Duchess", HD + 12, "One extra reveal. The first rite each turn only grazes her, for half damage.", 38, 2, &[Gale, Tide, Spark], 4, |m| {
         m.reveals = 1;
-        m.evade = 1
+        m.evade = 1;
+        m.graze = 1
     }),
     foe("Kiln Tyrant", HD + 13, "Burns harder, and +1 power every turn.", 42, 2, &[Ember, Gale, Stone], 3, |m| {
         m.burn_bonus = 1;
@@ -379,8 +463,9 @@ pub static BOSSES: &[[EnemyDef; 2]] = &[
             m.regen = 2;
             m.shield_turn = 2
         }),
-        foe("The Tidecaller", HD + 17, "The first rite each turn misses her. Heals for 30% of damage dealt.", 96, 3, &[Tide, Spark, Gale], 4, |m| {
+        foe("The Tidecaller", HD + 17, "The first rite each turn only grazes her, for half damage. Heals for 30% of damage dealt.", 96, 3, &[Tide, Spark, Gale], 4, |m| {
             m.evade = 1;
+            m.graze = 1;
             m.lifesteal_pct = 30
         }),
     ],
@@ -458,9 +543,12 @@ pub static EXPEDITIONS: &[Expedition] = &[
     Expedition {
         name: "The Rift",
         text: "A crack in the world, below the deepest shaft. Nothing here is kind.",
-        rules: &["Enemies have 30% more HP.", "Bosses gain +1 power every turn.", "1 fewer reveal each turn.", "Every floor rolls a curse."],
+        rules: &["Every law of Crystal Hollows.", "Every floor rolls a curse.", "Rites cost 1 more gem, any kind."],
         hp_pct: 130,
-        me: |m| m.reveals -= 1,
+        me: |m| {
+            m.reveals -= 1;
+            m.toll += 1
+        },
         foe: NOTHING,
         boss: |m| m.enrage += 1,
         curses: true,
@@ -468,9 +556,12 @@ pub static EXPEDITIONS: &[Expedition] = &[
     Expedition {
         name: "The Null",
         text: "Where the maps stop. Whoever drew them never came back to finish.",
-        rules: &["Enemies have 45% more HP and +1 power.", "Bosses gain +1 power every turn.", "1 fewer reveal each turn.", "Every floor rolls a curse."],
+        rules: &["Every law of The Rift.", "Enemies have 45% more HP and +1 power."],
         hp_pct: 145,
-        me: |m| m.reveals -= 1,
+        me: |m| {
+            m.reveals -= 1;
+            m.toll += 1
+        },
         foe: |m| m.power += 1,
         boss: |m| m.enrage += 1,
         curses: true,
@@ -622,8 +713,9 @@ pub static ENCOUNTERS: &[Encounter] = &[
         title: "Unstable Ground",
         text: "The floor ahead is cracked like old glaze.",
         choices: &[
-            pick("Sprint across. (-4 HP)", &[Hp(-4)]),
+            pick("Sprint across. (-4 HP, +6 shards)", &[Hp(-4), Shards(6)]),
             pick("Tiptoe. (70%: +10 shards, else -12 HP)", &[Chance(70, &[Shards(10)], &[Text("Crack."), Hp(-12)])]),
+            LEAVE,
         ],
     },
     Encounter {

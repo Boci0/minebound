@@ -159,13 +159,30 @@ impl Board {
         }
     }
 
+    /// Plants up to `n` more mines under hidden tiles (an opponent's rite). Tiles beside a revealed
+    /// number are skipped while others remain, so numbers already read mostly stay true.
+    pub fn bury(&mut self, n: usize, rng: &mut Rng) {
+        let hidden = |b: &Board, i: usize| b.open(i) && !b.tiles[i].mine;
+        let quiet = |b: &Board, i: usize| hidden(b, i) && !Self::neighbors(i).any(|j| b.tiles[j].revealed);
+        let mut spots: Vec<usize> = (0..N).filter(|&i| quiet(self, i)).collect();
+        if spots.len() < n {
+            spots = (0..N).filter(|&i| hidden(self, i)).collect();
+        }
+        rng.shuffle(&mut spots);
+        for &i in spots.iter().take(n) {
+            self.tiles[i].mine = true;
+            self.mines += 1;
+        }
+    }
+
     /// Chance that open tile `i` is a mine, judged only from what is visible (the AI does not cheat).
     pub fn risk(&self, i: usize) -> f32 {
         if self.fresh {
             return 0.0; // safe opening
         }
         let mut risk: Option<f32> = None;
-        for j in Self::neighbors(i).filter(|&j| self.tiles[j].revealed && !self.tiles[j].mine) {
+        // revealed numbers and crystals (which show their count too) are the clues
+        for j in Self::neighbors(i).filter(|&j| (self.tiles[j].revealed && !self.tiles[j].mine) || self.tiles[j].crystal) {
             let known = Self::neighbors(j).filter(|&k| self.known_mine(k)).count();
             let open = Self::neighbors(j).filter(|&k| self.open(k)).count();
             let local = self.adjacent(j).saturating_sub(known) as f32 / open.max(1) as f32;

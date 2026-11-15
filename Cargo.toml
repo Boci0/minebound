@@ -1,6 +1,6 @@
 [package]
 name = "minebound"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
 
@@ -12,7 +12,8 @@ quad-snd = "0.2.8"
 # quad-snd with sound decoding moved off the game thread, and music streamed instead of decoded whole (see vendor/quad-snd/src/mixer.rs, "minebound patch")
 [patch.crates-io]
 quad-snd = { path = "vendor/quad-snd" }
-# macroquad sending each font atlas to the GPU once a frame, not after every new glyph (vendor/macroquad/src/text/atlas.rs)
+# macroquad sending each font atlas to the GPU once a frame (changed rows only), not after every new glyph, and packing
+# glyphs by size so an atlas stays small (vendor/macroquad/src/text/atlas.rs)
 macroquad = { path = "vendor/macroquad" }
 
 # optimise dependencies in debug builds too: audio decoding is otherwise many times slower
