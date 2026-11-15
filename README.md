@@ -108,6 +108,14 @@ cargo run --release
 The first build takes a few minutes. To replay a run, pass its seed: `cargo run --release -- 42`.
 To update, close the game, run `git pull`, then `cargo run --release` again.
 
+### Other platforms
+
+The game itself (macroquad) is cross-platform; only the audio is Windows-specific. To port it,
+restore your platform's backend from upstream [quad-snd 0.2.8](https://crates.io/crates/quad-snd/0.2.8)
+into `vendor/quad-snd`, and add its `cfg` line and dependencies back. Each backend is a single
+self-contained file; `vendor/quad-snd/README.md` lists what this copy changes. Pull requests are
+welcome.
+
 ## Development
 
 ### Tests
