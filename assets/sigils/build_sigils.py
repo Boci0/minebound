@@ -34,6 +34,8 @@ SIGILS = [
     (["battery-plus"], RARE), (["meditation"], RARE), (["chess-knight"], RARE), (["crystal-cluster"], RARE), (["recycle"], RARE),
     (["dynamite"], RARE), (["hourglass"], RARE), (["knapsack"], RARE), (["chain-lightning"], RARE), (["barrel"], RARE),
     (["gems"], LEGEND), (["shard-sword"], LEGEND), (["smoke-bomb"], LEGEND), (["third-eye"], LEGEND), (["echo-ripples"], LEGEND), (["battle-axe"], LEGEND),
+    # 66 the fourth hero, Scaldwright (after the charms, so no older cell moves)
+    (["pyromaniac"], EMBER),
 ]
 CELL, COLS, GLYPH = 128, 8, 100
 

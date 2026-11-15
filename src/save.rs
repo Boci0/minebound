@@ -100,7 +100,9 @@ mod tests {
         assert_eq!(s.record(0, 0, 3, true), None);
         s.volume = (3, 10);
         assert_eq!(Save::parse(&s.text()), s);
-        assert_eq!(s.best[0], vec![CLEARED, 2, CLEARED]);
+        assert_eq!(s.best[0], vec![CLEARED, 2, CLEARED, 0]);
+        // a save from before the fourth hero still loads; the new hero starts fresh
+        assert_eq!(Save::parse(&format!("best 0 {CLEARED} 2 {CLEARED}")).best[0], vec![CLEARED, 2, CLEARED, 0]);
         let junk = Save::parse("unlocked 99\nbest 0 1 x\nbest 77 1\nvolume 4\nnonsense");
         assert_eq!(junk.unlocked, EXPEDITIONS.len());
         assert_eq!(junk.volume, (6, 8));

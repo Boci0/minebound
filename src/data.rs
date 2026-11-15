@@ -91,9 +91,10 @@ pub struct Combo {
 /// Highest level a skill can reach.
 pub const MAX_LEVEL: usize = 3;
 
-/// An effect's number at skill level `lvl`: +50% per level.
+/// An effect's number at skill level `lvl`: +50% per level, and always at least +1 per level
+/// (so a 1 still grows: 1, 2, 3).
 pub fn at_level(v: i32, lvl: usize) -> i32 {
-    v * (lvl as i32 + 1) / 2
+    (v * (lvl as i32 + 1) / 2).max(v + lvl as i32 - 1)
 }
 
 impl Combo {
@@ -117,7 +118,10 @@ impl Combo {
                 Shield(v) => format!("gain {} shield", at_level(v, lvl)),
                 Heal(v) => format!("heal {}", at_level(v, lvl)),
                 Weaken(n) => format!("foe's attacks halved, {} turns", at_level(n, lvl)),
-                Drain(n) => format!("foe loses {} stacks", at_level(n as i32, lvl)),
+                Drain(n) => {
+                    let k = at_level(n as i32, lvl);
+                    format!("foe loses {k} stack{}", if k == 1 { "" } else { "s" })
+                }
                 Scout(n) => format!("flag {} of your mines", at_level(n as i32, lvl)),
                 Pierce => "shatter foe's shield".into(),
             })
@@ -148,6 +152,7 @@ pub static COMBOS: &[Combo] = &[
     combo("Forgefire", ["Starforge", "Sunforge"], &[Ember, Stone, Spark], &[Damage(8)]),
     combo("Maelstrom", ["Abyssal Gyre", "Leviathan"], &[Tide, Gale, Stone], &[Shield(6), Heal(4)]),
     combo("Short Circuit", ["Arc Flash", "Blackout"], &[Ember, Gale, Spark], &[Damage(6), Drain(1)]),
+    combo("Boilover", ["Scalding Flood", "Hellbroth"], &[Ember, Tide, Spark], &[Burn(2), Damage(5)]),
 ];
 
 /// Position of `c` in `COMBOS`.
@@ -198,6 +203,15 @@ pub static HEROES: &[Hero] = &[
         elements: [Tide, Stone, Spark],
         passive: |m| m.start_shield += 5,
         passive_desc: "Plated: gain 5 shield at the start of each wave.",
+    },
+    Hero {
+        name: "Scaldwright",
+        sprite: HD + 66,
+        hp: 64,
+        power: 3,
+        elements: [Ember, Tide, Spark],
+        passive: |m| m.strike_burn += 2,
+        passive_desc: "Searing touch: your Strikes burn the foe for 2 turns.",
     },
 ];
 
@@ -640,3 +654,16 @@ pub static ENCOUNTERS: &[Encounter] = &[
         ],
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_level_adds_at_least_one() {
+        assert_eq!((1..=3).map(|l| at_level(1, l)).collect::<Vec<_>>(), [1, 2, 3]);
+        // bigger numbers keep the +50% per level
+        assert_eq!((1..=3).map(|l| at_level(6, l)).collect::<Vec<_>>(), [6, 9, 12]);
+        assert_eq!((1..=3).map(|l| at_level(3, l)).collect::<Vec<_>>(), [3, 4, 6]);
+    }
+}

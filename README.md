@@ -26,7 +26,7 @@ fire now, or flip one more? The enemy plays by exactly the same rules, in full v
 
 ## Features
 
-- **Three heroes**, each with their own elements, rites and play style.
+- **Four heroes**, each with their own elements, rites and play style.
 - **Five elements** and 16 combo rites that need the right mix of stacks.
 - **Branching runs** across three floors: battles, elites, encounters, shops, rest sites, treasure
   and a boss at the end of each floor.

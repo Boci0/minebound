@@ -99,8 +99,7 @@ impl Run {
             note: String::new(),
         };
         run.gen_map();
-        let t = &TWISTS[run.twist];
-        run.note = format!("{}, floor 1. {}: {}", EXPEDITIONS[exp].name, t.name, t.desc);
+        run.note = format!("{}, floor 1.", EXPEDITIONS[exp].name);
         let stage = run.pick();
         (run, stage)
     }
@@ -327,8 +326,7 @@ impl Run {
             self.floor += 1;
             self.pos = None;
             self.gen_map();
-            let t = &TWISTS[self.twist];
-            self.note = format!("{}, floor {}. {}: {}", EXPEDITIONS[self.exp].name, self.floor + 1, t.name, t.desc);
+            self.note = format!("{}, floor {}.", EXPEDITIONS[self.exp].name, self.floor + 1);
         }
         Stage::Map
     }
@@ -418,9 +416,14 @@ impl Run {
     }
 
     /// Swaps every ware on the counter for new ones.
+    /// Restocking is only worth paying for while some pact is neither yours nor on the counter.
+    pub fn can_restock(&self, shop: &Shop) -> bool {
+        (0..CHARMS.len()).any(|i| !self.charms.contains(&i) && !shop.stock.contains(&Some(i)))
+    }
+
     pub fn restock(&mut self, shop: &mut Shop) -> bool {
         let price = Self::restock_price(shop);
-        if self.shards < price {
+        if self.shards < price || !self.can_restock(shop) {
             return false;
         }
         self.shards -= price;

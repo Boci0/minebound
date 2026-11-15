@@ -36,15 +36,9 @@ const HEX: Color = rgb(0xa0a0a0);
 
 pub const VIEW: Vec2 = vec2(1280.0, 720.0);
 
-/// Elements differ by their alchemical sign (`gem`), so their light only varies a little.
-fn el_color(e: Element) -> Color {
-    match e {
-        Element::Ember => rgb(0xf2f2f2),
-        Element::Tide => rgb(0xc8c8c8),
-        Element::Gale => rgb(0xe0e0e0),
-        Element::Stone => rgb(0xa8a8a8),
-        Element::Spark => rgb(0xffffff),
-    }
+/// Elements differ only by their alchemical sign (`gem`); a dimmer one would read as disabled.
+fn el_color(_: Element) -> Color {
+    INK
 }
 
 fn mix(a: Color, b: Color, t: f32) -> Color {
@@ -671,8 +665,8 @@ fn sign_strokes(e: Element) -> Vec<Vec<(f32, f32)>> {
     match e {
         Element::Ember => vec![up],
         Element::Tide => vec![down],
-        Element::Gale => vec![up, vec![(4.8, 12.0), (15.2, 12.0)]],
-        Element::Stone => vec![down, vec![(4.8, 8.0), (15.2, 8.0)]],
+        Element::Gale => vec![up, vec![(0.5, 12.0), (19.5, 12.0)]],
+        Element::Stone => vec![down, vec![(0.5, 8.0), (19.5, 8.0)]],
         Element::Spark => vec![vec![(12.0, 2.0), (5.0, 11.0), (10.0, 11.0), (8.0, 18.0), (15.0, 9.0), (10.0, 9.0), (12.0, 2.0)]],
     }
 }
@@ -709,7 +703,7 @@ fn sign(e: Element, p: Vec2, r: f32, c: Color) {
 }
 
 pub fn status(run: &Run) {
-    plate(Rect::new(24.0, 14.0, 1232.0, 44.0), CARD);
+    plate(Rect::new(24.0, 14.0, 1200.0, 44.0), CARD);
     sprite(HEROES[run.hero].sprite, 36.0, 20.0, 32.0, WHITE);
     text(HEROES[run.hero].name, 78.0, 43.0, 22.0, INK);
     let mut x = 260.0;
@@ -824,7 +818,7 @@ fn rune_circle(c: Vec2, rx: f32, ry: f32, col: Color, a: f32) {
 /// The title menu: Play goes to the overworld, Back quits the game.
 pub fn title() -> Option<Go> {
     let t = now() as f32;
-    // the three heroes waiting in a summoning circle
+    // the heroes waiting in a summoning circle
     rune_circle(vec2(640.0, 640.0), 280.0, 40.0, ACCENT, 0.28);
     for k in 0..4 {
         // sparks drifting up out of the circle
@@ -834,7 +828,7 @@ pub fn title() -> Option<Go> {
         sparkle(p, 3.0, t + f, fade(mix(ACCENT, INK, 0.5), 0.4 * (1.0 - up)));
     }
     for (i, h) in HEROES.iter().enumerate() {
-        let x = 640.0 + (i as f32 - 1.0) * 150.0;
+        let x = 640.0 + (i as f32 - (HEROES.len() - 1) as f32 / 2.0) * 135.0;
         draw_ellipse(x, 640.0, 40.0, 7.0, 0.0, fade(OUT, 0.6));
         sprite(h.sprite, x - 48.0, 548.0 + (t * 2.0 + i as f32 * 2.1).sin() * 3.0, 96.0, WHITE);
     }
@@ -907,13 +901,22 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
     let mut go = None;
     text("The Below", 48.0, 70.0, 44.0, INK);
     text(&format!("{} of {} descents open", save.unlocked, EXPEDITIONS.len()), 50.0, 96.0, 15.0, MUTED);
-    if button(Rect::new(780.0, 40.0, 120.0, 36.0), "< Title", true, false) {
+    let tx = 48.0 + measure("The Below", 44.0).width + 28.0;
+    if button(Rect::new(tx, 40.0, 110.0, 36.0), "< Title", true, false) {
         go = Some(Go::Back);
     }
 
     // the land: unexplored tiles are raised grey; around each open place it lies turned over, its
     // edge numbered like a half-solved board (about one hidden tile in five counts as a mine)
-    let kind = land(save.unlocked);
+    // the land only changes when a descent opens, so build it once per `unlocked`
+    thread_local!(static LAND_AT: std::cell::RefCell<(usize, Vec<Vec<u8>>)> = const { std::cell::RefCell::new((usize::MAX, Vec::new())) });
+    let kind = LAND_AT.with(|l| {
+        let mut l = l.borrow_mut();
+        if l.0 != save.unlocked {
+            *l = (save.unlocked, land(save.unlocked));
+        }
+        l.1.clone()
+    });
     let (x0, y0, cell, cols, rows) = LAND;
     let at = |c: usize, r: usize| kind.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0);
     let mine = |c: usize, r: usize| at(c, r) == 1 && noise(c + 50, r + 50) < 0.22;
@@ -952,7 +955,7 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
             shown = i;
         }
         let chosen = i == pick.0;
-        let edge = if open { INK } else { rgb(0x5a5a5a) };
+        let edge = if open { INK } else { MUTED };
         let r = if hot && open { 35.0 } else { 32.0 };
         draw_poly(p.x, p.y, 4, r, 0.0, if chosen { INK } else { BG });
         draw_poly_lines(p.x, p.y, 4, r, 0.0, 1.5, edge);
@@ -1589,9 +1592,9 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     for (i, t) in board.tiles.iter().enumerate() {
         let r = Rect::new(BOARD.x + (i % W) as f32 * STEP, BOARD.y + (i / W) as f32 * STEP, TILE, TILE);
         let mid = r.center();
-        // tiles around a crystal that can still be claimed are a shade greyer
+        // tiles around a crystal that can still be claimed stand out brighter
         let near = Board::neighbors(i).any(|c| board.live(c));
-        let up = if near { rgb(0xcfcfcf) } else { INK };
+        let up = if near { INK } else { rgb(0xb0b0b0) };
         let key = (0, me.cur, i);
         if t.rock {
             rock(r);
@@ -1892,11 +1895,16 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             let arrive = (el / 0.15).min(1.0);
             let slide = (1.0 - arrive).powi(2) * 500.0 * if from == 0 { -1.0 } else { 1.0 };
             let (size, band) = if lvl == 0 { (40.0, 56.0) } else { (60.0 + 8.0 * up, 84.0 + 14.0 * up) };
-            let (top, mid) = (310.0 - band / 2.0, 310.0);
-            draw_rectangle(-2000.0, top, 5280.0, band, fade(OUT, 0.8 * a));
-            stamped(name, 640.0 + slide, mid + size / 3.0, size + 30.0 * (1.0 - arrive), fade(c, a));
+            let cx = BOARD.x + W as f32 * STEP / 2.0 - 1.0;
+            let mid = BOARD.y + W as f32 * STEP / 2.0;
+            let top = mid - band / 2.0;
+            let wide = (measure(name, size).width + 80.0).max(W as f32 * STEP + 40.0);
+            let bx = Rect::new(cx + slide - wide / 2.0, top, wide, band);
+            draw_rectangle(bx.x, bx.y, bx.w, bx.h, fade(OUT, 0.88 * a));
+            draw_rectangle_lines(bx.x, bx.y, bx.w, bx.h, 1.0, fade(FAINT, a));
+            stamped(name, cx + slide, mid + size / 3.0, size + 30.0 * (1.0 - arrive), fade(c, a));
             if lvl >= 2 {
-                stamped(if lvl == 2 { "LV II" } else { "LV III" }, 640.0 - slide, top - 18.0, 20.0, fade(GOLD_C, a));
+                stamped(if lvl == 2 { "LV II" } else { "LV III" }, cx - slide, top - 18.0, 20.0, fade(GOLD_C, a));
             }
         }
     }
@@ -2032,20 +2040,21 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     }
     text("PACTS", x, y + 18.0, 15.0, ACCENT);
     let top = y + 28.0;
-    let mut tip = HEROES[run.hero].passive_desc;
-    let rows = 22.0f32.min((612.0 - top) / run.charms.len().max(1) as f32);
+    let (mut tip, mut tip_label) = (HEROES[run.hero].passive_desc, "PASSIVE");
+    let rows = 22.0f32.min((592.0 - top) / run.charms.len().max(1) as f32);
     for (k, &id) in run.charms.iter().enumerate() {
         let r = Rect::new(x - 8.0, top + k as f32 * rows, 298.0, rows);
         let hot = r.contains(mouse());
         if hot {
-            tip = CHARMS[id].desc;
+            (tip, tip_label) = (CHARMS[id].desc, "PACT");
             block(r, CARD_HI);
         }
         let c = &CHARMS[id];
         sprite(c.icon.0, x, r.y + (rows - 18.0) / 2.0, 18.0, rgb(c.icon.1));
         text(c.name, x + 26.0, r.y + rows / 2.0 + 6.0, 16.0, if hot { INK } else { rarity_color(c.rarity) });
     }
-    wrapped(tip, x, 628.0, 282.0, 16.0, INK);
+    text(tip_label, x, 612.0, 15.0, ACCENT);
+    wrapped(tip, x, 634.0, 282.0, 16.0, INK);
     text(&format!("Seed {}    M: mute    N: next song", run.seed), x, 684.0, 14.0, MUTED);
     chosen
 }
@@ -2054,6 +2063,14 @@ fn charm_card(r: Rect, id: usize, on: bool) -> bool {
     let c = &CHARMS[id];
     let edge = rarity_color(c.rarity);
     let hit = card(r, on);
+    // the frame weighs more the rarer the pact
+    if !(on && r.contains(mouse())) {
+        outline(r, match c.rarity {
+            Rarity::Common => FAINT,
+            Rarity::Rare => MUTED,
+            Rarity::Legendary => INK,
+        });
+    }
     let bob = (now() as f32 * 2.5 + id as f32).sin() * 2.0;
     charm_icon(id, Rect::new(r.x + 20.0, r.y + 22.0 + bob, 64.0, 64.0), 0.0);
     text(c.name, r.x + 100.0, r.y + 52.0, 24.0, INK);
@@ -2063,10 +2080,12 @@ fn charm_card(r: Rect, id: usize, on: bool) -> bool {
 }
 
 pub fn pick(options: &[usize]) -> Option<usize> {
-    stamped("Choose a pact", 640.0, 150.0, 40.0, INK);
+    // title and cards sit in the middle of the screen, however many cards there are
+    stamped("Choose a pact", 640.0, 250.0, 40.0, INK);
     let mut chosen = None;
+    let x0 = 640.0 - (options.len() as f32 * 350.0 - 30.0) / 2.0;
     for (k, &id) in options.iter().enumerate() {
-        if charm_card(Rect::new(130.0 + k as f32 * 350.0, 220.0, 320.0, 240.0), id, true) {
+        if charm_card(Rect::new(x0 + k as f32 * 350.0, 300.0, 320.0, 240.0), id, true) {
             chosen = Some(id);
         }
     }
@@ -2132,7 +2151,7 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
     stamped("Tinker's Stall", 640.0, 112.0, 40.0, INK);
 
     // the shopkeeper's booth: the keeper and your purse
-    let booth = Rect::new(48.0, 150.0, 290.0, 470.0);
+    let booth = Rect::new(48.0, 140.0, 290.0, 494.0);
     plate(booth, WELL);
     sprite(HD + 27, 118.0, 290.0 + (t as f32 * 2.0).sin() * 3.0, 150.0, WHITE);
     rounded(Rect::new(72.0, 470.0, 242.0, 2.0), 1.0, fade(MUTED, 0.25));
@@ -2209,7 +2228,7 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
         say("Hold still. This stings.");
     }
     let restock = Run::restock_price(shop);
-    if button(Rect::new(692.0, 590.0, 260.0, 44.0), &format!("Restock for {restock}"), run.shards >= restock, false) && run.restock(shop) {
+    if button(Rect::new(692.0, 590.0, 260.0, 44.0), &format!("Restock for {restock}"), run.shards >= restock && run.can_restock(shop), false) && run.restock(shop) {
         play(Sfx::Coins);
         sel = None;
         for k in 0..SHOP_SIZE {
