@@ -1,31 +1,100 @@
 # Minebound
 
-A roguelike duel played on two minesweeper boards.
+**A roguelike duel played on minesweeper boards.**
+
+[![Latest release](https://img.shields.io/github/v/release/Boci0/minebound?label=release)](https://github.com/Boci0/minebound/releases/latest)
+[![Release build](https://github.com/Boci0/minebound/actions/workflows/release.yml/badge.svg)](https://github.com/Boci0/minebound/actions/workflows/release.yml)
+![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
+![Built with Rust](https://img.shields.io/badge/built%20with-Rust-B7410E)
 
 You and your enemy each sweep your own boards, one board per element. Crystals are always visible;
-mines are not. Clear every safe tile around a crystal and you claim a stack of that board's element.
-Stacks are ammunition: spend them on skills, from a plain Strike to combos that need the right mix of
-elements. Every safe flip in a row builds surge, up to double damage, so each turn asks the same
-question: fire now, or flip one more? The enemy plays by exactly the same rules, in full view.
+mines are not. Clear every safe tile around a crystal to claim a stack of that board's element, then
+spend your stacks on skills, from a plain Strike to combos that need the right mix of elements.
+Every safe flip in a row builds surge, up to double damage, so each turn asks the same question:
+fire now, or flip one more? The enemy plays by exactly the same rules, in full view.
 
-Between fights you pick a route through a branching map of battles, elites, encounters, shops, rests
-and treasure, collecting charms that bend the rules, across three floors and three bosses.
+## Contents
 
-## Install (Windows)
+- [Features](#features)
+- [Installation](#installation)
+- [How to play](#how-to-play)
+- [Building from source](#building-from-source)
+- [Development](#development)
+- [Credits](#credits)
+
+## Features
+
+- **Three heroes**, each with their own elements, skills and play style.
+- **Five elements** and 16 combo skills that need the right mix of stacks.
+- **Branching runs** across three floors: battles, elites, encounters, shops, rest sites, treasure
+  and a boss at the end of each floor.
+- **38 charms** in three rarities (common, rare, legendary) that bend the rules of a turn.
+- **14 enemies**, each breaking one rule: armour, dodging, lifesteal, surge jamming, stack theft
+  and more.
+- **Seeded runs**: replay any run exactly by its seed.
+
+## Installation
+
+**Requirements:** Windows 10 or 11, 64-bit.
 
 1. Download `Minebound-setup.exe` from the
    [latest release](https://github.com/Boci0/minebound/releases/latest).
-2. Run it. If Windows says it protected your PC, click More info, then Run anyway (the game is not
-   code-signed). No admin rights are needed.
-3. Start Minebound from the Start menu, or from the desktop shortcut if you ticked that box.
+2. Run the installer. No administrator rights are needed.
+3. Launch Minebound from the Start menu, or from the desktop shortcut if you selected one.
 
-To update, download the new `Minebound-setup.exe` and run it: it replaces the old version in place.
-To uninstall, go to Settings, Apps, Installed apps, Minebound.
+> [!NOTE]
+> The installer is not code-signed, so Windows SmartScreen may show "Windows protected your PC".
+> Select **More info**, then **Run anyway**.
 
-## Build from source
+**Updating:** download the latest `Minebound-setup.exe` and run it. It upgrades the installed game in
+place.
 
-You need [Git](https://git-scm.com) and [Rust](https://rustup.rs). On Windows, the Rust installer
-also asks for the Visual Studio C++ build tools; say yes. Then:
+**Uninstalling:** open **Settings > Apps > Installed apps**, find Minebound and select
+**Uninstall**.
+
+## How to play
+
+### Controls
+
+| Action | Input |
+| --- | --- |
+| Reveal a tile | Left click |
+| Flag a suspected mine | Right click |
+| Switch board | Click a board tab (free, any time in your turn) |
+| Socket a gem | Drag it from your stacks into a skill's matching socket; the skill fires once every socket is full |
+| Take a gem back | Click the filled socket |
+| Strike | Drop a gem on the enemy, or click it |
+| Cast a skill at once | Click a lit skill |
+| Cast everything | Unleash all |
+| Keep stacks for later | End turn |
+| Abandon the run | Retreat (top right, outside battle) |
+| Sound on / off | M |
+| Next song | N |
+| Volume settings | Esc, or the gear icon |
+
+### Rules
+
+- A number on a tile is how many mines touch it. A safe tile touching no mines opens its neighbours.
+- Your first flip on a fresh board is never a mine.
+- The number under a crystal is how many hidden tiles still surround it. Mines around it stay
+  hidden; it pays out once every safe one is revealed.
+- A mine costs a little HP, gives no stack, ends your turn, wipes your surge and breaks the crystals
+  next to it.
+- Boards keep their state while you are on another one. A board with no crystal left to claim is
+  dealt again, and all boards reset each wave.
+- You get 6 reveals per turn (lesser enemies get fewer). There is no limit on the stacks you can
+  hold.
+- A skill deals power × stacks spent, plus its bonus, multiplied by surge (+20% per safe flip in a
+  row this turn, up to +100%). Casting does not end your turn.
+- After turn 7, every skill gains +2 damage per turn, so no fight lasts forever.
+
+Your charms sit along the top of the battle screen and flash each time they take effect. The column
+before each boss is all rest sites.
+
+## Building from source
+
+Requires [Git](https://git-scm.com) and [Rust](https://rustup.rs). On Windows, accept the Visual
+Studio C++ build tools when the Rust installer offers them.
 
 ```
 git clone https://github.com/Boci0/minebound.git
@@ -33,53 +102,42 @@ cd minebound
 cargo run --release
 ```
 
-The first build takes a few minutes. `cargo run --release -- 42` replays the run with seed 42.
-To update, close the game and run `git pull` and `cargo run --release` again.
+The first build takes a few minutes. To replay a run, pass its seed: `cargo run --release -- 42`.
+To update, close the game, run `git pull`, then `cargo run --release` again.
 
-## Controls
+## Development
 
-- Left click a hidden tile: reveal it. Right click: flag it as a suspected mine.
-- Click a board tab: swap to that element's board (free, any time in your turn).
-- Drag a gem from your stacks into a skill's matching socket; the skill fires when every socket is
-  full. Click a filled socket to take the gem back. Drop a gem on the enemy (or click it) to Strike.
-- Click a lit skill to cast it at once. Unleash all: fire everything.
-- End turn: keep your remaining stacks for later.
-- Retreat (top right, outside battle): abandon the run and go back to the title.
-- M: sound on or off. N: next song. Esc or the gear: volume settings.
-
-## Rules in short
-
-- A number on a tile is how many mines touch it. A safe tile touching no mines opens its neighbours.
-- Your first flip on a fresh board is never a mine.
-- The number under a crystal is how many hidden tiles still surround it. Mines around it stay hidden;
-  it pays out once every safe one is revealed.
-- A mine costs a little HP, gives no stack, ends your turn, wipes your surge and breaks the crystals
-  next to it.
-- Boards keep their state while you are on another one. A board with no crystal left to claim is
-  dealt again, and all boards reset each wave.
-- 6 reveals per turn (lesser enemies get fewer). There is no limit on the stacks you can hold.
-- A skill deals power x stacks spent, plus its bonus, multiplied by surge (+20% per safe flip in a
-  row this turn, up to +100%). Casting does not end your turn.
-- After turn 7 every skill gains +2 damage per turn, so no fight lasts forever.
-
-Every enemy bends one rule (armour, dodging your first skill, jamming your surge, stealing stacks),
-and charms reward different ways of playing a turn, so no two fights or runs ask for the same plan.
-Charms come in three rarities: common, rare and legendary. Your charms sit along the top of the
-battle screen and flash each time they take effect. The column before each boss is all rest sites.
-
-## Credits
-
-Fonts: Kenney Mini by Kenney (kenney.nl), CC0; Pixel Operator by Jayvee Enaguas, CC0.
-Pixel art: Tiny Dungeon by Kenney (kenney.nl), public domain (CC0). See `assets/tiny-dungeon/License.txt`.
-Sound effects: RPG Audio, Impact Sounds and Interface Sounds by Kenney (kenney.nl), CC0.
-Music: "Winter Lofi" by HoliznaCC0 (freemusicarchive.org/music/holiznacc0/winter-lofi), CC0.
-The music is read from `assets/music` next to where the game is run; without that folder the game is simply silent.
-
-## Tests
+### Tests
 
 ```
 cargo test -- --nocapture
 ```
 
-Includes a headless simulation that plays 900 full runs to check that every fight ends and the
-heroes stay roughly balanced.
+The suite includes a headless simulation that plays 900 full runs, checking that every fight ends
+and that the heroes stay roughly balanced.
+
+### Releasing
+
+Push a version tag. GitHub Actions builds `Minebound-setup.exe` and publishes it as a release:
+
+```
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The installer is defined in `installer/minebound.iss`. Never change its `AppId`: it is how a new
+installer finds and upgrades an existing installation.
+
+## Credits
+
+All assets are CC0 (public domain).
+
+| Asset | Source |
+| --- | --- |
+| Fonts | Kenney Mini by [Kenney](https://kenney.nl); Pixel Operator by Jayvee Enaguas |
+| Pixel art | Tiny Dungeon by [Kenney](https://kenney.nl) |
+| Sound effects | RPG Audio, Impact Sounds and Interface Sounds by [Kenney](https://kenney.nl) |
+| Music | [Winter Lofi](https://freemusicarchive.org/music/holiznacc0/winter-lofi) by HoliznaCC0 |
+
+Licence files for each asset pack are in `assets/`. Audio playback uses a patched copy of
+[quad-snd](https://github.com/not-fl3/quad-snd) in `vendor/quad-snd` (MIT / Apache-2.0).

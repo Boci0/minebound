@@ -18,7 +18,8 @@ DefaultDirName={localappdata}\Programs\Minebound
 DisableProgramGroupPage=yes
 DisableDirPage=yes
 PrivilegesRequired=lowest
-OutputDir=..\dist
+; relative to SourceDir (the repo root), not to this file
+OutputDir=dist
 OutputBaseFilename=Minebound-setup
 UninstallDisplayIcon={app}\minebound.exe
 Compression=lzma2
