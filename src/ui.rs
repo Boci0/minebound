@@ -94,8 +94,8 @@ struct Fx {
     charm_t: std::collections::HashMap<usize, f64>,
     /// gems you have slotted into each skill, by skill name; it fires when every socket is full
     sockets: std::collections::HashMap<&'static str, Vec<Element>>,
-    /// the gem being dragged: (index in your stacks, where the drag started)
-    drag: Option<(usize, Vec2)>,
+    /// the gem being dragged, by index in your stacks
+    drag: Option<usize>,
 }
 
 thread_local! {
@@ -595,7 +595,7 @@ pub fn heroes() -> Option<usize> {
     for (k, line) in [
         "Clear every safe tile around a crystal to claim a stack of its element. Your first flip on each board is never a mine.",
         "Safe flips in a row build SURGE: up to double damage this turn. A mine ends your turn and breaks the crystals it touches.",
-        "Drag gems into a skill's sockets to cast it, or onto the enemy to Strike. Click a lit skill to cast at once. Right click flags.",
+        "Drag gems into a skill's sockets to cast it, or onto the enemy to Strike. Right click flags. Space ends your turn.",
     ]
     .iter()
     .enumerate()
@@ -689,8 +689,8 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             })
             .collect()
     };
-    let mut drag = fx(|fx| fx.drag).filter(|d| b.active == 0 && !over && free.contains(&d.0));
-    let dragged = drag.map(|d| b.f[0].stacks[d.0]);
+    let mut drag = fx(|fx| fx.drag).filter(|d| b.active == 0 && !over && free.contains(d));
+    let dragged = drag.map(|d| b.f[0].stacks[d]);
     let mut felled = false;
     let (shake, ghost, stack_t) = fx(|fx| {
         if fx.live && fx.wave != b.wave {
@@ -866,14 +866,14 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         for (j, &k) in row.iter().enumerate() {
             let p = vec2(x + 15.0 + j as f32 * step, 633.0);
             let slot = Rect::new(p.x - 15.0, p.y - 15.0, 30.0, 30.0);
-            let held = s == 0 && drag.is_some_and(|d| d.0 == k);
+            let held = s == 0 && drag == Some(k);
             let hot = s == 0 && mine && drag.is_none() && slot.contains(mouse());
             block(slot, if hot { ACCENT } else { WELL });
             if !held {
                 gem(f.stacks[k], p, 11.0 * bounce(stack_t[s][k.min(15)]));
             }
             if hot && clicked() {
-                drag = Some((k, mouse()));
+                drag = Some(k);
             }
         }
     }
@@ -972,7 +972,6 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         let fill = match (takes, over_row) {
             (Some(e), true) => mix(CARD_HI, el_color(e), 0.5),
             (Some(e), false) => mix(CARD, el_color(e), 0.2),
-            (None, true) if lit && dragged.is_none() => mix(CARD_HI, ACCENT, 0.45),
             _ if lit || !slotted.is_empty() => CARD_HI,
             _ => CARD,
         };
@@ -994,45 +993,47 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             if full && mine && drag.is_none() && sr.contains(mouse()) {
                 draw_rectangle_lines(sr.x, sr.y, sr.w, sr.h, 2.0, INK);
                 if clicked() {
-                    unslot = Some(e);
+                    unslot = Some((e, sr.center()));
                 }
             }
         }
         let cx = x0 + c.needs.len() as f32 * 28.0 + 4.0;
         text(c.name, cx, y + 17.0, 18.0, if lit || !slotted.is_empty() { INK } else { MUTED });
         text(c.desc, x0, y + 37.0, 15.0, if lit { GOLD_C } else { MUTED });
-        if let Some(e) = unslot {
+        if let Some((e, at)) = unslot {
             // take a gem back out of its socket
             if let Some(v) = sockets.get_mut(c.name) {
                 v.retain(|&x| x != e);
             }
+            burst(at, 8, 110.0, 5.0, el_color(e));
             play(Sfx::Click);
-        } else if over_row && lit && drag.is_none() && clicked() {
-            // a click casts it straight away, with whatever gems it takes
-            cast = Some(c);
         }
         targets.push((r, c));
         y += 46.0;
     }
 
     // a dragged gem lands where the button comes up: in a skill's socket, or on the enemy as a Strike.
-    // Let go without moving and it is a plain click: Strike.
+    // Dropped anywhere else it just goes back to your stacks; nothing fires on a click.
     let enemy = Rect::new(828.0, 64.0, 428.0, 640.0);
     let at_enemy = enemy.contains(mouse()) || Rect::new(640.0, 64.0, 172.0, 152.0).contains(mouse());
-    if let Some((k, from)) = drag {
+    if let Some(k) = drag {
         let e = b.f[0].stacks[k];
+        // the enemy is always a drop target: its panel pulses while you hold a gem
+        draw_rectangle_lines(enemy.x, enemy.y, enemy.w, enemy.h, 4.0, fade(BAD, 0.3 + pulse * 0.4));
         if at_enemy {
             draw_rectangle(enemy.x, enemy.y, enemy.w, enemy.h, fade(BAD, 0.12));
-            stamped("Strike", enemy.center().x, 120.0 + 28.0, 26.0, BAD);
+            stamped(&format!("Strike {}", b.hit_damage(0, 1, None)), enemy.center().x, 148.0, 26.0, BAD);
         }
         if !is_mouse_button_down(MouseButton::Left) {
             let target = targets.iter().find(|(r, c)| r.contains(mouse()) && c.needs.contains(&e));
-            if (mouse() - from).length() < 6.0 || at_enemy {
+            if at_enemy {
                 strike = Some(k);
-            } else if let Some(&(_, c)) = target {
+            } else if let Some(&(r, c)) = target {
                 let v = sockets.entry(c.name).or_default();
                 if !v.contains(&e) {
                     v.push(e);
+                    let j = c.needs.iter().position(|&n| n == e).unwrap_or(0);
+                    burst(vec2(x0 + j as f32 * 28.0 + 10.0, r.y + 14.0), 14, 160.0, 6.0, el_color(e));
                     play(Sfx::Claim);
                 }
                 if c.needs.iter().all(|n| v.contains(n)) {
@@ -1050,16 +1051,20 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     text("ENEMY SKILLS", x0, y, 14.0, ACCENT);
     y += 10.0;
     let ready = b.ready(1);
+    // name, then what it does underneath: side by side they ran into each other
     for c in combos_for(&b.f[1].elements) {
         let lit = ready.iter().any(|r| r.name == c.name);
         let cx = combo_icons(c, x0, y);
         text(c.name, cx, y + 15.0, 16.0, if lit { INK } else { MUTED });
-        right(c.desc, x0 + 300.0, y + 15.0, 13.0, MUTED);
-        y += 24.0;
+        text(c.desc, x0, y + 30.0, 13.0, if lit { GOLD_C } else { MUTED });
+        y += 34.0;
     }
-    let first = b.log.len().saturating_sub(4);
+    // the battle log gets whatever room the skill lists leave, up to 4 lines
+    let top = (y + 12.0).max(600.0);
+    let fits = (((676.0 - top) / 19.0) as usize + 1).min(4);
+    let first = b.log.len().saturating_sub(fits);
     for (k, l) in b.log[first..].iter().enumerate() {
-        text(l, x0, 600.0 + k as f32 * 19.0, 15.0, MUTED);
+        text(l, x0, top + k as f32 * 19.0, 15.0, MUTED);
     }
     let note = if b.pressure() > 0 {
         format!("Overpressure: every skill +{}", b.pressure())
@@ -1069,7 +1074,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     centered(&note, 640.0, 692.0, 13.0, if b.pressure() > 0 { GOLD_C } else { MUTED });
 
     let unleash = button(Rect::new(46.0, 656.0, 226.0, 36.0), &format!("Unleash all: {}", b.attack_damage(0)), mine && !b.f[0].stacks.is_empty(), true);
-    let pass = button(Rect::new(284.0, 656.0, 146.0, 36.0), "End turn", mine, false);
+    let pass = button(Rect::new(284.0, 656.0, 146.0, 36.0), "End turn", mine, false) || (mine && !modal() && is_key_pressed(KeyCode::Space));
     if unleash {
         b.unleash();
     } else if pass {
@@ -1099,7 +1104,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
 
     particles();
     charm_bar(charms);
-    if let Some((k, _)) = drag {
+    if let Some(k) = drag {
         if let Some(&e) = b.f[0].stacks.get(k) {
             gem(e, mouse(), 15.0);
         }

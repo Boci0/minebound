@@ -77,7 +77,29 @@ fn music_path(name: &str) -> String {
     beside_exe.filter(|p| p.exists()).map_or(file, |p| p.to_string_lossy().into_owned())
 }
 
+const ART: &[u8] = include_bytes!("../assets/tiny-dungeon/tilemap_packed.png");
+/// The Minelayer Queen (a mimic chest) is the window and taskbar icon; assets/icon.ico (shortcuts)
+/// shows the same sprite.
+const ICON_SPRITE: usize = 92;
+
+/// The icon sprite scaled up without smoothing to `size` x `size` RGBA (`N` = size * size * 4).
+fn icon_pixels<const N: usize>(sheet: &Image, size: usize) -> [u8; N] {
+    let mut out = [0; N];
+    for (i, px) in out.chunks_exact_mut(4).enumerate() {
+        let x = ICON_SPRITE % 12 * 16 + i % size * 16 / size;
+        let y = ICON_SPRITE / 12 * 16 + i / size * 16 / size;
+        let at = (y * sheet.width as usize + x) * 4;
+        px.copy_from_slice(&sheet.bytes[at..at + 4]);
+    }
+    out
+}
+
 fn conf() -> Conf {
+    let icon = Image::from_file_with_format(ART, None).ok().map(|sheet| miniquad::conf::Icon {
+        small: icon_pixels(&sheet, 16),
+        medium: icon_pixels(&sheet, 32),
+        big: icon_pixels(&sheet, 64),
+    });
     Conf {
         window_title: "Minebound".into(),
         window_width: 1280,
@@ -85,6 +107,7 @@ fn conf() -> Conf {
         window_resizable: true,
         high_dpi: true,
         sample_count: 4,
+        icon,
         ..Default::default()
     }
 }
@@ -99,7 +122,7 @@ async fn main() {
         load_ttf_font_from_bytes(include_bytes!("../assets/fonts/pixel-operator.ttf")).ok(),
     );
     // Tiny Dungeon by Kenney (CC0), built into the exe
-    ui::set_art(Texture2D::from_file_with_format(include_bytes!("../assets/tiny-dungeon/tilemap_packed.png"), None));
+    ui::set_art(Texture2D::from_file_with_format(ART, None));
     let mut sounds = vec![];
     for (_, files) in sfx::SOUNDS {
         let mut takes = vec![];
@@ -175,5 +198,23 @@ async fn main() {
         ui::settings();
         ui::end_frame();
         next_frame().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icon_is_the_sprite_scaled_up_without_smoothing() {
+        let sheet = Image::from_file_with_format(ART, None).unwrap();
+        let small: [u8; 16 * 16 * 4] = icon_pixels(&sheet, 16);
+        let big: [u8; 64 * 64 * 4] = icon_pixels(&sheet, 64);
+        for (i, px) in big.chunks_exact(4).enumerate() {
+            let (x, y) = (i % 64 / 4, i / 64 / 4);
+            assert_eq!(px, &small[(y * 16 + x) * 4..][..4]);
+        }
+        // a sprite on a transparent background, not an empty or solid tile
+        assert!(small.chunks_exact(4).any(|p| p[3] == 255) && small.chunks_exact(4).any(|p| p[3] == 0));
     }
 }

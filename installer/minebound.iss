@@ -21,7 +21,8 @@ PrivilegesRequired=lowest
 ; relative to SourceDir (the repo root), not to this file
 OutputDir=dist
 OutputBaseFilename=Minebound-setup
-UninstallDisplayIcon={app}\minebound.exe
+SetupIconFile=assets\icon.ico
+UninstallDisplayIcon={app}\icon.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -38,10 +39,11 @@ Type: filesandordirs; Name: "{app}\assets"
 Source: "target\release\minebound.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "assets\music\*"; DestDir: "{app}\assets\music"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "assets\icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Minebound"; Filename: "{app}\minebound.exe"
-Name: "{autodesktop}\Minebound"; Filename: "{app}\minebound.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Minebound"; Filename: "{app}\minebound.exe"; IconFilename: "{app}\icon.ico"
+Name: "{autodesktop}\Minebound"; Filename: "{app}\minebound.exe"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\minebound.exe"; Description: "Play Minebound"; Flags: nowait postinstall skipifsilent

@@ -65,10 +65,9 @@ place.
 | Switch board | Click a board tab (free, any time in your turn) |
 | Socket a gem | Drag it from your stacks into a skill's matching socket; the skill fires once every socket is full |
 | Take a gem back | Click the filled socket |
-| Strike | Drop a gem on the enemy, or click it |
-| Cast a skill at once | Click a lit skill |
+| Strike | Drag a gem onto the enemy |
 | Cast everything | Unleash all |
-| Keep stacks for later | End turn |
+| End your turn (unspent stacks are kept) | End turn, or Space |
 | Abandon the run | Retreat (top right, outside battle) |
 | Sound on / off | M |
 | Next song | N |
