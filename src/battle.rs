@@ -184,6 +184,9 @@ impl Battle {
 
     /// Damage of the next skill by `s` that spends `spent` stacks (before the target's shield).
     pub fn hit_damage(&self, s: usize, spent: usize, combo: Option<&Combo>) -> i32 {
+        if self.f[1 - s].evades_left > 0 {
+            return 0; // it will miss
+        }
         self.dmg(s, spent, combo, self.f[s].cast_n)
     }
 
@@ -233,18 +236,20 @@ impl Battle {
     /// Total damage if `s` emptied its stacks now, biggest combos first.
     pub fn attack_damage(&self, s: usize) -> i32 {
         let mut stacks = self.f[s].stacks.clone();
-        let (mut total, mut nth) = (0, self.f[s].cast_n);
+        let (mut total, mut nth, mut evades) = (0, self.f[s].cast_n, self.f[1 - s].evades_left);
+        // the first `evades` hits miss: no damage, but they still count toward the turn's rites
+        let mut hit = |d: i32, total: &mut i32| if evades > 0 { evades -= 1 } else { *total += d };
         while let Some(c) = self.best_combo(s, &stacks) {
             let cost = self.f[s].cost(c);
             spend(&mut stacks, &cost);
             let echo = if c.needs.len() == 3 && self.f[s].mods.echo > 0 { 2 } else { 1 };
             for _ in 0..echo {
-                total += self.dmg(s, cost.len(), Some(c), nth);
+                hit(self.dmg(s, cost.len(), Some(c), nth), &mut total);
                 nth += 1;
             }
         }
         for _ in 0..stacks.len() {
-            total += self.dmg(s, 1, None, nth);
+            hit(self.dmg(s, 1, None, nth), &mut total);
             nth += 1;
         }
         total
@@ -407,6 +412,18 @@ impl Battle {
             self.proc(a, "sense");
             return true;
         }
+        if board.tiles[i].mine && !board.fresh && self.f[a].duds > 0 {
+            // Lucky Coin: a dud is found harmlessly, so it breaks no crystal and keeps surge; the reveal is spent
+            board.tiles[i].flagged = true;
+            let f = &mut self.f[a];
+            (f.duds, f.reveals_left) = (f.duds - 1, f.reveals_left - 1);
+            let msg = format!("{} hits a dud mine.", f.name);
+            self.log.push(msg);
+            self.events.push(Event::Flip);
+            self.proc(a, "duds");
+            self.tidy(a);
+            return true;
+        }
         let flip = self.f[a].boards[cur].flip(i, &mut self.rng);
         let jam = self.surge_cap(a);
         let f = &mut self.f[a];
@@ -443,23 +460,13 @@ impl Battle {
         if salvaged {
             f.stacks.extend(std::iter::repeat(element).take(flip.broken));
         }
-        let d = if f.duds > 0 {
-            f.duds -= 1;
-            None
-        } else {
-            f.surge = 0;
-            Some((MINE_DMG - f.mods.mine_guard).max(0))
-        };
+        f.surge = 0;
+        let d = (MINE_DMG - f.mods.mine_guard).max(0);
         let (spite, keep_going, guard) = (f.mods.mine_spite, f.mods.mine_no_end > 0, f.mods.mine_guard);
-        self.procs(a, &[("salvage", salvaged), ("duds", d.is_none())]);
+        self.procs(a, &[("salvage", salvaged)]);
         if spent {
             self.deal_board(a, cur);
         }
-        let Some(d) = d else {
-            self.log.push(format!("{name} hits a dud mine."));
-            self.tidy(a);
-            return true;
-        };
         self.hurt(a, d);
         self.log.push(format!("{name} hits a mine: -{d}"));
         self.procs(a, &[("mine_guard", guard > 0)]);
@@ -513,10 +520,13 @@ impl Battle {
             return false;
         }
         spend(&mut self.f[a].stacks, &cost);
-        let wave = self.wave;
+        let (wave, burn) = (self.wave, self.f[1 - a].burn);
         self.land(a, cost.len(), Some(c), c.needs[0]);
         if c.needs.len() == 3 && self.f[a].mods.echo > 0 && self.wave == wave && !self.over() {
-            // Echo Chamber: the same combo again, free
+            // Echo Chamber: the same combo again, free. An echoed Detonate sets off the same burn again.
+            if c.effects.iter().any(|e| matches!(e, Effect::Detonate)) {
+                self.f[1 - a].burn = burn;
+            }
             self.proc(a, "echo");
             self.land(a, cost.len(), Some(c), c.needs[0]);
         }
@@ -822,6 +832,7 @@ mod tests {
         assert_eq!(b.hit_damage(0, 1, None), 1, "3 power minus 2 armor");
         b.f[1].mods.armor = 0;
         b.f[1].evades_left = 1;
+        assert_eq!((b.hit_damage(0, 1, None), b.attack_damage(0)), (0, 3), "previews know the first hit misses");
         b.strike(0);
         assert_eq!(b.f[1].hp, 100, "the first skill misses");
         b.strike(0);
@@ -876,6 +887,15 @@ mod tests {
         assert_eq!(b.f[1].hp, 100 - 16 * 2);
         assert!(b.events.iter().any(|e| matches!(e, Event::Proc { side: 0, hook: "echo" })));
 
+        // an echoed Eruption detonates the burn twice, as its preview promised
+        let mut b = duel();
+        b.f[0].mods.echo = 1;
+        b.f[0].stacks = vec![Ember, Gale, Stone];
+        (b.f[1].burn, b.f[1].burn_dmg) = (3, 2);
+        let promised = b.attack_damage(0);
+        assert!(b.cast(combo("Eruption")));
+        assert_eq!((b.f[1].hp, b.f[1].burn), (100 - promised, 0));
+
         // Hourglass and Hoarder's Sack: unused reveals and banked stacks become shield
         let mut b = duel();
         b.f[0].mods.reveal_shield = 2;
@@ -907,6 +927,25 @@ mod tests {
         assert!(b.reveal(mine));
         assert!(b.f[0].board().tiles[mine].flagged && !b.f[0].board().tiles[mine].revealed);
         assert_eq!((b.f[0].hp, b.f[0].reveals_left, b.active), (hp, reveals, 0));
+
+        // Lucky Coin: a dud costs the reveal but no HP, no surge, no turn, and breaks no crystal
+        for seed in 0..200 {
+            let me = Fighter::new("Me", 0, "", 50, 50, 3, &[Ember], Mods::default(), 3);
+            let foe = Fighter::new("Foe", 0, "", 100, 100, 1, &[Tide], Mods::default(), 3);
+            let mut b = Battle::new(me, vec![foe], Rng::new(seed));
+            b.f[0].boards[0].fresh = false;
+            b.f[0].duds = 1;
+            b.f[0].surge = 2;
+            let board = b.f[0].board();
+            let Some(mine) = (0..N).find(|&i| board.tiles[i].mine && board.open(i) && Board::neighbors(i).any(|j| board.live(j))) else { continue };
+            let (hp, reveals) = (b.f[0].hp, b.f[0].reveals_left);
+            assert!(b.reveal(mine));
+            let board = b.f[0].board();
+            assert!(board.tiles[mine].flagged && Board::neighbors(mine).all(|j| !board.tiles[j].broken));
+            assert_eq!((b.f[0].hp, b.f[0].reveals_left, b.f[0].surge, b.f[0].duds, b.active), (hp, reveals - 1, 2, 0, 0));
+            return;
+        }
+        panic!("no seed put a mine next to a crystal");
     }
 
     #[test]

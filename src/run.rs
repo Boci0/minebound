@@ -143,8 +143,9 @@ impl Run {
     }
 
     /// Up to `n` charms the player does not own yet; rarer ones come up less often.
-    fn offer(&mut self, n: usize) -> Vec<usize> {
-        let mut pool: Vec<usize> = (0..CHARMS.len()).filter(|i| !self.charms.contains(i) && !self.given.contains(i)).collect();
+    /// `avoid`: ids not to offer this time (the wares a restock replaces).
+    fn offer(&mut self, n: usize, avoid: &[usize]) -> Vec<usize> {
+        let mut pool: Vec<usize> = (0..CHARMS.len()).filter(|i| !self.charms.contains(i) && !self.given.contains(i) && !avoid.contains(i)).collect();
         let mut ids = vec![];
         while ids.len() < n && !pool.is_empty() {
             let total: usize = pool.iter().map(|&i| CHARMS[i].rarity.weight()).sum();
@@ -163,7 +164,7 @@ impl Run {
     }
 
     fn pick(&mut self) -> Stage {
-        let options = self.offer(3);
+        let options = self.offer(3, &[]);
         if options.is_empty() {
             self.shards += 20;
             return self.after_node();
@@ -289,7 +290,7 @@ impl Run {
             }
             NodeKind::Encounter => Stage::Event(&ENCOUNTERS[self.rng.below(ENCOUNTERS.len())], None),
             NodeKind::Rest => Stage::Event(&REST, None),
-            NodeKind::Shop => Stage::Shop(self.stock(0)),
+            NodeKind::Shop => Stage::Shop(self.stock(0, &[])),
             NodeKind::Treasure => self.pick(),
         }
     }
@@ -362,7 +363,7 @@ impl Run {
                     self.shards = (self.shards + v).max(0);
                     msg.push(format!("{v:+} shards."));
                 }
-                Out::GainCharm => match self.offer(1).first() {
+                Out::GainCharm => match self.offer(1, &[]).first() {
                     Some(&id) => {
                         self.add_charm(id);
                         msg.push(format!("Found a pact: {}.", CHARMS[id].name));
@@ -397,8 +398,8 @@ impl Run {
         msg.push(format!("{:+} HP.", self.hp - before));
     }
 
-    fn stock(&mut self, restocks: i32) -> Shop {
-        let ids = self.offer(SHOP_SIZE);
+    fn stock(&mut self, restocks: i32, avoid: &[usize]) -> Shop {
+        let ids = self.offer(SHOP_SIZE, avoid);
         let sale = self.rng.below(ids.len().max(1));
         Shop { stock: ids.into_iter().map(Some).collect(), sale, restocks }
     }
@@ -434,7 +435,8 @@ impl Run {
             return false;
         }
         self.shards -= price;
-        *shop = self.stock(shop.restocks + 1);
+        let shelf: Vec<usize> = shop.stock.iter().flatten().copied().collect();
+        *shop = self.stock(shop.restocks + 1, &shelf);
         true
     }
 
@@ -467,6 +469,18 @@ mod tests {
         run.choose(&swap.choices[0], Some(5));
         assert!(!run.charms.contains(&5) && run.charms.contains(&3) && run.charms.contains(&8));
         assert_eq!(run.charms.len(), 4);
+    }
+
+    #[test]
+    fn a_restock_never_brings_back_the_wares_it_replaces() {
+        for seed in 0..50 {
+            let (mut run, _) = Run::new(seed, 0, 0);
+            run.shards = 1000;
+            let mut shop = run.stock(0, &[]);
+            let before: Vec<usize> = shop.stock.iter().flatten().copied().collect();
+            assert!(run.restock(&mut shop));
+            assert!(shop.stock.iter().flatten().all(|id| !before.contains(id)), "seed {seed}");
+        }
     }
 
     #[test]

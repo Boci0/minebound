@@ -1529,11 +1529,14 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         for s in 0..2 {
             let f = &b.f[s];
             let (hp, n) = (f.hp.max(0), f.stacks.len());
-            let fresh = !fx.live || (s == 1 && fx.wave != b.wave);
+            let next_wave = fx.live && s == 1 && fx.wave != b.wave;
+            let fresh = !fx.live || next_wave;
             if fresh {
                 fx.ghost[s] = hp as f32;
-            } else if hp != fx.hp[s] {
-                let d = hp - fx.hp[s];
+            }
+            // a wave's killing blow took whatever the fallen enemy had left
+            let d = if next_wave { -fx.hp[s] } else if fresh { 0 } else { hp - fx.hp[s] };
+            if d != 0 {
                 // the number waits until the skill that caused it visibly lands
                 let at = fx.shots.iter().filter(|sh| sh.from != s).map(lands_at).fold(now, f64::max);
                 let big = d <= -15;
@@ -1617,15 +1620,15 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         let mut x = ex + FOE.w;
         if dmg > 0 {
             let s = format!("{dmg} dmg");
-            right(&s, x, 276.0, 16.0, INK);
+            right(&s, x, 294.0, 16.0, INK);
             x -= measure(&s, 16.0).width + 12.0;
         }
         for &e in signs.iter().rev() {
-            gem(e, vec2(x - 8.0, 271.0), 8.0);
+            gem(e, vec2(x - 8.0, 289.0), 8.0);
             x -= 20.0;
         }
-        right(what, x - 4.0, 276.0, 16.0, INK);
-        right("NEXT", x - 16.0 - measure(what, 16.0).width, 276.0, 15.0, MUTED);
+        right(what, x - 4.0, 294.0, 16.0, INK);
+        right("NEXT", x - 16.0 - measure(what, 16.0).width, 294.0, 15.0, MUTED);
 
         // its board, shrunk to a preview, and its stacks
         let fb = foe.board();
@@ -1935,7 +1938,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             stamped(&format!("Strike {}", b.hit_damage(0, 1, None)), 640.0, 196.0, 40.0, INK);
         }
         if !is_mouse_button_down(MouseButton::Left) {
-            let target = targets.iter().find(|(r, _, cost)| r.contains(mouse()) && cost.contains(&e));
+            let target = targets.iter().find(|(r, _, _)| r.contains(mouse()));
             if at_enemy {
                 strike = Some(k);
             } else if let Some((r, c, cost)) = target {
@@ -1948,6 +1951,11 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
                     let j = cost.iter().enumerate().filter(|x| *x.1 == e).nth(nth).map_or(0, |x| x.0);
                     burst(vec2(rx + 350.0 - (cost.len() - j) as f32 * 32.0 + 19.0, r.y + 23.0), 14, 160.0, 6.0, el_color(e));
                     play(Sfx::Claim);
+                } else {
+                    // refused: say why instead of silently handing the gem back
+                    let why = if cost.contains(&e) { "FULL" } else { "WRONG GEM" };
+                    fx(|fx| fx.floats.push((mouse(), why.into(), MUTED, now, 22.0)));
+                    play(Sfx::Miss);
                 }
                 if v.len() >= cost.len() {
                     sockets.remove(c.name);
