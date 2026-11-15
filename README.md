@@ -11,7 +11,18 @@ question: fire now, or flip one more? The enemy plays by exactly the same rules,
 Between fights you pick a route through a branching map of battles, elites, encounters, shops, rests
 and treasure, collecting charms that bend the rules, across three floors and three bosses.
 
-## Get the game
+## Install (Windows)
+
+1. Download `Minebound-setup.exe` from the
+   [latest release](https://github.com/Boci0/minebound/releases/latest).
+2. Run it. If Windows says it protected your PC, click More info, then Run anyway (the game is not
+   code-signed). No admin rights are needed.
+3. Start Minebound from the Start menu, or from the desktop shortcut if you ticked that box.
+
+To update, download the new `Minebound-setup.exe` and run it: it replaces the old version in place.
+To uninstall, go to Settings, Apps, Installed apps, Minebound.
+
+## Build from source
 
 You need [Git](https://git-scm.com) and [Rust](https://rustup.rs). On Windows, the Rust installer
 also asks for the Visual Studio C++ build tools; say yes. Then:
@@ -19,38 +30,11 @@ also asks for the Visual Studio C++ build tools; say yes. Then:
 ```
 git clone https://github.com/Boci0/minebound.git
 cd minebound
-cargo build --release
-```
-
-The first build takes a few minutes.
-
-## Run
-
-```
 cargo run --release
 ```
 
-`cargo run --release -- 42` replays the run with seed 42.
-
-### Update
-
-Close the game first, then, in the game's folder:
-
-```
-git pull
-cargo build --release
-```
-
-### Desktop shortcut (Windows)
-
-Build once with `cargo build --release`, then run this in PowerShell from the game's folder:
-
-```powershell
-$s = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Desktop'))\Minebound.lnk"); $s.TargetPath = "$PWD\target\release\minebound.exe"; $s.WorkingDirectory = "$PWD"; $s.Save()
-```
-
-The shortcut starts the game from its folder, so the music is found. It keeps working after an
-update, since the update rebuilds the same file.
+The first build takes a few minutes. `cargo run --release -- 42` replays the run with seed 42.
+To update, close the game and run `git pull` and `cargo run --release` again.
 
 ## Controls
 

@@ -1,3 +1,6 @@
+// no console window behind the game on Windows when it is double-clicked
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod battle;
 mod board;
 mod data;
@@ -52,7 +55,7 @@ impl Music {
         }
         self.order.rotate_left(1);
         let (name, secs) = TRACKS[self.order[0]];
-        match load_sound(&format!("assets/music/{name}.ogg")).await {
+        match load_sound(&music_path(name)).await {
             Ok(s) => {
                 play_sound(&s, PlaySoundParams { looped: false, volume: ui::music_volume() * MUSIC_VOLUME });
                 self.playing = Some(s);
@@ -65,6 +68,13 @@ impl Music {
             }
         }
     }
+}
+
+/// assets/music beside the exe (installed game), else from the working folder (cargo run).
+fn music_path(name: &str) -> String {
+    let file = format!("assets/music/{name}.ogg");
+    let beside_exe = std::env::current_exe().ok().and_then(|exe| Some(exe.parent()?.join(&file)));
+    beside_exe.filter(|p| p.exists()).map_or(file, |p| p.to_string_lossy().into_owned())
 }
 
 fn conf() -> Conf {

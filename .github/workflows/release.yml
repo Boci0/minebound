@@ -1,0 +1,27 @@
+# Push a tag like v0.2.0 and this builds the Windows installer and attaches it to a GitHub release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release --locked
+      - name: Installer
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DVersion=$version" installer\minebound.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create ${{ github.ref_name }} dist/Minebound-setup.exe --title "Minebound ${{ github.ref_name }}" --generate-notes
