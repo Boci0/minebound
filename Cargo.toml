@@ -6,6 +6,8 @@ license = "MIT"
 
 [dependencies]
 macroquad = { version = "0.4", default-features = false, features = ["audio"] }
+# the vendored copy below, named directly so the game can muffle the mix
+quad-snd = "0.2.8"
 
 # quad-snd with sound decoding moved off the game thread (see vendor/quad-snd/src/mixer.rs, "minebound patch")
 [patch.crates-io]

@@ -14,6 +14,7 @@ pub use error::Error;
 mod snd;
 
 mod mixer;
+pub use mixer::set_muffle;
 
 pub use snd::{AudioContext, Playback, Sound};
 

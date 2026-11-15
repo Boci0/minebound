@@ -1,9 +1,9 @@
-Music: "Winter Lofi" by HoliznaCC0
-https://freemusicarchive.org/music/holiznacc0/winter-lofi
+Music: "Stranger Than Fiction ( Halloween / Sci Fi )" by HoliznaCC0
+https://freemusicarchive.org/music/holiznacc0/stranger-than-fiction-halloween-sci-fi
 
-Tracks: 2 Hour Delay, Winter Blues, First Snow, Snow Drift, Fire Place
+Tracks: Somethings Out There, Burning In The Atmosphere, An Ocean in Outer Space, Little Green Men, Sky Fish
 
 License: Creative Commons Zero (CC0 1.0 Universal), public domain
 https://creativecommons.org/publicdomain/zero/1.0/
 
-Re-encoded from MP3 to Ogg Vorbis for this game.
+Re-encoded from MP3 to 44.1 kHz Ogg Vorbis for this game.

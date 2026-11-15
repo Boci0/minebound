@@ -2,8 +2,17 @@ use crate::{AudioContext, PlaySoundParams};
 
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc;
+
+/// minebound patch: how muffled everything sounds, 0.0 (clear) to 1.0 (heavily low-passed), as f32 bits
+static MUFFLE: AtomicU32 = AtomicU32::new(0);
+
+/// Muffles the whole mix, like hearing it through a wall: 0.0 is clear, 1.0 is heaviest.
+pub fn set_muffle(amount: f32) {
+    MUFFLE.store(amount.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
 
 enum AudioMessage {
     AddSound(u32, Arc<[f32]>),
@@ -48,6 +57,8 @@ pub struct Mixer {
     mixer_state: Vec<SoundState>,
     /// plays of sounds still decoding; they start when the samples arrive
     waiting: Vec<SoundState>,
+    /// low-pass filter memory, left and right
+    low: [f32; 2],
 }
 
 pub struct MixerBuilder {
@@ -138,6 +149,7 @@ impl MixerBuilder {
             sounds: HashMap::new(),
             mixer_state: vec![],
             waiting: vec![],
+            low: [0.0; 2],
         }
     }
 }
@@ -245,6 +257,20 @@ impl Mixer {
                 i += 1;
             }
         }
+
+        // one-pole low-pass on the interleaved stereo mix; at full muffle the corner is about 500 Hz
+        let muffle = f32::from_bits(MUFFLE.load(Ordering::Relaxed));
+        if muffle > 0.0 {
+            let k = 1.0 - 0.93 * muffle;
+            for frame in buffer.chunks_exact_mut(2) {
+                for (s, low) in frame.iter_mut().zip(&mut self.low) {
+                    *low += (*s - *low) * k;
+                    *s = *low;
+                }
+            }
+        } else {
+            self.low = [0.0; 2];
+        }
     }
 }
 
@@ -327,5 +353,19 @@ mod tests {
         }
         assert_eq!(buf, [0.5; 4]);
         assert!(mixer.waiting.is_empty());
+    }
+
+    #[test]
+    fn muffle_smooths_a_jump_and_off_passes_it_through() {
+        let (builder, _ctl) = Mixer::new();
+        let mut mixer = builder.build();
+        mixer.mixer_state.push(SoundState { sound_id: 0, play_id: 0, sample: 0, data: Arc::new([1.0; 8]), looped: false, volume: 1.0 });
+        set_muffle(1.0);
+        let mut buf = [0.0f32; 4];
+        mixer.fill_audio_buffer(&mut buf, 2);
+        assert!(buf[0] < 0.1 && buf[2] > buf[0], "a step rises slowly when muffled: {buf:?}");
+        set_muffle(0.0);
+        mixer.fill_audio_buffer(&mut buf, 2);
+        assert_eq!(buf, [1.0; 4]);
     }
 }

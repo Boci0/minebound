@@ -53,6 +53,8 @@ pub struct Fighter {
     /// AI only: it has decided to empty its stacks this turn
     firing: bool,
     pub mods: Mods,
+    /// skills upgraded by boss kills, by index in `COMBOS`; a repeat is another level
+    pub ups: Vec<usize>,
 }
 
 impl Fighter {
@@ -65,6 +67,28 @@ impl Fighter {
         let (name, desc, elements) = (name.into(), desc.into(), elements.to_vec());
         Fighter { name, sprite, desc, hp, max_hp, power: power + mods.power, elements, aggro, mods, ..Default::default() }
     }
+
+    pub fn level(&self, c: &Combo) -> usize {
+        let id = combo_id(c);
+        1 + self.ups.iter().filter(|&&u| u == id).count()
+    }
+
+    /// The gems `c` takes from this fighter, at its level.
+    pub fn cost(&self, c: &Combo) -> Vec<Element> {
+        c.cost(self.level(c))
+    }
+}
+
+/// True if `stacks` hold every gem in `cost`, repeats included.
+pub fn pays(stacks: &[Element], cost: &[Element]) -> bool {
+    cost.iter().all(|e| cost.iter().filter(|&x| x == e).count() <= stacks.iter().filter(|&x| x == e).count())
+}
+
+fn spend(stacks: &mut Vec<Element>, cost: &[Element]) {
+    for e in cost {
+        let k = stacks.iter().position(|x| x == e).expect("checked with pays");
+        stacks.remove(k);
+    }
 }
 
 /// Things that just happened, for the screen to animate and voice.
@@ -72,7 +96,8 @@ pub enum Event {
     Flip,
     Claim,
     Mine,
-    Cast { from: usize, name: &'static str, element: Element, miss: bool },
+    /// `skill`: (index in `COMBOS`, level), or None for a Strike
+    Cast { from: usize, name: &'static str, element: Element, miss: bool, skill: Option<(usize, usize)> },
     /// a passive of `side` just took effect; `hook` names the `Mods` field
     Proc { side: usize, hook: &'static str },
 }
@@ -134,9 +159,9 @@ impl Battle {
         self.f[1].hp = 0;
     }
 
-    /// Combos `s` can pay for right now: one stack of each element the combo needs.
+    /// Combos `s` can pay for right now, at their level.
     pub fn ready(&self, s: usize) -> Vec<&'static Combo> {
-        COMBOS.iter().filter(|c| c.needs.iter().all(|e| self.f[s].stacks.contains(e))).collect()
+        COMBOS.iter().filter(|c| pays(&self.f[s].stacks, &self.f[s].cost(c))).collect()
     }
 
     /// Overpressure: long fights escalate, so no shield or regen build can stall forever.
@@ -175,9 +200,10 @@ impl Battle {
         let mut d = spent as i32 * power + nth * f.mods.chain;
         match combo {
             Some(c) => {
+                let lvl = f.level(c);
                 for e in c.effects {
                     if let Effect::Damage(v) = e {
-                        d += v * (100 + f.mods.combo_pct) / 100;
+                        d += at_level(*v, lvl) * (100 + f.mods.combo_pct) / 100;
                     }
                 }
             }
@@ -194,23 +220,21 @@ impl Battle {
         (d - self.f[1 - s].mods.armor).max(1)
     }
 
-    /// The biggest combo the given stacks can pay for.
-    fn best_combo(stacks: &[Element]) -> Option<&'static Combo> {
-        COMBOS.iter().filter(|c| c.needs.iter().all(|e| stacks.contains(e))).max_by_key(|c| c.needs.len())
+    /// The biggest combo of `s` the given stacks can pay for.
+    pub fn best_combo(&self, s: usize, stacks: &[Element]) -> Option<&'static Combo> {
+        COMBOS.iter().filter(|c| pays(stacks, &self.f[s].cost(c))).max_by_key(|c| self.f[s].cost(c).len())
     }
 
     /// Total damage if `s` emptied its stacks now, biggest combos first.
     pub fn attack_damage(&self, s: usize) -> i32 {
         let mut stacks = self.f[s].stacks.clone();
         let (mut total, mut nth) = (0, self.f[s].cast_n);
-        while let Some(c) = Self::best_combo(&stacks) {
-            for e in c.needs {
-                let k = stacks.iter().position(|x| x == e).unwrap();
-                stacks.remove(k);
-            }
+        while let Some(c) = self.best_combo(s, &stacks) {
+            let cost = self.f[s].cost(c);
+            spend(&mut stacks, &cost);
             let echo = if c.needs.len() == 3 && self.f[s].mods.echo > 0 { 2 } else { 1 };
             for _ in 0..echo {
-                total += self.dmg(s, c.needs.len(), Some(c), nth);
+                total += self.dmg(s, cost.len(), Some(c), nth);
                 nth += 1;
             }
         }
@@ -479,19 +503,17 @@ impl Battle {
     /// Cast a combo skill, paying one stack of each element it needs.
     pub fn cast(&mut self, c: &'static Combo) -> bool {
         let a = self.active;
-        if self.over() || !c.needs.iter().all(|e| self.f[a].stacks.contains(e)) {
+        let cost = self.f[a].cost(c);
+        if self.over() || !pays(&self.f[a].stacks, &cost) {
             return false;
         }
-        for e in c.needs {
-            let k = self.f[a].stacks.iter().position(|x| x == e).unwrap();
-            self.f[a].stacks.remove(k);
-        }
+        spend(&mut self.f[a].stacks, &cost);
         let wave = self.wave;
-        self.land(a, c.needs.len(), Some(c), c.needs[0]);
+        self.land(a, cost.len(), Some(c), c.needs[0]);
         if c.needs.len() == 3 && self.f[a].mods.echo > 0 && self.wave == wave && !self.over() {
             // Echo Chamber: the same combo again, free
             self.proc(a, "echo");
-            self.land(a, c.needs.len(), Some(c), c.needs[0]);
+            self.land(a, cost.len(), Some(c), c.needs[0]);
         }
         true
     }
@@ -499,7 +521,7 @@ impl Battle {
     /// Fire the single best thing the active side can afford. False when out of stacks.
     pub fn cast_best(&mut self) -> bool {
         let a = self.active;
-        match Self::best_combo(&self.f[a].stacks) {
+        match self.best_combo(a, &self.f[a].stacks) {
             Some(c) => self.cast(c),
             None => self.strike(self.f[a].stacks.len().wrapping_sub(1)),
         }
@@ -514,14 +536,16 @@ impl Battle {
     fn land(&mut self, a: usize, spent: usize, combo: Option<&'static Combo>, element: Element) {
         let t = 1 - a;
         let dmg = self.hit_damage(a, spent, combo);
-        let name = combo.map_or("Strike", |c| c.name);
+        let lvl = combo.map_or(1, |c| self.f[a].level(c));
+        let name = combo.map_or("Strike", |c| c.title(lvl));
+        let skill = combo.map(|c| (combo_id(c), lvl));
         let nth = self.f[a].cast_n;
         self.f[a].cast_n += 1;
         if self.f[t].evades_left > 0 {
             // the whole skill whiffs: no damage, no effects, stacks still spent
             self.f[t].evades_left -= 1;
             self.proc(t, "evade");
-            self.events.push(Event::Cast { from: a, name, element, miss: true });
+            self.events.push(Event::Cast { from: a, name, element, miss: true, skill });
             self.log.push(format!("{}: {name} misses", self.f[a].name));
             self.tidy(a);
             return;
@@ -546,23 +570,24 @@ impl Battle {
         let armored = self.f[t].mods.armor > 0;
         self.procs(t, &[("armor", armored)]);
         let pct = 100 + self.f[a].mods.combo_pct;
+        let up = |v: i32| at_level(v, lvl);
         for e in combo.map_or(&[][..], |c| c.effects) {
             match *e {
                 Effect::Damage(_) => {} // already in hit_damage
                 Effect::Burn(n) => {
-                    self.f[t].burn = self.f[t].burn.max(n);
+                    self.f[t].burn = self.f[t].burn.max(up(n));
                     self.f[t].burn_dmg = 2 + self.f[a].mods.burn_bonus;
                 }
-                Effect::Shield(v) => self.f[a].shield += v * pct / 100,
-                Effect::Heal(v) => self.f[a].hp = (self.f[a].hp + v * pct / 100).min(self.f[a].max_hp),
-                Effect::Weaken(n) => self.f[t].weak = self.f[t].weak.max(n),
+                Effect::Shield(v) => self.f[a].shield += up(v) * pct / 100,
+                Effect::Heal(v) => self.f[a].hp = (self.f[a].hp + up(v) * pct / 100).min(self.f[a].max_hp),
+                Effect::Weaken(n) => self.f[t].weak = self.f[t].weak.max(up(n)),
                 Effect::Drain(n) => {
-                    let keep = self.f[t].stacks.len().saturating_sub(n);
+                    let keep = self.f[t].stacks.len().saturating_sub(up(n as i32) as usize);
                     self.f[t].stacks.truncate(keep);
                 }
                 Effect::Scout(n) => {
                     let cur = self.f[a].cur;
-                    self.f[a].boards[cur].flag_mines(n);
+                    self.f[a].boards[cur].flag_mines(up(n as i32) as usize);
                 }
                 Effect::Pierce => self.f[t].shield = 0,
             }
@@ -576,7 +601,7 @@ impl Battle {
             self.hurt(a, thorns);
             self.proc(t, "thorns");
         }
-        self.events.push(Event::Cast { from: a, name, element, miss: false });
+        self.events.push(Event::Cast { from: a, name, element, miss: false, skill });
         self.log.push(format!("{}: {name} for {dmg}", self.f[a].name));
         if !self.settle() {
             self.tidy(a);
@@ -729,6 +754,24 @@ mod tests {
         assert_eq!(b.f[1].hp, 91);
         assert!(b.f[0].stacks.is_empty());
         assert_eq!(b.events.iter().filter(|e| matches!(e, Event::Cast { .. })).count(), 2);
+    }
+
+    #[test]
+    fn an_upgraded_skill_costs_one_more_gem_and_hits_harder() {
+        let mut b = duel();
+        let steam = combo("Steam Burst");
+        b.f[0].elements = vec![Ember, Tide];
+        b.f[0].ups = vec![combo_id(steam)];
+        assert_eq!(b.f[0].cost(steam), vec![Ember, Tide, Ember]);
+        b.f[0].stacks = vec![Ember, Tide];
+        assert!(!b.cast(steam), "two gems no longer pay for it");
+        b.f[0].stacks = vec![Ember, Tide, Ember];
+        // 3 stacks x 3 power + 6 x 1.5
+        assert_eq!(b.attack_damage(0), 18);
+        assert!(b.cast(steam));
+        assert_eq!((b.f[1].hp, b.f[0].stacks.len()), (82, 0));
+        assert!(b.events.iter().any(|e| matches!(e, Event::Cast { name: "Scald Geyser", .. })));
+        assert_eq!(steam.describe(3), "+12 damage");
     }
 
     #[test]

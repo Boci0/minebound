@@ -1,0 +1,108 @@
+//! Progress kept between launches, as a few lines of text in %APPDATA%\Minebound\save.txt.
+//! No mid-run save: only what the overworld and the settings need.
+
+use crate::data::{EXPEDITIONS, HEROES};
+use crate::run::FLOORS;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Save {
+    /// how many expeditions are open, from the first
+    pub unlocked: usize,
+    /// best[expedition][hero]: 0 never tried, n reached floor n, FLOORS + 1 cleared it
+    pub best: Vec<Vec<usize>>,
+    /// (music, sound effects), each 0..=10
+    pub volume: (i32, i32),
+}
+
+impl Default for Save {
+    fn default() -> Save {
+        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8) }
+    }
+}
+
+pub const CLEARED: usize = FLOORS + 1;
+
+fn path() -> Option<std::path::PathBuf> {
+    Some(std::path::Path::new(&std::env::var_os("APPDATA")?).join("Minebound").join("save.txt"))
+}
+
+impl Save {
+    /// A missing or damaged file gives a fresh save; any line it can read still counts.
+    pub fn load() -> Save {
+        path().and_then(|p| std::fs::read_to_string(p).ok()).map_or_else(Save::default, |s| Save::parse(&s))
+    }
+
+    fn parse(s: &str) -> Save {
+        let mut save = Save::default();
+        for line in s.lines() {
+            let mut w = line.split_whitespace();
+            let key = w.next();
+            let nums: Vec<usize> = w.filter_map(|x| x.parse().ok()).collect();
+            match (key, nums.as_slice()) {
+                (Some("unlocked"), &[n]) => save.unlocked = n.clamp(1, EXPEDITIONS.len()),
+                (Some("volume"), &[m, s]) => save.volume = (m.min(10) as i32, s.min(10) as i32),
+                (Some("best"), &[x, ref heroes @ ..]) if x < EXPEDITIONS.len() => {
+                    for (h, &b) in heroes.iter().enumerate().take(HEROES.len()) {
+                        save.best[x][h] = b.min(CLEARED);
+                    }
+                }
+                _ => {}
+            }
+        }
+        save
+    }
+
+    fn text(&self) -> String {
+        let mut s = format!("unlocked {}\nvolume {} {}\n", self.unlocked, self.volume.0, self.volume.1);
+        for (x, heroes) in self.best.iter().enumerate() {
+            let list: Vec<String> = heroes.iter().map(|b| b.to_string()).collect();
+            s += &format!("best {x} {}\n", list.join(" "));
+        }
+        s
+    }
+
+    /// Losing progress to a failed write is not worth crashing over; it is retried at the next change.
+    pub fn store(&self) {
+        let Some(p) = path() else { return };
+        let write = || -> std::io::Result<()> {
+            std::fs::create_dir_all(p.parent().unwrap())?;
+            // write aside, then swap in, so a crash mid-write cannot leave half a file
+            let tmp = p.with_extension("tmp");
+            std::fs::write(&tmp, self.text())?;
+            std::fs::rename(&tmp, &p)
+        };
+        if let Err(e) = write() {
+            eprintln!("progress not saved: {e}");
+        }
+    }
+
+    /// Notes how far `hero` got on expedition `exp`. Returns the expedition this opened, if any.
+    pub fn record(&mut self, exp: usize, hero: usize, floor_reached: usize, won: bool) -> Option<usize> {
+        let b = &mut self.best[exp][hero];
+        *b = (*b).max(if won { CLEARED } else { floor_reached });
+        (won && exp + 1 == self.unlocked && self.unlocked < EXPEDITIONS.len()).then(|| {
+            self.unlocked += 1;
+            exp + 1
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_save_reads_back_the_same_and_survives_junk() {
+        let mut s = Save::default();
+        assert_eq!(s.record(0, 1, 2, false), None);
+        assert_eq!(s.record(0, 2, 3, true), Some(1));
+        // winning an older expedition again opens nothing new
+        assert_eq!(s.record(0, 0, 3, true), None);
+        s.volume = (3, 10);
+        assert_eq!(Save::parse(&s.text()), s);
+        assert_eq!(s.best[0], vec![CLEARED, 2, CLEARED]);
+        let junk = Save::parse("unlocked 99\nbest 0 1 x\nbest 77 1\nvolume 4\nnonsense");
+        assert_eq!(junk.unlocked, EXPEDITIONS.len());
+        assert_eq!(junk.volume, (6, 8));
+    }
+}

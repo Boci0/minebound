@@ -1,0 +1,11 @@
+Glyphs from game-icons.net, CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/).
+Recoloured with a gradient and glow for Minebound.
+
+darkzaitzev: smoke-bomb
+delapouite: wizard-face, blacksmith, golem-head, rat, ant, goblin-head, mermaid, spell-book, coins-pile, two-coins, water-diviner-stick, meal, toolbox, time-dynamite, running-shoe, dynamite, barrel
+faithtoken: nautilus-shell
+kier-heyl: dwarf-helmet
+lorc: hound, imp-laugh, spark-spirit, leeching-worm, butterfly, thorny-vine, harpy, ifrit, octopus, cultist, robot-golem, crossed-swords, horned-skull, campfire, crowned-skull, hood, rune-stone, swap-bag, sprint, thorn-helix, treasure-map, crystal-shine, burning-embers, droplets, crystal-growth, breastplate, root-tip, glowing-hands, tripwire, meditation, crystal-cluster, recycle, hourglass, knapsack, gems, shard-sword, third-eye, echo-ripples, battle-axe
+priorblue: battery-plus
+skoll: troll, open-treasure-chest, sound-waves, fangs, chess-knight
+willdabeast: chain-lightning

@@ -6,21 +6,31 @@ mod board;
 mod data;
 mod rng;
 mod run;
+mod save;
 mod sfx;
 mod ui;
 
 use macroquad::audio::{load_sound, load_sound_from_bytes, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
 use run::{Run, Stage};
+use save::Save;
+use ui::Go;
 
-/// Background music: "Winter Lofi" by HoliznaCC0 (CC0), read from assets/music beside the game.
+/// Which screen the game is on. A run carries the expedition its win opened, for the end screen.
+enum Screen {
+    Title,
+    World,
+    Run(Run, Stage, Option<usize>),
+}
+
+/// Background music: "Stranger Than Fiction" by HoliznaCC0 (CC0), read from assets/music beside the game.
 /// (file name, length in seconds)
 const TRACKS: [(&str, f64); 5] = [
-    ("two-hour-delay", 132.0),
-    ("winter-blues", 223.4),
-    ("first-snow", 174.1),
-    ("snow-drift", 173.6),
-    ("fire-place", 170.3),
+    ("somethings-out-there", 172.8),
+    ("burning-in-the-atmosphere", 264.8),
+    ("an-ocean-in-outer-space", 132.0),
+    ("little-green-men", 156.7),
+    ("sky-fish", 194.4),
 ];
 /// Loudness of the music at the top of the volume slider.
 const MUSIC_VOLUME: f32 = 0.5;
@@ -78,7 +88,7 @@ fn music_path(name: &str) -> String {
 }
 
 const ART: &[u8] = include_bytes!("../assets/tiny-dungeon/tilemap_packed.png");
-/// The Minelayer Queen (a mimic chest) is the window and taskbar icon; assets/icon.ico (shortcuts)
+/// A mimic chest from Tiny Dungeon is the window and taskbar icon; assets/icon.ico (shortcuts)
 /// shows the same sprite.
 const ICON_SPRITE: usize = 92;
 
@@ -116,13 +126,19 @@ fn conf() -> Conf {
 async fn main() {
     // `minebound <seed>` replays a run; otherwise the clock picks one
     let fixed_seed: Option<u64> = std::env::args().nth(1).and_then(|s| s.parse().ok());
-    // Kenney Mini for titles and Pixel Operator for rules text (both CC0), built into the exe
+    // Pirata One for titles and IBM Plex Mono for everything else (both SIL OFL), built into the exe
     ui::set_fonts(
-        load_ttf_font_from_bytes(include_bytes!("../assets/fonts/kenney-mini.ttf")).ok(),
-        load_ttf_font_from_bytes(include_bytes!("../assets/fonts/pixel-operator.ttf")).ok(),
+        load_ttf_font_from_bytes(include_bytes!("../assets/fonts/pirata-one.ttf")).ok(),
+        load_ttf_font_from_bytes(include_bytes!("../assets/fonts/ibm-plex-mono.ttf")).ok(),
     );
     // Tiny Dungeon by Kenney (CC0), built into the exe
-    ui::set_art(Texture2D::from_file_with_format(ART, None));
+    // characters and icons: game-icons.net glyphs (CC BY 3.0) baked into white silhouettes;
+    // spell effects: Kenney's Particle Pack (CC0)
+    ui::set_art(
+        Texture2D::from_file_with_format(ART, None),
+        Texture2D::from_file_with_format(include_bytes!("../assets/sigils/sigils-mono.png"), None),
+        Texture2D::from_file_with_format(include_bytes!("../assets/fx/particles.png"), None),
+    );
     let mut sounds = vec![];
     for (_, files) in sfx::SOUNDS {
         let mut takes = vec![];
@@ -136,22 +152,34 @@ async fn main() {
     ui::set_sounds(sounds);
     rand::srand((miniquad::date::now() * 1000.0) as u64);
     let mut music = Music::new();
-    let mut game: Option<(Run, Stage)> = None;
+    let mut save = Save::load();
+    ui::set_volume(save.volume);
+    // the newest open expedition and the first hero
+    let mut pick = (save.unlocked - 1, 0);
+    let mut screen = Screen::Title;
     let mut ai_timer = 0.0;
     loop {
         clear_background(ui::BG);
         ui::begin_frame();
         music.tick().await;
         let mut quit_run = false;
-        match &mut game {
-            None => {
-                if let Some(hero) = ui::heroes() {
+        let mut to = None;
+        match &mut screen {
+            Screen::Title => match ui::title() {
+                Some(Go::Play) => to = Some(Screen::World),
+                Some(Go::Back) => break,
+                None => {}
+            },
+            Screen::World => match ui::world(&save, &mut pick) {
+                Some(Go::Play) => {
                     let seed = fixed_seed.unwrap_or((miniquad::date::now() * 1000.0) as u64);
-                    game = Some(Run::new(seed, hero));
-                    ui::transition();
+                    let (run, stage) = Run::new(seed, pick.1, pick.0);
+                    to = Some(Screen::Run(run, stage, None));
                 }
-            }
-            Some((run, stage)) => {
+                Some(Go::Back) => to = Some(Screen::Title),
+                None => {}
+            },
+            Screen::Run(run, stage, opened) => {
                 // debug builds only: F9 or a middle click wins the current fight, to walk through a run quickly
                 if cfg!(debug_assertions) && (is_key_pressed(KeyCode::F9) || is_mouse_button_pressed(MouseButton::Middle)) {
                     if let Stage::Battle(b) = stage {
@@ -168,34 +196,54 @@ async fn main() {
                             run.after_node()
                         })
                     }
-                    Stage::Shop(stock) => {
+                    Stage::Upgrade(ids) => {
                         ui::status(run);
-                        ui::shop(run, stock).then(|| run.after_node())
+                        ui::upgrade(run, ids).map(|id| run.upgrade(id))
+                    }
+                    Stage::Shop(shop) => {
+                        ui::status(run);
+                        ui::shop(run, shop).then(|| run.after_node())
                     }
                     Stage::Event(e, result) => {
                         ui::status(run);
                         ui::event(run, e, result).then(|| run.after_node())
                     }
                     Stage::End(won) => {
-                        quit_run = ui::end(run, *won);
+                        quit_run = ui::end(run, *won, *opened);
                         None
                     }
                 };
-                // you may walk away from an expedition anywhere but mid-fight
-                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
+                // you may walk away from an expedition anywhere but mid-fight; how far you got still counts
+                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
+                    save.record(run.exp, run.hero, run.floor + 1, false);
+                    save.store();
                     quit_run = true;
                 }
                 if let Some(n) = next {
+                    if let Stage::End(won) = n {
+                        *opened = save.record(run.exp, run.hero, run.floor + 1, won);
+                        save.store();
+                        if let Some(x) = *opened {
+                            pick.0 = x;
+                        }
+                    }
                     *stage = n;
                     ui::transition();
                 }
             }
         }
         if quit_run {
-            game = None;
+            to = Some(Screen::World);
+        }
+        if let Some(s) = to {
+            screen = s;
             ui::transition();
         }
         ui::settings();
+        if ui::volume() != save.volume {
+            save.volume = ui::volume();
+            save.store();
+        }
         ui::end_frame();
         next_frame().await;
     }

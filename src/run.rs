@@ -10,6 +10,9 @@ pub const HEAL_PRICE: i32 = 20;
 pub const HEAL_AMOUNT: i32 = 12;
 /// HP everyone recovers after a won fight
 pub const BREATHER: i32 = 10;
+pub const SHOP_SIZE: usize = 4;
+/// the first restock; each one after costs this much more
+pub const RESTOCK_PRICE: i32 = 10;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NodeKind {
@@ -39,41 +42,65 @@ pub enum Stage {
     Map,
     Battle(Battle),
     Pick(Vec<usize>),
-    Shop(Vec<usize>),
+    /// a boss fell: pick one of these skills (by index in `COMBOS`) to upgrade
+    Upgrade(Vec<usize>),
+    Shop(Shop),
     Event(&'static Encounter, Option<String>),
     End(bool),
+}
+
+/// A shop visit. Bought wares leave an empty (`None`) spot on the counter.
+pub struct Shop {
+    pub stock: Vec<Option<usize>>,
+    /// the ware sold at a quarter off
+    pub sale: usize,
+    pub restocks: i32,
 }
 
 pub struct Run {
     pub seed: u64,
     rng: Rng,
     pub hero: usize,
+    /// which expedition, by index in `EXPEDITIONS`
+    pub exp: usize,
     pub hp: i32,
     pub bonus_hp: i32,
     pub shards: i32,
     pub charms: Vec<usize>,
+    /// upgraded skills, by index in `COMBOS`; a repeat is another level
+    pub ups: Vec<usize>,
     pub floor: usize,
+    /// which of the floor's two bosses waits at the end
+    pub boss: usize,
+    /// this floor's rule twist, by index in `TWISTS`
+    pub twist: usize,
     pub map: Vec<Vec<Node>>,
     pub pos: Option<(usize, usize)>,
     pub note: String,
 }
 
 impl Run {
-    pub fn new(seed: u64, hero: usize) -> (Run, Stage) {
+    pub fn new(seed: u64, hero: usize, exp: usize) -> (Run, Stage) {
         let mut run = Run {
             seed,
             rng: Rng::new(seed),
             hero,
+            exp,
             hp: HEROES[hero].hp,
             bonus_hp: 0,
             shards: 20,
             charms: vec![],
+            ups: vec![],
             floor: 0,
+            boss: 0,
+            twist: 0,
             map: vec![],
             pos: None,
-            note: "Pick a path. Every route ends at the floor's boss.".into(),
+            note: String::new(),
         };
         run.gen_map();
+        let t = &TWISTS[run.twist];
+        run.note = format!("{}, floor 1. {}: {}", EXPEDITIONS[exp].name, t.name, t.desc);
         let stage = run.pick();
         (run, stage)
     }
@@ -84,7 +111,23 @@ impl Run {
         for &c in &self.charms {
             (CHARMS[c].apply)(&mut m);
         }
+        (TWISTS[self.twist].me)(&mut m);
+        (EXPEDITIONS[self.exp].me)(&mut m);
         m
+    }
+
+    pub fn boss_def(&self) -> &'static EnemyDef {
+        &BOSSES[self.floor.min(BOSSES.len() - 1)][self.boss]
+    }
+
+    pub fn level(&self, id: usize) -> usize {
+        1 + self.ups.iter().filter(|&&u| u == id).count()
+    }
+
+    /// Upgrades skill `id`, then the boss's charm reward.
+    pub fn upgrade(&mut self, id: usize) -> Stage {
+        self.ups.push(id);
+        self.pick()
     }
 
     pub fn max_hp(&self) -> i32 {
@@ -148,6 +191,13 @@ impl Run {
     }
 
     fn gen_map(&mut self) {
+        self.boss = self.rng.below(2);
+        self.twist = if EXPEDITIONS[self.exp].curses {
+            let curses: Vec<usize> = (0..TWISTS.len()).filter(|&i| TWISTS[i].tone < 0).collect();
+            curses[self.rng.below(curses.len())]
+        } else {
+            self.rng.below(TWISTS.len())
+        };
         let mut sizes: Vec<usize> = (0..COLS).map(|_| 2 + self.rng.below(2)).collect();
         sizes.push(1);
         let mut map: Vec<Vec<Node>> = Vec::new();
@@ -190,8 +240,16 @@ impl Run {
     fn enemy(&self, d: &EnemyDef, scale: bool, slow: i32) -> Fighter {
         let floor = self.floor as i32;
         let (hp, power) = if scale { (d.hp * (85 + 55 * floor) / 100, d.power + floor) } else { (d.hp, d.power) };
+        let x = &EXPEDITIONS[self.exp];
+        let hp = hp * x.hp_pct / 100;
         let mut m = Mods::default();
         (d.mods)(&mut m);
+        (TWISTS[self.twist].foe)(&mut m);
+        (x.foe)(&mut m);
+        // only bosses come unscaled
+        if !scale {
+            (x.boss)(&mut m);
+        }
         m.reveals -= slow;
         Fighter::new(d.name, d.sprite, d.desc, hp, hp, power, d.elements, m, d.aggro)
     }
@@ -220,15 +278,16 @@ impl Run {
                         let elite = &ELITES[self.rng.below(ELITES.len())];
                         vec![self.random_normal(), self.enemy(elite, true, 2)]
                     }
-                    _ => vec![self.enemy(&BOSSES[self.floor.min(BOSSES.len() - 1)], false, 1)],
+                    _ => vec![self.enemy(self.boss_def(), false, 1)],
                 };
                 let h = &HEROES[self.hero];
-                let me = Fighter::new(h.name, h.sprite, h.passive_desc, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
+                let mut me = Fighter::new(h.name, h.sprite, h.passive_desc, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
+                me.ups = self.ups.clone();
                 Stage::Battle(Battle::new(me, foes, Rng::new(self.rng.next())))
             }
             NodeKind::Encounter => Stage::Event(&ENCOUNTERS[self.rng.below(ENCOUNTERS.len())], None),
             NodeKind::Rest => Stage::Event(&REST, None),
-            NodeKind::Shop => Stage::Shop(self.offer(3)),
+            NodeKind::Shop => Stage::Shop(self.stock(0)),
             NodeKind::Treasure => self.pick(),
         }
     }
@@ -252,10 +311,13 @@ impl Run {
         self.shards += shards;
         self.hp = (self.hp + BREATHER + m.heal_after).min(self.max_hp());
         self.note = format!("Won the fight: +{shards} shards.");
-        if kind == NodeKind::Battle {
-            self.after_node()
-        } else {
-            self.pick()
+        match kind {
+            NodeKind::Battle => self.after_node(),
+            NodeKind::Boss => {
+                let ids: Vec<usize> = combos_for(&HEROES[self.hero].elements).iter().map(|c| combo_id(c)).filter(|&id| self.level(id) < MAX_LEVEL).collect();
+                if ids.is_empty() { self.pick() } else { Stage::Upgrade(ids) }
+            }
+            _ => self.pick(),
         }
     }
 
@@ -265,14 +327,16 @@ impl Run {
             self.floor += 1;
             self.pos = None;
             self.gen_map();
-            self.note = format!("Floor {} begins.", self.floor + 1);
+            let t = &TWISTS[self.twist];
+            self.note = format!("{}, floor {}. {}: {}", EXPEDITIONS[self.exp].name, self.floor + 1, t.name, t.desc);
         }
         Stage::Map
     }
 
     pub fn can_afford(&self, c: &Choice) -> bool {
         let cost: i32 = c.outs.iter().map(|o| if let Out::Shards(v) = o { -v.min(&0) } else { 0 }).sum();
-        cost <= self.shards
+        let gives = c.outs.iter().filter(|o| matches!(o, Out::LoseCharm)).count();
+        cost <= self.shards && gives <= self.charms.len()
     }
 
     pub fn choose(&mut self, c: &Choice) -> String {
@@ -298,13 +362,20 @@ impl Run {
                 Out::GainCharm => match self.offer(1).first() {
                     Some(&id) => {
                         self.add_charm(id);
-                        msg.push(format!("Found a charm: {}.", CHARMS[id].name));
+                        msg.push(format!("Found a pact: {}.", CHARMS[id].name));
                     }
                     None => {
                         self.shards += 20;
                         msg.push("Nothing new here, only 20 shards.".into());
                     }
                 },
+                Out::LoseCharm => {
+                    if !self.charms.is_empty() {
+                        let id = self.charms.remove(self.rng.below(self.charms.len()));
+                        self.hp = self.hp.clamp(1, self.max_hp());
+                        msg.push(format!("Gave up {}.", CHARMS[id].name));
+                    }
+                }
                 Out::Text(s) => msg.push(s.into()),
                 Out::Chance(pct, win, lose) => {
                     let outs = if self.rng.chance(pct) { win } else { lose };
@@ -321,13 +392,39 @@ impl Run {
         msg.push(format!("{:+} HP.", self.hp - before));
     }
 
-    pub fn buy_charm(&mut self, id: usize) -> bool {
-        let price = CHARMS[id].rarity.price();
+    fn stock(&mut self, restocks: i32) -> Shop {
+        let ids = self.offer(SHOP_SIZE);
+        let sale = self.rng.below(ids.len().max(1));
+        Shop { stock: ids.into_iter().map(Some).collect(), sale, restocks }
+    }
+
+    pub fn price(shop: &Shop, k: usize) -> i32 {
+        let p = shop.stock[k].map_or(0, |id| CHARMS[id].rarity.price());
+        if k == shop.sale { p * 3 / 4 } else { p }
+    }
+
+    pub fn restock_price(shop: &Shop) -> i32 {
+        RESTOCK_PRICE * (shop.restocks + 1)
+    }
+
+    /// Buys the ware in spot `k`.
+    pub fn buy(&mut self, shop: &mut Shop, k: usize) -> bool {
+        let price = Self::price(shop, k);
+        let Some(id) = shop.stock[k].filter(|_| self.shards >= price) else { return false };
+        self.shards -= price;
+        self.add_charm(id);
+        shop.stock[k] = None;
+        true
+    }
+
+    /// Swaps every ware on the counter for new ones.
+    pub fn restock(&mut self, shop: &mut Shop) -> bool {
+        let price = Self::restock_price(shop);
         if self.shards < price {
             return false;
         }
         self.shards -= price;
-        self.add_charm(id);
+        *shop = self.stock(shop.restocks + 1);
         true
     }
 
@@ -348,7 +445,7 @@ mod tests {
     #[test]
     fn every_map_node_leads_to_the_boss_and_can_be_reached() {
         for seed in 0..200 {
-            let (run, _) = Run::new(seed, 0);
+            let (run, _) = Run::new(seed, 0, 0);
             assert_eq!(run.map.len(), COLS + 1);
             assert_eq!(run.map[COLS].len(), 1);
             for c in 0..COLS {
@@ -368,8 +465,8 @@ mod tests {
     }
 
     /// Plays a whole run with the enemy AI in the player's seat. Returns (won, floor reached).
-    fn simulate(seed: u64, hero: usize) -> (bool, usize) {
-        let (mut run, mut stage) = Run::new(seed, hero);
+    fn simulate(seed: u64, hero: usize, exp: usize) -> (bool, usize) {
+        let (mut run, mut stage) = Run::new(seed, hero, exp);
         let mut pick = Rng::new(seed ^ 0xABCD);
         for _ in 0..500 {
             stage = match stage {
@@ -391,9 +488,10 @@ mod tests {
                     run.add_charm(options[0]);
                     run.after_node()
                 }
-                Stage::Shop(stock) => {
-                    for id in stock {
-                        run.buy_charm(id);
+                Stage::Upgrade(ids) => run.upgrade(ids[pick.below(ids.len())]),
+                Stage::Shop(mut shop) => {
+                    for k in 0..shop.stock.len() {
+                        run.buy(&mut shop, k);
                     }
                     while run.buy_heal() {}
                     run.after_node()
@@ -402,7 +500,7 @@ mod tests {
                     let ok: Vec<&Choice> = e.choices.iter().filter(|c| run.can_afford(c)).collect();
                     let c = ok[pick.below(ok.len())];
                     run.choose(c);
-                    assert!(run.hp >= 1 && run.shards >= 0);
+                    assert!(run.hp >= 1 && run.shards >= 0 && run.hp <= run.max_hp());
                     run.after_node()
                 }
                 Stage::End(won) => return (won, run.floor),
@@ -415,7 +513,7 @@ mod tests {
     fn simulated_runs_end_and_stay_in_a_sane_balance_band() {
         const RUNS: u64 = 300;
         for hero in 0..HEROES.len() {
-            let results: Vec<(bool, usize)> = (0..RUNS).map(|s| simulate(s, hero)).collect();
+            let results: Vec<(bool, usize)> = (0..RUNS).map(|s| simulate(s, hero, 0)).collect();
             let wins = results.iter().filter(|r| r.0).count();
             let past_floor_1 = results.iter().filter(|r| r.1 >= 1).count();
             println!(
@@ -427,5 +525,15 @@ mod tests {
             assert!((wins as u64) >= RUNS * 5 / 100, "{} cannot win", HEROES[hero].name);
             assert!((wins as u64) <= RUNS * 60 / 100, "{} wins too easily", HEROES[hero].name);
         }
+    }
+
+    #[test]
+    fn each_expedition_is_harder_than_the_one_before() {
+        const RUNS: u64 = 150;
+        let score = |exp| (0..HEROES.len()).map(|h| (0..RUNS).map(|s| simulate(s, h, exp)).map(|r| r.1 + r.0 as usize).sum::<usize>()).sum::<usize>();
+        let scores: Vec<usize> = (0..EXPEDITIONS.len()).map(score).collect();
+        println!("expedition scores (floors reached + wins): {scores:?}");
+        assert!(scores.windows(2).all(|w| w[1] <= w[0]), "{scores:?}");
+        assert!(scores[EXPEDITIONS.len() - 1] < scores[0] * 2 / 3, "the last expedition must be much harder: {scores:?}");
     }
 }

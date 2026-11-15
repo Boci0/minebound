@@ -10,7 +10,7 @@
 
 You and your enemy each sweep your own boards, one board per element. Crystals are always visible;
 mines are not. Clear every safe tile around a crystal to claim a stack of that board's element, then
-spend your stacks on skills, from a plain Strike to combos that need the right mix of elements.
+spend your stacks on rites, from a plain Strike to combos that need the right mix of elements.
 Every safe flip in a row builds surge, up to double damage, so each turn asks the same question:
 fire now, or flip one more? The enemy plays by exactly the same rules, in full view.
 
@@ -26,11 +26,11 @@ fire now, or flip one more? The enemy plays by exactly the same rules, in full v
 
 ## Features
 
-- **Three heroes**, each with their own elements, skills and play style.
-- **Five elements** and 16 combo skills that need the right mix of stacks.
+- **Three heroes**, each with their own elements, rites and play style.
+- **Five elements** and 16 combo rites that need the right mix of stacks.
 - **Branching runs** across three floors: battles, elites, encounters, shops, rest sites, treasure
   and a boss at the end of each floor.
-- **38 charms** in three rarities (common, rare, legendary) that bend the rules of a turn.
+- **38 pacts** in three rarities (common, rare, legendary) that bend the rules of a turn.
 - **14 enemies**, each breaking one rule: armour, dodging, lifesteal, surge jamming, stack theft
   and more.
 - **Seeded runs**: replay any run exactly by its seed.
@@ -63,10 +63,10 @@ place.
 | Reveal a tile | Left click |
 | Flag a suspected mine | Right click |
 | Switch board | Click a board tab (free, any time in your turn) |
-| Socket a gem | Drag it from your stacks into a skill's matching socket; the skill fires once every socket is full |
+| Socket a gem | Drag it from your stacks into a rite's matching socket; the rite fires once every socket is full |
 | Take a gem back | Click the filled socket |
 | Strike | Drag a gem onto the enemy |
-| Cast everything | Unleash all |
+| Cast everything | Unleash |
 | End your turn (unspent stacks are kept) | End turn, or Space |
 | Abandon the run | Retreat (top right, outside battle) |
 | Sound on / off | M |
@@ -85,11 +85,11 @@ place.
   dealt again, and all boards reset each wave.
 - You get 6 reveals per turn (lesser enemies get fewer). There is no limit on the stacks you can
   hold.
-- A skill deals power × stacks spent, plus its bonus, multiplied by surge (+20% per safe flip in a
+- A rite deals power × stacks spent, plus its bonus, multiplied by surge (+20% per safe flip in a
   row this turn, up to +100%). Casting does not end your turn.
-- After turn 7, every skill gains +2 damage per turn, so no fight lasts forever.
+- After turn 7, every rite gains +2 damage per turn, so no fight lasts forever.
 
-Your charms sit along the top of the battle screen and flash each time they take effect. The column
+Your pacts sit at the top left of the battle screen and flash each time they take effect. The column
 before each boss is all rest sites.
 
 ## Building from source
@@ -140,14 +140,17 @@ installer finds and upgrades an existing installation.
 
 ## Credits
 
-All assets are CC0 (public domain).
+All assets are CC0 (public domain), except the character and icon glyphs (CC BY 3.0) and the fonts
+(SIL Open Font License).
 
 | Asset | Source |
 | --- | --- |
-| Fonts | Kenney Mini by [Kenney](https://kenney.nl); Pixel Operator by Jayvee Enaguas |
-| Pixel art | Tiny Dungeon by [Kenney](https://kenney.nl) |
-| Sound effects | RPG Audio, Impact Sounds and Interface Sounds by [Kenney](https://kenney.nl) |
-| Music | [Winter Lofi](https://freemusicarchive.org/music/holiznacc0/winter-lofi) by HoliznaCC0 |
+| Fonts | [Pirata One](https://fonts.google.com/specimen/Pirata+One) by Rodrigo Fuenzalida and Nicolas Massi; [IBM Plex Mono](https://github.com/IBM/plex) by IBM, both under the [SIL OFL 1.1](https://openfontlicense.org) |
+| Characters and icons | Glyphs from [game-icons.net](https://game-icons.net) by Lorc, Delapouite, Skoll, darkZaitzev, Kier Heyl, Faithtoken, PriorBlue and Willdabeast, under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/), baked into white silhouettes (per-icon list in `assets/sigils/Credits.txt`) |
+| Window icon | Tiny Dungeon by [Kenney](https://kenney.nl) |
+| Rite effects | [Particle Pack](https://kenney.nl/assets/particle-pack) by Kenney |
+| Sound effects | RPG Audio, Impact Sounds, Interface Sounds and Digital SFX by [Kenney](https://kenney.nl); [Horror Hit Soundpack 1](https://opengameart.org/content/horror-hit-soundpack-1) by psychhead_ |
+| Music | [Stranger Than Fiction](https://freemusicarchive.org/music/holiznacc0/stranger-than-fiction-halloween-sci-fi) by HoliznaCC0 |
 
 Licence files for each asset pack are in `assets/`. Audio playback uses a patched copy of
 [quad-snd](https://github.com/not-fl3/quad-snd) in `vendor/quad-snd` (MIT / Apache-2.0), cut down
