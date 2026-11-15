@@ -2062,9 +2062,13 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     if me.hp > 0 && me.hp * 4 <= me.max_hp {
         let t = (now * 1.3).fract() as f32;
         let beat = (1.0 - t * 6.0).max(0.0) + (1.0 - (t - 0.2).abs() * 6.0).max(0.0) * 0.7;
+        // on the window's edge, which in a wider or taller window lies beyond the 1280x720 canvas
+        let half = vec2(screen_width(), screen_height()) / scale() / 2.0;
+        let corner = CAM.with(|c| c.get()) - half;
         for i in 0..8 {
             let d = i as f32 * 8.0;
-            draw_rectangle_lines(d, d, VIEW.x - 2.0 * d, VIEW.y - 2.0 * d, 8.0, fade(BAD, (0.3 - i as f32 * 0.035) * (0.4 + 0.6 * beat)));
+            let size = half * 2.0 - Vec2::splat(2.0 * d);
+            draw_rectangle_lines(corner.x + d, corner.y + d, size.x, size.y, 8.0, fade(BAD, (0.3 - i as f32 * 0.035) * (0.4 + 0.6 * beat)));
         }
     }
 
@@ -2197,7 +2201,9 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     }
     text(tip_label, x, 612.0, 15.0, ACCENT);
     wrapped(tip, x, 634.0, 282.0, 16.0, INK);
-    text(&format!("Seed {}    M: mute    N: next song", run.seed), x, 684.0, 14.0, MUTED);
+    // kept inside the panel's 282 px column, however long the seed
+    let line = format!("Seed {}  M: mute  N: next song", run.seed);
+    text(&line, x, 684.0, 14.0 * (282.0 / measure(&line, 14.0).width).min(1.0), MUTED);
     chosen
 }
 
