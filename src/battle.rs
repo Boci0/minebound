@@ -201,10 +201,15 @@ impl Battle {
         match combo {
             Some(c) => {
                 let lvl = f.level(c);
+                let foe = &self.f[1 - s];
                 for e in c.effects {
-                    if let Effect::Damage(v) = e {
-                        d += at_level(*v, lvl) * (100 + f.mods.combo_pct) / 100;
-                    }
+                    let add = match *e {
+                        Effect::Damage(v) => at_level(v, lvl),
+                        Effect::PerSurge(v) => at_level(v, lvl) * f.surge,
+                        Effect::Detonate => foe.burn.max(0) * foe.burn_dmg,
+                        _ => 0,
+                    };
+                    d += add * (100 + f.mods.combo_pct) / 100;
                 }
             }
             None => d += f.mods.strike_bonus,
@@ -590,6 +595,9 @@ impl Battle {
                     self.f[a].boards[cur].flag_mines(up(n as i32) as usize);
                 }
                 Effect::Pierce => self.f[t].shield = 0,
+                Effect::PerSurge(_) => {} // in hit_damage too
+                Effect::Detonate => self.f[t].burn = 0, // its damage is in hit_damage
+                Effect::Reveal(n) => self.f[a].reveals_left += up(n),
             }
         }
         let dealt = self.hurt(t, dmg);
@@ -766,25 +774,44 @@ mod tests {
         b.f[0].stacks = vec![Ember, Tide];
         assert!(!b.cast(steam), "two gems no longer pay for it");
         b.f[0].stacks = vec![Ember, Tide, Ember];
-        // 3 stacks x 3 power + 6 x 1.5
-        assert_eq!(b.attack_damage(0), 18);
+        // 3 stacks x 3 power + 4 x 1.5
+        assert_eq!(b.attack_damage(0), 15);
+        let reveals = b.f[0].reveals_left;
         assert!(b.cast(steam));
-        assert_eq!((b.f[1].hp, b.f[0].stacks.len()), (82, 0));
+        assert_eq!((b.f[1].hp, b.f[0].stacks.len()), (85, 0));
+        assert_eq!(b.f[0].reveals_left, reveals + 2, "steam clears the view: +2 reveals at Lv 2");
         assert!(b.events.iter().any(|e| matches!(e, Event::Cast { name: "Scald Geyser", .. })));
-        assert_eq!(steam.describe(3), "+12 damage");
+        assert_eq!(steam.describe(3), "+8 damage, +3 reveals");
     }
 
     #[test]
     fn surge_multiplies_skill_damage() {
         let mut b = duel();
         b.f[0].stacks = vec![Ember, Gale, Stone];
-        // Eruption: 3 stacks x 3 power + 10
-        assert_eq!(b.attack_damage(0), 19);
+        // Eruption: 3 stacks x 3 power + 7
+        assert_eq!(b.attack_damage(0), 16);
         b.f[0].surge = MAX_SURGE;
-        assert_eq!(b.attack_damage(0), 38);
+        assert_eq!(b.attack_damage(0), 32);
+
         b.unleash();
-        assert_eq!(b.f[1].hp, 62);
+        assert_eq!(b.f[1].hp, 100 - 32);
         assert!(b.f[0].stacks.is_empty());
+
+        // Eruption detonates the burn on the foe: 3 turns x 2 more, and the burn is gone
+        let mut b = duel();
+        b.f[0].stacks = vec![Ember, Gale, Stone];
+        (b.f[1].burn, b.f[1].burn_dmg) = (3, 2);
+        assert_eq!(b.attack_damage(0), 22);
+        assert!(b.cast(combo("Eruption")));
+        assert_eq!((b.f[1].hp, b.f[1].burn), (100 - 22, 0));
+
+        // Plasma: +2 damage per surge step held
+        let mut b = duel();
+        b.f[0].elements = vec![Ember, Spark];
+        b.f[0].stacks = vec![Ember, Spark];
+        let flat = b.attack_damage(0);
+        b.f[0].surge = 2;
+        assert!(b.attack_damage(0) > flat + 4, "surge both multiplies and adds");
     }
 
     #[test]
@@ -846,7 +873,7 @@ mod tests {
         b.f[0].mods.echo = 1;
         b.f[0].stacks = vec![Ember, Gale, Stone];
         assert!(b.cast(combo("Eruption")));
-        assert_eq!(b.f[1].hp, 100 - 19 * 2);
+        assert_eq!(b.f[1].hp, 100 - 16 * 2);
         assert!(b.events.iter().any(|e| matches!(e, Event::Proc { side: 0, hook: "echo" })));
 
         // Hourglass and Hoarder's Sack: unused reveals and banked stacks become shield

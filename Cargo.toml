@@ -9,9 +9,11 @@ macroquad = { version = "0.4", default-features = false, features = ["audio"] }
 # the vendored copy below, named directly so the game can muffle the mix
 quad-snd = "0.2.8"
 
-# quad-snd with sound decoding moved off the game thread (see vendor/quad-snd/src/mixer.rs, "minebound patch")
+# quad-snd with sound decoding moved off the game thread, and music streamed instead of decoded whole (see vendor/quad-snd/src/mixer.rs, "minebound patch")
 [patch.crates-io]
 quad-snd = { path = "vendor/quad-snd" }
+# macroquad sending each font atlas to the GPU once a frame, not after every new glyph (vendor/macroquad/src/text/atlas.rs)
+macroquad = { path = "vendor/macroquad" }
 
 # optimise dependencies in debug builds too: audio decoding is otherwise many times slower
 [profile.dev.package."*"]

@@ -150,11 +150,12 @@ All assets are CC0 (public domain), except the character and icon glyphs (CC BY 
 | Window icon | Tiny Dungeon by [Kenney](https://kenney.nl) |
 | Rite effects | [Particle Pack](https://kenney.nl/assets/particle-pack) by Kenney |
 | Sound effects | RPG Audio, Impact Sounds, Interface Sounds and Digital SFX by [Kenney](https://kenney.nl); [Horror Hit Soundpack 1](https://opengameart.org/content/horror-hit-soundpack-1) by psychhead_ |
-| Music | [Stranger Than Fiction](https://freemusicarchive.org/music/holiznacc0/stranger-than-fiction-halloween-sci-fi) by HoliznaCC0 |
+| Music | [Stranger Than Fiction](https://freemusicarchive.org/music/holiznacc0/stranger-than-fiction-halloween-sci-fi), [Gamer Soundtrack: Haunted Mansion](https://freemusicarchive.org/music/holiznacc0/gamer-soundtrack-haunted-mansion) and [Horseless Headman](https://freemusicarchive.org/music/holiznacc0/horseless-headman-halloween-beats) by HoliznaCC0 |
 
 Licence files for each asset pack are in `assets/`. Audio playback uses a patched copy of
 [quad-snd](https://github.com/not-fl3/quad-snd) in `vendor/quad-snd` (MIT / Apache-2.0), cut down
-to its Windows backend.
+to its Windows backend, and drawing uses a patched copy of [macroquad](https://github.com/not-fl3/macroquad)
+in `vendor/macroquad` (MIT / Apache-2.0) that sends its font atlases to the GPU once a frame.
 
 ## License
 

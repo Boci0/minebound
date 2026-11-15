@@ -77,6 +77,12 @@ pub enum Effect {
     Drain(usize),
     Scout(usize),
     Pierce,
+    /// more damage for each surge step the caster holds
+    PerSurge(i32),
+    /// all the burn left on the foe goes off at once
+    Detonate,
+    /// extra reveals this turn
+    Reveal(i32),
 }
 use Effect::*;
 
@@ -124,6 +130,12 @@ impl Combo {
                 }
                 Scout(n) => format!("flag {} of your mines", at_level(n as i32, lvl)),
                 Pierce => "shatter foe's shield".into(),
+                PerSurge(v) => format!("+{} damage per surge", at_level(v, lvl)),
+                Detonate => "detonate foe's burn".into(),
+                Reveal(n) => {
+                    let k = at_level(n, lvl);
+                    format!("+{k} reveal{}", if k == 1 { "" } else { "s" })
+                }
             })
             .collect();
         let s = parts.join(", ");
@@ -136,17 +148,17 @@ const fn combo(name: &'static str, up: [&'static str; 2], needs: &'static [Eleme
 }
 
 pub static COMBOS: &[Combo] = &[
-    combo("Steam Burst", ["Scald Geyser", "Steamquake"], &[Ember, Tide], &[Damage(6)]),
+    combo("Steam Burst", ["Scald Geyser", "Steamquake"], &[Ember, Tide], &[Damage(4), Reveal(1)]),
     combo("Wildfire", ["Firestorm", "Inferno"], &[Ember, Gale], &[Burn(3)]),
     combo("Magma", ["Lava Lance", "Molten Core"], &[Ember, Stone], &[Pierce, Damage(3)]),
-    combo("Plasma", ["Plasma Lance", "Plasma Nova"], &[Ember, Spark], &[Damage(7)]),
+    combo("Plasma", ["Plasma Lance", "Plasma Nova"], &[Ember, Spark], &[Damage(3), PerSurge(2)]),
     combo("Mistveil", ["Mist Shroud", "Veil of Mists"], &[Tide, Gale], &[Heal(4), Damage(3)]),
     combo("Bulwark", ["Rampart", "Citadel"], &[Tide, Stone], &[Shield(7)]),
     combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Drain(2), Damage(3)]),
     combo("Sandstorm", ["Dust Devil", "Desert Wrath"], &[Gale, Stone], &[Weaken(2)]),
     combo("Thunderclap", ["Thunderstrike", "Skybreaker"], &[Gale, Spark], &[Scout(2), Damage(2)]),
     combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[Shield(4), Damage(4)]),
-    combo("Eruption", ["Cataclysm", "Worldbreaker"], &[Ember, Gale, Stone], &[Damage(10)]),
+    combo("Eruption", ["Cataclysm", "Worldbreaker"], &[Ember, Gale, Stone], &[Damage(7), Detonate]),
     combo("Tempest", ["Hurricane", "Eye of the Storm"], &[Tide, Gale, Spark], &[Damage(6), Heal(2)]),
     combo("Geode Surge", ["Crystal Tide", "Geode Titan"], &[Tide, Stone, Spark], &[Damage(6), Shield(6)]),
     combo("Forgefire", ["Starforge", "Sunforge"], &[Ember, Stone, Spark], &[Damage(8)]),
@@ -273,7 +285,7 @@ pub static CHARMS: &[Charm] = &[
     charm("Heart Root", Common, (HD + 44, PLAIN), "max_hp", "+12 max HP.", |m| m.max_hp += 12),
     // rares change how a turn is played
     charm("Quick Fingers", Rare, (HD + 45, PLAIN), "reveals", "+1 reveal each turn.", |m| m.reveals += 1),
-    charm("Resonator", Rare, (HD + 46, PLAIN), "combo_pct", "Combo effects are 50% stronger.", |m| m.combo_pct += 50),
+    charm("Resonator", Rare, (HD + 46, PLAIN), "combo_pct", "Rite damage, shield and healing are 50% stronger.", |m| m.combo_pct += 50),
     charm("Leech Fang", Rare, (HD + 47, PLAIN), "lifesteal_pct", "Heal for 20% of the damage your rites deal.", |m| m.lifesteal_pct += 20),
     charm("Ambush Wire", Rare, (HD + 48, PLAIN), "opening", "Deal 6 damage at the start of each wave.", |m| m.opening += 6),
     charm("Running Start", Rare, (HD + 49, PLAIN), "surge_start", "Begin each turn with 2 surge.", |m| m.surge_start += 2),
@@ -298,7 +310,7 @@ pub static CHARMS: &[Charm] = &[
     }),
     charm("Smoke Bomb", Legendary, (HD + 62, PLAIN), "evade", "The first enemy rite each turn misses you.", |m| m.evade += 1),
     charm("Sixth Sense", Legendary, (HD + 63, PLAIN), "sense", "The first mine you flip each turn is flagged instead of going off.", |m| m.sense += 1),
-    charm("Echo Chamber", Legendary, (HD + 64, PLAIN), "echo", "Your three-element combos fire twice.", |m| m.echo += 1),
+    charm("Echo Chamber", Legendary, (HD + 64, PLAIN), "echo", "Your three-element rites fire twice.", |m| m.echo += 1),
     charm("Berserker's Axe", Legendary, (HD + 65, PLAIN), "desperate", "Below half HP, +3 power.", |m| m.desperate += 3),
 ];
 
@@ -544,7 +556,7 @@ pub static ENCOUNTERS: &[Encounter] = &[
         title: "Wandering Tinker",
         text: "A tinker with far too many pockets offers you a deal, then a different deal.",
         choices: &[
-            pick("Buy a trinket. (-30 shards, gain a pact)", &[Shards(-30), GainCharm]),
+            pick("Strike a bargain. (-30 shards, gain a pact)", &[Shards(-30), GainCharm]),
             pick("Sell some blood. (-8 HP, +30 shards)", &[Hp(-8), Shards(30)]),
             LEAVE,
         ],
@@ -616,14 +628,14 @@ pub static ENCOUNTERS: &[Encounter] = &[
     },
     Encounter {
         title: "Pact Swapper",
-        text: "A hooded trader spreads a cloth covered in trinkets. 'Yours for two of mine,' she says.",
-        choices: &[pick("Trade. (Lose a random pact, gain 2)", &[LoseCharm, GainCharm, GainCharm]), LEAVE],
+        text: "A hooded trader spreads a cloth covered in sealed pacts. 'Yours for two of mine,' she says.",
+        choices: &[pick("Trade. (Give up a pact you choose, gain 2)", &[LoseCharm, GainCharm, GainCharm]), LEAVE],
     },
     Encounter {
         title: "Abandoned Forge",
         text: "The coals are still warm. A crucible waits, big enough for something small and precious.",
         choices: &[
-            pick("Melt a pact down. (Lose a random pact, +60 shards)", &[LoseCharm, Shards(60)]),
+            pick("Melt a pact down. (Give up a pact you choose, +60 shards)", &[LoseCharm, Shards(60)]),
             pick("Stoke the fire. (-10 shards, +5 max HP)", &[Shards(-10), MaxHp(5)]),
             LEAVE,
         ],
@@ -651,6 +663,7 @@ pub static ENCOUNTERS: &[Encounter] = &[
         choices: &[
             pick("Walk him out. (-6 HP, +6 max HP)", &[Hp(-6), MaxHp(6)]),
             pick("Take his pack. (+35 shards, 30%: -10 HP)", &[Shards(35), Chance(30, &[Text("He fights back."), Hp(-10)], &[])]),
+            LEAVE,
         ],
     },
 ];

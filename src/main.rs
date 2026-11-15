@@ -23,48 +23,77 @@ enum Screen {
     Run(Run, Stage, Option<usize>),
 }
 
-/// Background music: "Stranger Than Fiction" by HoliznaCC0 (CC0), read from assets/music beside the game.
-/// (file name, length in seconds)
-const TRACKS: [(&str, f64); 5] = [
-    ("somethings-out-there", 172.8),
-    ("burning-in-the-atmosphere", 264.8),
-    ("an-ocean-in-outer-space", 132.0),
-    ("little-green-men", 156.7),
-    ("sky-fish", 194.4),
+/// Background music by HoliznaCC0 (CC0), read from assets/music beside the game: "Stranger Than
+/// Fiction", "Gamer Soundtrack: Haunted Mansion" and "Horseless Headman".
+/// (file name, length in seconds, mood: CALM on every screen but a fight, FIGHT, BOSS)
+const TRACKS: [(&str, f64, u8); 18] = [
+    ("somethings-out-there", 172.8, FIGHT),
+    ("burning-in-the-atmosphere", 264.8, FIGHT),
+    ("an-ocean-in-outer-space", 132.0, CALM),
+    ("little-green-men", 156.7, FIGHT),
+    ("sky-fish", 194.4, CALM),
+    ("floor-1", 211.9, CALM),
+    ("floor-2", 164.0, CALM),
+    ("floor-3", 202.0, CALM),
+    ("floor-4", 298.0, CALM),
+    ("floor-5", 246.0, CALM),
+    ("floor-6", 220.0, CALM),
+    ("halloween-soundscape", 234.0, CALM),
+    ("never-speak-of-the-devil", 145.9, CALM),
+    ("between-life-and-death", 163.7, FIGHT),
+    ("cobwebs", 149.3, FIGHT),
+    ("haunted-houses", 134.1, FIGHT),
+    ("nocturnal", 194.6, FIGHT),
+    ("tragedy-waiting-to-happen", 119.2, BOSS),
 ];
+const CALM: u8 = 0;
+const FIGHT: u8 = 1;
+const BOSS: u8 = 2;
 /// Loudness of the music at the top of the volume slider.
 const MUSIC_VOLUME: f32 = 0.5;
+/// Seconds the old track takes to fade out when the mood changes.
+const FADE: f64 = 0.8;
 
 struct Music {
-    order: Vec<usize>,
     playing: Option<Sound>,
+    /// index in TRACKS of the track playing (or last tried)
+    track: usize,
     /// when the current track ends (or when to try again, if it failed to load)
     until: f64,
+    /// when the current track began fading out, if it is
+    fading: Option<f64>,
 }
 
 impl Music {
     fn new() -> Music {
-        let mut order: Vec<usize> = (0..TRACKS.len()).collect();
-        for i in (1..order.len()).rev() {
-            order.swap(i, rand::gen_range(0, i + 1));
-        }
-        Music { order, playing: None, until: 0.0 }
+        Music { playing: None, track: usize::MAX, until: 0.0, fading: None }
     }
 
-    /// Starts the next track when the current one ends, or when N is pressed.
-    /// One track is held in memory at a time: a decoded track is tens of megabytes.
-    async fn tick(&mut self) {
-        if let Some(s) = &self.playing {
-            set_sound_volume(s, ui::music_volume() * MUSIC_VOLUME);
+    /// Plays tracks of `mood`: the next one when the current one ends or N is pressed, and a fade
+    /// to a new one when the mood changes. One track is held in memory at a time: a decoded track
+    /// is tens of megabytes.
+    async fn tick(&mut self, mood: u8) {
+        let wrong = self.track < TRACKS.len() && TRACKS[self.track].2 != mood;
+        if self.playing.is_some() && wrong && self.fading.is_none() {
+            self.fading = Some(get_time());
         }
-        if get_time() < self.until && !is_key_pressed(KeyCode::N) {
+        let fade = self.fading.map_or(1.0, |t| 1.0 - (get_time() - t) / FADE);
+        if let Some(s) = &self.playing {
+            set_sound_volume(s, ui::music_volume() * MUSIC_VOLUME * fade.max(0.0) as f32);
+        }
+        if fade > 0.0 && !(self.playing.is_none() && wrong) && get_time() < self.until && !is_key_pressed(KeyCode::N) {
             return;
         }
         if let Some(old) = self.playing.take() {
             stop_sound(&old);
         }
-        self.order.rotate_left(1);
-        let (name, secs) = TRACKS[self.order[0]];
+        self.fading = None;
+        // a random track of this mood, not the one just played (unless it is the only one)
+        let pool: Vec<usize> = (0..TRACKS.len()).filter(|&i| TRACKS[i].2 == mood).collect();
+        let fresh: Vec<usize> = pool.iter().copied().filter(|&i| i != self.track).collect();
+        let from = if fresh.is_empty() { &pool } else { &fresh };
+        self.track = from[rand::gen_range(0, from.len())];
+        let (name, secs, _) = TRACKS[self.track];
         match load_sound(&music_path(name)).await {
             Ok(s) => {
                 play_sound(&s, PlaySoundParams { looped: false, volume: ui::music_volume() * MUSIC_VOLUME });
@@ -77,6 +106,15 @@ impl Music {
                 self.until = get_time() + 60.0;
             }
         }
+    }
+}
+
+/// The music a screen calls for: a fight's, a boss fight's, or the calm between.
+fn mood(screen: &Screen) -> u8 {
+    match screen {
+        Screen::Run(_, Stage::Battle(b), _) if data::BOSSES.iter().flatten().any(|d| d.name == b.f[1].name) => BOSS,
+        Screen::Run(_, Stage::Battle(_), _) => FIGHT,
+        _ => CALM,
     }
 }
 
@@ -161,7 +199,7 @@ async fn main() {
     loop {
         clear_background(ui::BG);
         ui::begin_frame();
-        music.tick().await;
+        music.tick(mood(&screen)).await;
         let mut quit_run = false;
         let mut to = None;
         match &mut screen {
@@ -252,6 +290,16 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_mood_has_music_and_every_track_is_there() {
+        for m in [CALM, FIGHT, BOSS] {
+            assert!(TRACKS.iter().any(|t| t.2 == m), "no music for mood {m}");
+        }
+        for (name, _, _) in TRACKS {
+            assert!(std::path::Path::new(&music_path(name)).exists(), "missing assets/music/{name}.ogg");
+        }
+    }
 
     #[test]
     fn icon_is_the_sprite_scaled_up_without_smoothing() {

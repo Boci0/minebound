@@ -22,6 +22,8 @@ pub enum Sfx {
     /// an upgraded skill charging up
     Charge,
     LevelUp,
+    /// the blast under a mine going off
+    Boom,
 }
 
 macro_rules! takes {
@@ -32,11 +34,12 @@ macro_rules! takes {
 
 /// For each `Sfx`, in order: how loud it plays (the ones you hear constantly sit further back)
 /// and its recordings, as Ogg files in memory.
-pub static SOUNDS: [(f32, &[&[u8]]); 16] = [
+pub static SOUNDS: [(f32, &[&[u8]]); 17] = [
     takes!(0.35, "impactMining_000", "impactMining_001", "impactMining_002", "impactMining_003"),
     takes!(0.5, "impactGlass_light_000", "impactGlass_light_001", "impactGlass_light_002"),
     takes!(0.55, "horror-mine-1", "horror-mine-2"),
-    takes!(0.7, "knifeSlice", "knifeSlice2"),
+    // the knife slices pitched down and softened: the Strike plays often, so it should not cut
+    takes!(0.7, "strike-1", "strike-2"),
     takes!(0.7, "impactGlass_heavy_000", "impactGlass_heavy_001"),
     takes!(0.5, "cloth1"),
     takes!(0.7, "impactPunch_medium_000", "impactPunch_medium_001", "impactPunch_medium_002"),
@@ -51,6 +54,8 @@ pub static SOUNDS: [(f32, &[&[u8]]); 16] = [
     takes!(0.3, "digital-gale-whoosh", "digital-gale-whoosh-2"),
     takes!(0.3, "digital-charge"),
     takes!(0.5, "horror-rite"),
+    // made with ffmpeg: a brown-noise rumble over a low sine thump, both dying away fast
+    takes!(0.8, "boom-1", "boom-2"),
 ];
 
 #[cfg(test)]
@@ -59,7 +64,7 @@ mod tests {
 
     #[test]
     fn every_sound_has_at_least_one_ogg_take() {
-        assert_eq!(SOUNDS.len(), Sfx::LevelUp as usize + 1);
+        assert_eq!(SOUNDS.len(), Sfx::Boom as usize + 1);
         for (volume, takes) in SOUNDS {
             assert!(!takes.is_empty() && takes.iter().all(|t| &t[..4] == b"OggS"));
             assert!(volume > 0.0 && volume <= 1.0);

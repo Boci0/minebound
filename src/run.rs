@@ -77,6 +77,8 @@ pub struct Run {
     pub map: Vec<Vec<Node>>,
     pub pos: Option<(usize, usize)>,
     pub note: String,
+    /// pacts given up in the choice being applied, so the same trade cannot hand them back
+    given: Vec<usize>,
 }
 
 impl Run {
@@ -97,6 +99,7 @@ impl Run {
             map: vec![],
             pos: None,
             note: String::new(),
+            given: vec![],
         };
         run.gen_map();
         run.note = format!("{}, floor 1.", EXPEDITIONS[exp].name);
@@ -141,7 +144,7 @@ impl Run {
 
     /// Up to `n` charms the player does not own yet; rarer ones come up less often.
     fn offer(&mut self, n: usize) -> Vec<usize> {
-        let mut pool: Vec<usize> = (0..CHARMS.len()).filter(|i| !self.charms.contains(i)).collect();
+        let mut pool: Vec<usize> = (0..CHARMS.len()).filter(|i| !self.charms.contains(i) && !self.given.contains(i)).collect();
         let mut ids = vec![];
         while ids.len() < n && !pool.is_empty() {
             let total: usize = pool.iter().map(|&i| CHARMS[i].rarity.weight()).sum();
@@ -337,13 +340,15 @@ impl Run {
         cost <= self.shards && gives <= self.charms.len()
     }
 
-    pub fn choose(&mut self, c: &Choice) -> String {
+    /// `give` is the pact the player chose to give up, for choices that take one (random if None).
+    pub fn choose(&mut self, c: &Choice, give: Option<usize>) -> String {
         let mut msg = vec![];
-        self.apply(c.outs, &mut msg);
+        self.apply(c.outs, give, &mut msg);
+        self.given.clear();
         msg.join(" ")
     }
 
-    fn apply(&mut self, outs: &[Out], msg: &mut Vec<String>) {
+    fn apply(&mut self, outs: &[Out], give: Option<usize>, msg: &mut Vec<String>) {
         for o in outs {
             match *o {
                 Out::Hp(v) => self.heal(v, msg),
@@ -369,7 +374,9 @@ impl Run {
                 },
                 Out::LoseCharm => {
                     if !self.charms.is_empty() {
-                        let id = self.charms.remove(self.rng.below(self.charms.len()));
+                        let at = give.and_then(|g| self.charms.iter().position(|&c| c == g));
+                        let id = self.charms.remove(at.unwrap_or_else(|| self.rng.below(self.charms.len())));
+                        self.given.push(id);
                         self.hp = self.hp.clamp(1, self.max_hp());
                         msg.push(format!("Gave up {}.", CHARMS[id].name));
                     }
@@ -377,7 +384,7 @@ impl Run {
                 Out::Text(s) => msg.push(s.into()),
                 Out::Chance(pct, win, lose) => {
                     let outs = if self.rng.chance(pct) { win } else { lose };
-                    self.apply(outs, msg);
+                    self.apply(outs, give, msg);
                 }
             }
         }
@@ -446,6 +453,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn giving_up_a_pact_takes_the_one_chosen() {
+        let (mut run, _) = Run::new(1, 0, 0);
+        run.charms = vec![3, 5, 8];
+        let swap = ENCOUNTERS.iter().find(|e| e.title == "Pact Swapper").unwrap();
+        // over many seeds, the pact given up never comes straight back from the same trade
+        for seed in 0..50 {
+            let (mut run, _) = Run::new(seed, 0, 0);
+            run.charms = vec![3, 5, 8];
+            run.choose(&swap.choices[0], Some(5));
+            assert!(!run.charms.contains(&5), "seed {seed}");
+        }
+        run.choose(&swap.choices[0], Some(5));
+        assert!(!run.charms.contains(&5) && run.charms.contains(&3) && run.charms.contains(&8));
+        assert_eq!(run.charms.len(), 4);
+    }
+
+    #[test]
     fn every_map_node_leads_to_the_boss_and_can_be_reached() {
         for seed in 0..200 {
             let (run, _) = Run::new(seed, 0, 0);
@@ -502,7 +526,7 @@ mod tests {
                 Stage::Event(e, _) => {
                     let ok: Vec<&Choice> = e.choices.iter().filter(|c| run.can_afford(c)).collect();
                     let c = ok[pick.below(ok.len())];
-                    run.choose(c);
+                    run.choose(c, None);
                     assert!(run.hp >= 1 && run.shards >= 0 && run.hp <= run.max_hp());
                     run.after_node()
                 }

@@ -1,6 +1,6 @@
 use crate::{AudioContext, PlaySoundParams};
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -14,8 +14,17 @@ pub fn set_muffle(amount: f32) {
     MUFFLE.store(amount.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
 }
 
+/// minebound patch: files bigger than this (music) are decoded a little at a time while they play,
+/// instead of whole into memory (a 5-minute track is ~100 MB of samples, and decoding it peaked higher)
+const STREAM_BYTES: usize = 1 << 20;
+/// samples per streamed chunk (about 0.1 s of stereo), and how many chunks the decoder runs ahead
+const CHUNK: usize = 8192;
+const AHEAD: usize = 8;
+
 enum AudioMessage {
     AddSound(u32, Arc<[f32]>),
+    /// sound id, play id, volume, and the chunks its decoder thread sends
+    PlayStream(u32, u32, f32, mpsc::Receiver<Arc<[f32]>>),
     Play(u32, u32, bool, f32),
     Stop(u32),
     StopAll(u32),
@@ -32,11 +41,14 @@ pub struct SoundState {
     data: Arc<[f32]>,
     looped: bool,
     volume: f32,
+    /// a streamed sound: `data` is its current chunk, the rest arrive here
+    stream: Option<mpsc::Receiver<Arc<[f32]>>>,
 }
 
 impl SoundState {
     fn get_samples(&mut self, n: usize) -> &[f32] {
-        let data = &self.data[self.sample..];
+        // a stream waiting on its decoder has read past its chunk
+        let data = &self.data[self.sample.min(self.data.len())..];
 
         self.sample += n;
 
@@ -69,6 +81,8 @@ pub struct MixerControl {
     tx: mpsc::Sender<AudioMessage>,
     sound_id: Cell<u32>,
     play_id: Cell<u32>,
+    /// the encoded bytes of sounds that stream
+    streams: RefCell<HashMap<u32, Arc<[u8]>>>,
 }
 
 pub struct Playback {
@@ -89,6 +103,13 @@ impl Playback {
 impl MixerControl {
     pub fn load(&self, data: &[u8]) -> u32 {
         let sound_id = self.sound_id.get();
+        self.sound_id.set(sound_id + 1);
+
+        let rate = || audrey::Reader::new(std::io::Cursor::new(data)).map(|r| r.description().sample_rate());
+        if data.len() > STREAM_BYTES && rate().ok() == Some(44100) {
+            self.streams.borrow_mut().insert(sound_id, data.into());
+            return sound_id;
+        }
 
         // minebound patch: decode off the calling thread; a long Ogg froze the game for ~0.4 s
         let tx = self.tx.clone();
@@ -99,13 +120,21 @@ impl MixerControl {
                 .unwrap_or_else(|_| println!("Audio thread died")),
             Err(()) => println!("quad-snd: could not decode sound {sound_id}"),
         });
-        self.sound_id.set(sound_id + 1);
 
         sound_id
     }
 
     pub fn play(&self, sound_id: u32, params: PlaySoundParams) -> Playback {
         let play_id = self.play_id.get();
+
+        if let Some(bytes) = self.streams.borrow().get(&sound_id).cloned() {
+            let (tx, rx) = mpsc::sync_channel(AHEAD);
+            let looped = params.looped;
+            std::thread::spawn(move || stream(&bytes, looped, tx));
+            self.send(AudioMessage::PlayStream(sound_id, play_id, params.volume, rx));
+            self.play_id.set(play_id + 1);
+            return Playback { play_id };
+        }
 
         self.send(AudioMessage::Play(
             sound_id,
@@ -132,6 +161,7 @@ impl MixerControl {
     }
 
     pub fn delete(&self, sound_id: u32) {
+        self.streams.borrow_mut().remove(&sound_id);
         self.send(AudioMessage::Delete(sound_id));
     }
 
@@ -164,6 +194,7 @@ impl Mixer {
                 tx,
                 sound_id: Cell::new(0),
                 play_id: Cell::new(0),
+                streams: RefCell::new(HashMap::new()),
             },
         )
     }
@@ -187,11 +218,17 @@ impl Mixer {
                         data: data.clone().unwrap_or_else(|| Arc::new([])),
                         looped,
                         volume,
+                        stream: None,
                     };
                     match data {
                         Some(_) => self.mixer_state.push(state),
                         None => self.waiting.push(state),
                     }
+                }
+                AudioMessage::PlayStream(sound_id, play_id, volume, rx) => {
+                    let data = Arc::new([]);
+                    let stream = Some(rx);
+                    self.mixer_state.push(SoundState { sound_id, play_id, sample: 0, data, looped: false, volume, stream });
                 }
                 // the rest apply to playing and waiting sounds alike
                 AudioMessage::Stop(play_id) => {
@@ -243,6 +280,19 @@ impl Mixer {
 
                 remainder -= samples.len();
 
+                if remainder > 0 {
+                    match sound.stream.as_ref().map(|rx| rx.try_recv()) {
+                        Some(Ok(chunk)) => {
+                            sound.data = chunk;
+                            sound.sample = 0;
+                            continue;
+                        }
+                        // the decoder is behind: a moment of silence, not the end
+                        Some(Err(mpsc::TryRecvError::Empty)) => remainder = 0,
+                        Some(Err(mpsc::TryRecvError::Disconnected)) | None => {}
+                    }
+                }
+
                 if remainder > 0 && sound.looped {
                     sound.rewind();
                     continue;
@@ -270,6 +320,29 @@ impl Mixer {
             }
         } else {
             self.low = [0.0; 2];
+        }
+    }
+}
+
+/// Decodes `bytes` (44.1 kHz) into stereo chunks for one play of a streamed sound, from the start
+/// again if `looped`. Ends when the sound ends or the mixer drops the play.
+fn stream(bytes: &[u8], looped: bool, tx: mpsc::SyncSender<Arc<[f32]>>) {
+    loop {
+        let Ok(mut reader) = audrey::Reader::new(std::io::Cursor::new(bytes)) else { return };
+        let mono = reader.description().channel_count() == 1;
+        let mut chunk = Vec::with_capacity(CHUNK + 1);
+        for sample in reader.samples::<f32>() {
+            let Ok(sample) = sample else { break };
+            chunk.push(sample);
+            if mono {
+                chunk.push(sample);
+            }
+            if chunk.len() >= CHUNK && tx.send(std::mem::replace(&mut chunk, Vec::with_capacity(CHUNK + 1)).into()).is_err() {
+                return;
+            }
+        }
+        if !chunk.is_empty() && tx.send(chunk.into()).is_err() || !looped {
+            return;
         }
     }
 }
@@ -356,10 +429,29 @@ mod tests {
     }
 
     #[test]
+    fn a_big_sound_streams_through_to_its_end() {
+        let (builder, ctl) = Mixer::new();
+        let mut mixer = builder.build();
+        let frames = STREAM_BYTES / 4 + 1000;
+        let id = ctl.load(&wav(frames as u32));
+        assert!(ctl.streams.borrow().contains_key(&id), "a file this big streams");
+        ctl.play(id, PlaySoundParams { looped: false, volume: 1.0 });
+        let (mut heard, mut buf) = (0, [0.0f32; 1024]);
+        let start = std::time::Instant::now();
+        while (heard == 0 || !mixer.mixer_state.is_empty()) && start.elapsed().as_secs() < 10 {
+            mixer.fill_audio_buffer(&mut buf, 512);
+            assert!(buf.iter().all(|&s| s == 0.5 || s == 0.0), "only the sound, or a gap while it decodes");
+            heard += buf.iter().filter(|&&s| s == 0.5).count();
+        }
+        assert_eq!(heard, frames * 2, "every sample played once");
+        assert!(mixer.mixer_state.is_empty(), "and then it ended");
+    }
+
+    #[test]
     fn muffle_smooths_a_jump_and_off_passes_it_through() {
         let (builder, _ctl) = Mixer::new();
         let mut mixer = builder.build();
-        mixer.mixer_state.push(SoundState { sound_id: 0, play_id: 0, sample: 0, data: Arc::new([1.0; 8]), looped: false, volume: 1.0 });
+        mixer.mixer_state.push(SoundState { sound_id: 0, play_id: 0, sample: 0, data: Arc::new([1.0; 8]), looped: false, volume: 1.0, stream: None });
         set_muffle(1.0);
         let mut buf = [0.0f32; 4];
         mixer.fill_audio_buffer(&mut buf, 2);

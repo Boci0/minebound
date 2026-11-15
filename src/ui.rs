@@ -310,12 +310,13 @@ fn play(s: Sfx) {
 }
 
 /// The display face (titles, names, big numbers) and the body face (rules text). Either may be
-/// missing; the built-in font stands in. Both are pixel fonts, so they are sampled without smoothing.
+/// missing; the built-in font stands in. Text drawn at its exact size lands on whole pixels and
+/// looks the same either way; smooth sampling keeps text drawn a few percent off its size clean.
 pub fn set_fonts(display: Option<Font>, body: Option<Font>) {
     FONT.with(|f| {
         *f.borrow_mut() = [display, body].map(|font| {
             font.map(|mut font| {
-                font.set_filter(FilterMode::Nearest);
+                font.set_filter(FilterMode::Linear);
                 font
             })
         })
@@ -513,7 +514,15 @@ fn face(size: f32) -> (usize, u16, f32) {
     let k = scale();
     let (which, want) = if size >= DISPLAY_FROM { (0, size * DISPLAY_K) } else { (1, size * BODY_K) };
     // ask in logical pixels; macroquad multiplies by the screen's dpi itself
-    (which, (want * k).round().max(1.0) as u16, 1.0 / k)
+    let px = (want * k).max(1.0);
+    // Every new size rasterises a new set of glyphs into the font's atlas, which grows (it is
+    // sent to the GPU whole, once a frame: see vendor/macroquad). So text that
+    // grows or shrinks, and all display text, rounds to one of a few sizes (about 9% apart) and
+    // scales the rest; small body text stays pixel exact, to stay sharp.
+    let ladder = size.fract() != 0.0 || which == 0;
+    let base = if ladder { (px.log2() * 8.0).round() / 8.0 } else { px.round().log2() };
+    let base = 2f32.powf(base).round().max(1.0);
+    (which, base as u16, px / base / k)
 }
 
 /// Moves a canvas point onto the nearest whole physical pixel, so glyph edges do not straddle two.
@@ -557,15 +566,103 @@ fn wrapped(s: &str, x: f32, mut y: f32, w: f32, size: f32, c: Color) -> f32 {
     for word in s.split(' ') {
         let longer = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
         if !line.is_empty() && measure(&longer, size).width > w {
-            text(&line, x, y, size, c);
+            rich(&line, x, y, size, c);
             y += size * 1.25;
             line = word.to_string();
         } else {
             line = longer;
         }
     }
-    text(&line, x, y, size, c);
+    rich(&line, x, y, size, c);
     y + size * 1.25
+}
+
+// Colour, used sparingly against the grey: rules keywords, and the few names that move.
+const BLOOD: Color = rgb(0xff5d5d);
+const GOLD: Color = rgb(0xf0c75e);
+
+/// The colour a rules word is printed in, if it has one (punctuation and case ignored), and how
+/// it moves: effects that linger (burn, weaken, detonate) and rarities are alive on the page.
+fn keyword(word: &str) -> Option<(Color, Option<Motion>)> {
+    let w = word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+    let still = |c| Some((c, None));
+    match w.as_str() {
+        "burn" | "burns" | "burning" => Some((rgb(0xff8a4c), Some(Motion::Wave))),
+        "detonate" => Some((rgb(0xff8a4c), Some(Motion::Tremble))),
+        "weaken" | "halved" => Some((rgb(0xd2b48c), Some(Motion::Tremble))),
+        "legendary" => Some((GOLD, Some(Motion::Rainbow))),
+        "rare" => Some((rgb(0x7fc0ff), Some(Motion::Wave))),
+        "ember" => still(rgb(0xff8a4c)),
+        "shield" | "armor" | "tide" => still(rgb(0x6fb6ff)),
+        "heal" | "heals" | "healing" | "hp" => still(rgb(0x7bd88f)),
+        "damage" | "mine" | "mines" => still(BLOOD),
+        "shard" | "shards" => still(GOLD),
+        "surge" | "spark" => still(rgb(0xffe066)),
+        "reveal" | "reveals" | "flag" | "flagged" | "gale" => still(rgb(0x5fe0c8)),
+        _ => None,
+    }
+}
+
+/// One line of text with its keywords in colour (and the line's own alpha).
+fn rich(s: &str, x: f32, y: f32, size: f32, c: Color) {
+    let space = measure("a a", size).width - measure("aa", size).width;
+    let mut at = x;
+    for word in s.split(' ') {
+        match keyword(word) {
+            Some((k, Some(m))) => lively(word, at, y, size, Color { a: c.a, ..k }, m),
+            Some((k, None)) => text(word, at, y, size, Color { a: c.a, ..k }),
+            None => text(word, at, y, size, c),
+        }
+        at += measure(word, size).width + space;
+    }
+}
+
+fn rich_centered(s: &str, cx: f32, y: f32, size: f32, c: Color) {
+    rich(s, cx - measure(s, size).width / 2.0, y, size, c);
+}
+
+/// How a line's letters move on their own.
+#[derive(Clone, Copy, PartialEq)]
+enum Motion {
+    /// a slow wave running through the letters
+    Wave,
+    /// each letter shivers in place, for things to fear
+    Tremble,
+    /// the wave, with the letters running through the rainbow
+    Rainbow,
+}
+
+/// Text from `x` whose letters move by `m`, a few percent of its size.
+fn lively(s: &str, x: f32, y: f32, size: f32, c: Color, m: Motion) {
+    let t = now() as f32;
+    for (i, (b, ch)) in s.char_indices().enumerate() {
+        let (f, at) = (i as f32, x + measure(&s[..b], size).width);
+        let (dx, dy) = if m == Motion::Tremble {
+            let k = (t * 12.0) as usize;
+            ((noise(k, i) - 0.5) * size * 0.07, (noise(k + 31, i) - 0.5) * size * 0.07)
+        } else {
+            (0.0, (t * 2.4 - f * 0.5).sin() * size * 0.06)
+        };
+        let col = if m == Motion::Rainbow {
+            Color { a: c.a, ..macroquad::color::hsl_to_rgb((t * 0.12 + f * 0.05).fract(), 0.75, 0.7) }
+        } else {
+            c
+        };
+        text(&ch.to_string(), at + dx, y + dy, size, col);
+    }
+}
+
+fn lively_centered(s: &str, cx: f32, y: f32, size: f32, c: Color, m: Motion) {
+    lively(s, cx - measure(s, size).width / 2.0, y, size, c, m);
+}
+
+/// A pact's name: Legendary ones shimmer through the rainbow.
+fn pact_name(id: usize, x: f32, y: f32, size: f32, c: Color) {
+    if CHARMS[id].rarity == Rarity::Legendary {
+        lively(CHARMS[id].name, x, y, size, c, Motion::Rainbow);
+    } else {
+        text(CHARMS[id].name, x, y, size, c);
+    }
 }
 
 /// A filled rectangle. Corners are square throughout the black-and-white look.
@@ -724,8 +821,8 @@ pub fn status(run: &Run) {
 fn rarity_color(r: Rarity) -> Color {
     match r {
         Rarity::Common => MUTED,
-        Rarity::Rare => ACCENT,
-        Rarity::Legendary => INK,
+        Rarity::Rare => rgb(0x7fc0ff),
+        Rarity::Legendary => GOLD,
     }
 }
 
@@ -765,8 +862,8 @@ fn charm_bar(charms: &[usize]) {
         let c = &CHARMS[id];
         let panel = Rect::new(r.x.min(VIEW.x - 330.0), r.bottom() + 12.0, 310.0, 88.0);
         plate(panel, CARD);
-        text(c.name, panel.x + 14.0, panel.y + 24.0, 16.0, INK);
-        right(c.rarity.name(), panel.right() - 14.0, panel.y + 24.0, 16.0, rarity_color(c.rarity));
+        pact_name(id, panel.x + 14.0, panel.y + 24.0, 16.0, INK);
+        rich(c.rarity.name(), panel.right() - 14.0 - measure(c.rarity.name(), 16.0).width, panel.y + 24.0, 16.0, rarity_color(c.rarity));
         wrapped(c.desc, panel.x + 14.0, panel.y + 48.0, panel.w - 28.0, 16.0, MUTED);
     }
 }
@@ -803,9 +900,9 @@ fn rune_circle(c: Vec2, rx: f32, ry: f32, col: Color, a: f32) {
         let (p, q) = (at(ang, 0.86), at(ang, if k % 4 == 0 { 1.0 } else { 0.93 }));
         draw_line(p.x, p.y, q.x, q.y, 1.0, fade(col, a * 0.6));
     }
-    // a counter-turning six-point star inside
-    for k in 0..6 {
-        let ang = -t * 0.08 + k as f32 * std::f32::consts::TAU / 6.0;
+    // a counter-turning triangle inside
+    for k in 0..3 {
+        let ang = -t * 0.08 + k as f32 * std::f32::consts::TAU / 3.0;
         let (p, q) = (at(ang, 0.55), at(ang + std::f32::consts::TAU / 3.0, 0.55));
         draw_line(p.x, p.y, q.x, q.y, 1.0, fade(col, a * 0.5));
     }
@@ -833,7 +930,7 @@ pub fn title() -> Option<Go> {
         sprite(h.sprite, x - 48.0, 548.0 + (t * 2.0 + i as f32 * 2.1).sin() * 3.0, 96.0, WHITE);
     }
     let rise = 1.0 - (((now() - fx(|fx| fx.fade)) / 0.6) as f32).min(1.0);
-    stamped("MINEBOUND", 640.0, 140.0 - rise * 30.0, 92.0, INK);
+    lively_centered("MINEBOUND", 640.0, 140.0 - rise * 30.0, 92.0, INK, Motion::Wave);
     centered("Sweep your boards for power. Spend it before theirs spends you.", 640.0, 184.0, 20.0, MUTED);
     let mut go = None;
     if button(Rect::new(540.0, 222.0, 200.0, 48.0), "Play", true, true) {
@@ -846,13 +943,15 @@ pub fn title() -> Option<Go> {
         go = Some(Go::Back);
     }
     for (k, line) in [
-        "Clear every safe tile around a crystal to claim its element. Safe flips in a row build SURGE.",
-        "Drag stacks onto a rite's sockets to cast it, or onto the enemy to Strike. Right click flags. Space ends your turn.",
+        // the rules, as the Below would say them
+        "Bare the ground around a crystal and it answers to you. Walk unbroken, and the surge rises.",
+        "Feed the sockets and the rite is spoken. What you cannot spend, throw at their face.",
+        "The first stone never bites. The rest remember your name.",
     ]
     .iter()
     .enumerate()
     {
-        centered(line, 640.0, 424.0 + k as f32 * 22.0, 16.0, fade(MUTED, 0.8));
+        rich_centered(line, 640.0, 424.0 + k as f32 * 22.0, 16.0, fade(MUTED, 0.8));
     }
     go
 }
@@ -920,6 +1019,9 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
     let (x0, y0, cell, cols, rows) = LAND;
     let at = |c: usize, r: usize| kind.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0);
     let mine = |c: usize, r: usize| at(c, r) == 1 && noise(c + 50, r + 50) < 0.22;
+    // all the tiles first, then all the numbers: each switch between shapes and text is a new GPU
+    // draw call with buffers of its own, and hundreds of them made the driver take ~650 MB
+    let mut numbers = vec![];
     for r in 0..rows {
         for c in 0..cols {
             let t = Rect::new(x0 + c as f32 * cell, y0 + r as f32 * cell, cell - 3.0, cell - 3.0);
@@ -929,12 +1031,15 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
                     draw_rectangle_lines(t.x, t.y, t.w, t.h, 1.0, rgb(0x262626));
                     let n = (0..9).filter(|k| mine((c + k % 3).wrapping_sub(1), (r + k / 3).wrapping_sub(1))).count();
                     if n > 0 {
-                        centered(&n.to_string(), t.center().x, t.y + 15.0, 14.0, if n > 1 { INK } else { MUTED });
+                        numbers.push((n, t));
                     }
                 }
                 _ => {}
             }
         }
+    }
+    for (n, t) in numbers {
+        centered(&n.to_string(), t.center().x, t.y + 15.0, 14.0, if n > 1 { INK } else { MUTED });
     }
     // the route between places, dotted
     for w in PLACES.windows(2) {
@@ -1001,7 +1106,7 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
     }
 
     // the bearer: one sigil per hero; the chosen one is outlined, with its numbers below
-    let by = 512.0;
+    let by = 466.0;
     label("BEARER", lx, by);
     for (i, h) in HEROES.iter().enumerate() {
         let r = Rect::new(lx + i as f32 * 60.0, by + 12.0, 50.0, 50.0);
@@ -1024,7 +1129,8 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
         b if b >= CLEARED => "cleared".to_string(),
         b => format!("best: floor {b}"),
     };
-    text(&format!("{} life · {} power · {best}", h.hp, h.power), lx, by + 114.0, 14.0, MUTED);
+    text(&format!("{} HP · {} power · {best}", h.hp, h.power), lx, by + 114.0, 14.0, MUTED);
+    wrapped(h.passive_desc, lx, by + 138.0, w, 14.0, INK);
     for (k, &e) in h.elements.iter().enumerate() {
         gem(e, vec2(lx + 200.0 + k as f32 * 20.0, by + 87.0), 7.0);
     }
@@ -1259,6 +1365,8 @@ fn draw_shots(shots: &[Shot], now: f64) {
                             Effect::Drain(_) => stream(z, a, 16, mix(c2, INK, 0.3)),
                             Effect::Pierce => burst(z, 28, 440.0, 8.0, ICE),
                             Effect::Scout(_) => burst(a, 14, 160.0, 6.0, GOLD_C),
+                            Effect::Detonate => burst(z, 36, 420.0, 9.0, rgb(0xff8a4c)),
+                            Effect::Reveal(_) => burst(a, 12, 140.0, 5.0, rgb(0x5fe0c8)),
                             _ => {}
                         }
                     }
@@ -1316,6 +1424,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             Event::Claim => play(Sfx::Claim),
             Event::Mine => {
                 play(Sfx::Mine);
+                play(Sfx::Boom);
                 quake(11.0);
                 flash(BAD);
             }
@@ -1488,9 +1597,13 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     {
         let foe = &b.f[1];
         let ex = FOE.x + shake[1];
-        stamped(&foe.name, 640.0 + shake[1], 186.0, 40.0, INK);
-        centered(&foe.desc, 640.0 + shake[1], 210.0, 15.0, MUTED);
-        label("LIFE", ex, 236.0);
+        if BOSSES.iter().flatten().any(|d| d.name == foe.name) {
+            lively_centered(&foe.name, 640.0 + shake[1], 186.0, 40.0, BLOOD, Motion::Tremble);
+        } else {
+            stamped(&foe.name, 640.0 + shake[1], 186.0, 40.0, INK);
+        }
+        rich_centered(&foe.desc, 640.0 + shake[1], 210.0, 15.0, MUTED);
+        label("HP", ex, 236.0);
         right(&format!("{} / {}", foe.hp.max(0), foe.max_hp), ex + FOE.w, 236.0, 16.0, INK);
         life(Rect::new(ex, 244.0, FOE.w, 8.0), foe.hp as f32 / foe.max_hp as f32, ghost[1] / foe.max_hp as f32);
         text(&conditions(foe), ex, 276.0, 15.0, INK);
@@ -1566,7 +1679,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     let hx = 56.0 + shake[0];
     text(&me.name, hx, 434.0, 34.0, INK);
     wrapped(&me.desc, hx, 458.0, 330.0, 15.0, MUTED);
-    label("LIFE", hx, 506.0);
+    label("HP", hx, 506.0);
     right(&format!("{} / {}", me.hp.max(0), me.max_hp), hx + 330.0, 506.0, 16.0, INK);
     life(Rect::new(hx, 514.0, 330.0, 8.0), me.hp as f32 / me.max_hp as f32, ghost[0] / me.max_hp as f32);
     text(&conditions(me), hx, 546.0, 15.0, INK);
@@ -1626,9 +1739,11 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             let lift = if hot { 3.0 } else { 0.0 };
             block(Rect::new(r.x, r.y - lift, TILE, TILE), if hot { WHITE } else { up });
             if t.flagged {
-                // an inverted cross
-                draw_rectangle(mid.x - 2.5, mid.y - 14.0 - lift, 5.0, 28.0, OUT);
-                draw_rectangle(mid.x - 9.0, mid.y + 3.0 - lift, 18.0, 5.0, OUT);
+                // a flag: a pole on a little base, a pennant flying from its top
+                let y = mid.y - lift;
+                draw_rectangle(mid.x - 4.0, y - 14.0, 3.0, 26.0, OUT);
+                draw_rectangle(mid.x - 10.0, y + 10.0, 15.0, 4.0, OUT);
+                draw_triangle(vec2(mid.x - 1.0, y - 14.0), vec2(mid.x - 1.0, y - 2.0), vec2(mid.x + 12.0, y - 8.0), OUT);
             }
             if hot && clicked() && !t.flagged {
                 reveal = Some(i);
@@ -1770,7 +1885,12 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             block(r, if over_row { CARD_HI } else { CARD });
         }
         draw_line(rx, y + rh, rx + 350.0, y + rh, 1.0, FAINT);
-        text(c.title(lvl), rx, y + 30.0, 24.0, if lit || !slotted.is_empty() { INK } else { MUTED });
+        let bright = lit || !slotted.is_empty();
+        if lvl > 1 {
+            lively(c.title(lvl), rx, y + 30.0, 24.0, fade(GOLD, if bright { 1.0 } else { 0.55 }), Motion::Wave);
+        } else {
+            text(c.title(lvl), rx, y + 30.0, 24.0, if bright { INK } else { MUTED });
+        }
         // one socket per gem the rite takes, right-aligned
         let mut unslot = None;
         for (j, &e) in cost.iter().enumerate() {
@@ -1785,7 +1905,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
                 }
             }
         }
-        text(&c.describe(lvl), rx, y + rh - 12.0, 14.0, MUTED);
+        rich(&c.describe(lvl), rx, y + rh - 12.0, 14.0, MUTED);
         if lit {
             right(&format!("{} dmg", b.hit_damage(0, cost.len(), Some(c))), rx + 350.0, y + rh - 12.0, 15.0, INK);
         }
@@ -1843,7 +1963,17 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
 
     let has_stacks = !b.f[0].stacks.is_empty();
     let unleash = button(Rect::new(880.0, 640.0, 170.0, 44.0), &format!("Unleash {}", b.attack_damage(0)), mine && has_stacks, false);
-    let pass = button(Rect::new(1060.0, 640.0, 170.0, 44.0), "End turn", mine, true) || (mine && !modal() && is_key_pressed(KeyCode::Space));
+    // with reveals still unused, Space asks twice so a stray key does not throw them away
+    thread_local!(static ASKED: std::cell::Cell<f64> = const { std::cell::Cell::new(f64::MIN) });
+    let (left, asked) = (b.f[0].reveals_left, ASKED.with(|a| a.get()));
+    let space = mine && !modal() && is_key_pressed(KeyCode::Space);
+    let space_ends = space && (left <= 0 || now - asked < 2.0);
+    if space {
+        ASKED.with(|a| a.set(if space_ends { f64::MIN } else { now }));
+    } else if mine && now - asked < 2.0 {
+        right(&format!("{left} reveals left. Space again ends the turn."), 1230.0, 708.0, 14.0, MUTED);
+    }
+    let pass = button(Rect::new(1060.0, 640.0, 170.0, 44.0), "End turn", mine, true) || space_ends;
     if unleash {
         b.unleash();
     } else if pass {
@@ -2002,7 +2132,11 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
             outline(plate_r, if can || here { INK } else { FAINT });
             sprite(icon, p.x - 24.0, p.y - 24.0, 48.0, if here { BLACK } else if can { WHITE } else { fade(WHITE, 0.35) });
             let label = if here { "You are here" } else if boss { run.boss_def().name } else { node.kind.name() };
-            centered(label, p.x, p.y + 66.0, 16.0, if can || here { INK } else { MUTED });
+            if boss && !here {
+                lively_centered(label, p.x, p.y + 66.0, 16.0, BLOOD, Motion::Tremble);
+            } else {
+                centered(label, p.x, p.y + 66.0, 16.0, if can || here { INK } else { MUTED });
+            }
             if hot && clicked() {
                 play(Sfx::Click);
                 chosen = Some((c, r));
@@ -2021,7 +2155,11 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
         _ => GOLD_C,
     };
     text(["FLOOR CURSE", "FLOOR TWIST", "FLOOR BLESSING"][(twist.tone + 1) as usize], x, 140.0, 15.0, ACCENT);
-    text(twist.name, x, 164.0, 20.0, tone);
+    match twist.tone {
+        -1 => lively(twist.name, x, 164.0, 20.0, BLOOD, Motion::Tremble),
+        1 => lively(twist.name, x, 164.0, 20.0, GOLD, Motion::Wave),
+        _ => text(twist.name, x, 164.0, 20.0, tone),
+    }
     let mut y = wrapped(twist.desc, x, 186.0, 282.0, 16.0, INK) + 6.0;
     text("RITES", x, y + 8.0, 15.0, ACCENT);
     y += 16.0;
@@ -2032,7 +2170,11 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
         for (j, &e) in cost.iter().enumerate() {
             gem(e, vec2(x + 9.0 + j as f32 * 20.0, y + 9.0), 8.0);
         }
-        text(c.title(lvl), x + 9.0 + cost.len() as f32 * 20.0, y + 15.0, 16.0, if lvl > 1 { GOLD_C } else { INK });
+        if lvl > 1 {
+            lively(c.title(lvl), x + 9.0 + cost.len() as f32 * 20.0, y + 15.0, 16.0, GOLD, Motion::Wave);
+        } else {
+            text(c.title(lvl), x + 9.0 + cost.len() as f32 * 20.0, y + 15.0, 16.0, INK);
+        }
         if lvl > 1 {
             right(&format!("Lv {lvl}"), side.right() - 22.0, y + 15.0, 15.0, GOLD_C);
         }
@@ -2051,7 +2193,7 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
         }
         let c = &CHARMS[id];
         sprite(c.icon.0, x, r.y + (rows - 18.0) / 2.0, 18.0, rgb(c.icon.1));
-        text(c.name, x + 26.0, r.y + rows / 2.0 + 6.0, 16.0, if hot { INK } else { rarity_color(c.rarity) });
+        pact_name(id, x + 26.0, r.y + rows / 2.0 + 6.0, 16.0, if hot { INK } else { rarity_color(c.rarity) });
     }
     text(tip_label, x, 612.0, 15.0, ACCENT);
     wrapped(tip, x, 634.0, 282.0, 16.0, INK);
@@ -2073,8 +2215,8 @@ fn charm_card(r: Rect, id: usize, on: bool) -> bool {
     }
     let bob = (now() as f32 * 2.5 + id as f32).sin() * 2.0;
     charm_icon(id, Rect::new(r.x + 20.0, r.y + 22.0 + bob, 64.0, 64.0), 0.0);
-    text(c.name, r.x + 100.0, r.y + 52.0, 24.0, INK);
-    text(c.rarity.name(), r.x + 100.0, r.y + 78.0, 16.0, edge);
+    pact_name(id, r.x + 100.0, r.y + 52.0, 24.0, INK);
+    rich(c.rarity.name(), r.x + 100.0, r.y + 78.0, 16.0, edge);
     wrapped(c.desc, r.x + 24.0, r.y + 124.0, r.w - 48.0, 16.0, INK);
     hit
 }
@@ -2094,7 +2236,7 @@ pub fn pick(options: &[usize]) -> Option<usize> {
 
 /// A boss fell: the player picks one skill to upgrade. Returns its index in `COMBOS`.
 pub fn upgrade(run: &Run, ids: &[usize]) -> Option<usize> {
-    stamped("The boss falls", 640.0, 128.0, 44.0, GOLD_C);
+    lively_centered("The boss falls", 640.0, 128.0, 44.0, GOLD, Motion::Wave);
     centered("Upgrade one rite. It hits harder, takes a new name and look, and needs one more gem.", 640.0, 164.0, 18.0, MUTED);
     let n = ids.len() as f32;
     let (w, gap) = (280.0, 20.0);
@@ -2182,8 +2324,8 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
         }
         let lift = if hot { -6.0 } else { 0.0 } + (t as f32 * 2.5 + k as f32).sin() * 2.0;
         charm_icon(id, Rect::new(r.center().x - 44.0, r.y + 18.0 + lift, 88.0, 88.0), if sel == Some(k) { 0.3 } else { 0.0 });
-        centered(c.name, r.center().x, r.y + 134.0, 18.0, INK);
-        centered(c.rarity.name(), r.center().x, r.y + 154.0, 14.0, edge);
+        pact_name(id, r.center().x - measure(c.name, 18.0).width / 2.0, r.y + 134.0, 18.0, INK);
+        rich_centered(c.rarity.name(), r.center().x, r.y + 154.0, 14.0, edge);
         let tag = Rect::new(r.center().x - 52.0, r.y + 168.0, 104.0, 34.0);
         let afford = run.shards >= price;
         block(tag, WELL);
@@ -2206,8 +2348,8 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
         Some((k, id)) => {
             let c = &CHARMS[id];
             charm_icon(id, Rect::new(panel.x + 22.0, panel.y + 22.0, 64.0, 64.0), 0.0);
-            text(c.name, panel.x + 106.0, panel.y + 46.0, 28.0, INK);
-            text(c.rarity.name(), panel.x + 106.0, panel.y + 70.0, 16.0, rarity_color(c.rarity));
+            pact_name(id, panel.x + 106.0, panel.y + 46.0, 28.0, INK);
+            rich(c.rarity.name(), panel.x + 106.0, panel.y + 70.0, 16.0, rarity_color(c.rarity));
             wrapped(c.desc, panel.x + 106.0, panel.y + 100.0, 500.0, 18.0, INK);
             let price = Run::price(shop, k);
             if button(Rect::new(panel.right() - 240.0, panel.y + 56.0, 210.0, 48.0), &format!("Buy for {price}"), run.shards >= price, true) && run.buy(shop, k) {
@@ -2272,9 +2414,36 @@ pub fn event(run: &mut Run, e: &Encounter, result: &mut Option<String>) -> bool 
         wrapped(r, 240.0, y, 800.0, 22.0, GOLD_C);
         return button(Rect::new(540.0, y + 80.0, 200.0, 44.0), "Continue", true, true);
     }
+    // a choice that costs a pact first asks which one; remembered per encounter
+    thread_local!(static GIVING: std::cell::Cell<Option<(*const Encounter, usize)>> = const { std::cell::Cell::new(None) });
+    let giving = GIVING.with(|g| g.get()).filter(|g| std::ptr::eq(g.0, e)).map(|g| g.1);
+    if let Some(k) = giving {
+        let c = &e.choices[k];
+        centered("Give up which pact?", 640.0, y + 4.0, 18.0, INK);
+        let mut tip = "";
+        for (j, id) in run.charms.clone().into_iter().enumerate() {
+            let r = Rect::new(240.0 + (j % 3) as f32 * 270.0, y + 24.0 + (j / 3) as f32 * 50.0, 260.0, 40.0);
+            if r.contains(mouse()) {
+                tip = CHARMS[id].desc;
+            }
+            if button(r, CHARMS[id].name, true, false) {
+                *result = Some(run.choose(c, Some(id)));
+                GIVING.with(|g| g.set(None));
+            }
+        }
+        wrapped(tip, 240.0, 580.0, 600.0, 16.0, MUTED);
+        if button(Rect::new(890.0, 576.0, 150.0, 40.0), "Back", true, false) {
+            GIVING.with(|g| g.set(None));
+        }
+        return false;
+    }
     for (k, c) in e.choices.iter().enumerate() {
         if button(Rect::new(240.0, y + k as f32 * 60.0, 800.0, 44.0), c.label, run.can_afford(c), false) {
-            *result = Some(run.choose(c));
+            if c.outs.iter().any(|o| matches!(o, Out::LoseCharm)) {
+                GIVING.with(|g| g.set(Some((e as *const Encounter, k))));
+            } else {
+                *result = Some(run.choose(c, None));
+            }
         }
     }
     false
@@ -2283,14 +2452,18 @@ pub fn event(run: &mut Run, e: &Encounter, result: &mut Option<String>) -> bool 
 /// Returns true when the player heads back to the overworld. `opened` is an expedition this win unlocked.
 pub fn end(run: &Run, won: bool, opened: Option<usize>) -> bool {
     sprite(HEROES[run.hero].sprite, 592.0, 130.0, 96.0, if won { WHITE } else { fade(MUTED, 0.5) });
-    stamped(if won { "The last board is clear." } else { "Your run ends here." }, 640.0, 290.0, 52.0, if won { GOOD } else { BAD });
+    if won {
+        lively_centered("The last board is clear.", 640.0, 290.0, 52.0, INK, Motion::Rainbow);
+    } else {
+        lively_centered("Your run ends here.", 640.0, 290.0, 52.0, BLOOD, Motion::Tremble);
+    }
     let s = format!("{}    {}    floor {} of {}    {} pacts    seed {}", HEROES[run.hero].name, EXPEDITIONS[run.exp].name, run.floor + 1, FLOORS, run.charms.len(), run.seed);
     centered(&s, 640.0, 340.0, 20.0, MUTED);
     if let Some(x) = opened {
         let k = pop((7, 7, x));
         let r = scaled(Rect::new(390.0, 470.0, 500.0, 70.0), k);
         plate(r, CARD);
-        centered("A NEW PATH OPENS", 640.0, r.y + 28.0, 15.0, ACCENT);
+        lively_centered("A NEW PATH OPENS", 640.0, r.y + 28.0, 15.0, GOLD, Motion::Wave);
         centered(EXPEDITIONS[x].name, 640.0, r.y + 56.0, 24.0 * k, INK);
     }
     button(Rect::new(520.0, 390.0, 240.0, 44.0), "Back to the map", true, true)
@@ -2372,5 +2545,24 @@ pub fn settings() {
     if toggle {
         play(Sfx::Click);
         SETTINGS.with(|s| s.set(!open));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_text_shares_a_few_glyph_sizes_and_body_text_stays_exact() {
+        let sizes = |r: std::ops::RangeInclusive<i32>| r.map(|s| face(s as f32).1).collect::<std::collections::BTreeSet<_>>();
+        // every whole size from 24 to 92: about two octaves, so about 16 rungs at most
+        assert!(sizes(24..=92).len() <= 17, "{:?}", sizes(24..=92));
+        // and a size halfway through an animation lands on a rung a fixed size uses too
+        assert!(sizes(24..=92).contains(&face(40.37).1));
+        // body text keeps its own exact size, drawn at scale 1
+        for s in 10..24 {
+            assert_eq!(face(s as f32).2, (s as f32 * BODY_K) / face(s as f32).1 as f32);
+            assert!((face(s as f32).2 - 1.0).abs() < 0.05);
+        }
     }
 }

@@ -11,8 +11,8 @@ EMBER, TIDE, GALE, STONE, SPARK = 0xff7d4a, 0x4fa8ff, 0x5fe0a8, 0xcbb089, 0xffd8
 COMMON, RARE, LEGEND, WHITE = 0xdcd8f4, 0x7fc0ff, 0xffc46a, None
 # (candidate names, first one found wins; colour)
 SIGILS = [
-    # 0-2 heroes: Ashwarden, Stormreader, Deepforger
-    (["dwarf-helmet"], EMBER), (["wizard-face"], TIDE), (["blacksmith"], STONE),
+    # 0-2 heroes: Ashwarden, Stormreader, Deepforger (front-on heads, so the four read as a set)
+    (["dwarf-helmet"], EMBER), (["wizard-face"], TIDE), (["diving-helmet"], STONE),
     # 3-10 enemies
     (["hound"], TIDE), (["imp-laugh"], EMBER), (["spark-spirit"], GALE), (["golem-head"], STONE),
     (["leeching-worm"], TIDE), (["butterfly"], SPARK), (["thorny-vine"], GALE), (["rat"], EMBER),
@@ -35,7 +35,7 @@ SIGILS = [
     (["dynamite"], RARE), (["hourglass"], RARE), (["knapsack"], RARE), (["chain-lightning"], RARE), (["barrel"], RARE),
     (["gems"], LEGEND), (["shard-sword"], LEGEND), (["smoke-bomb"], LEGEND), (["third-eye"], LEGEND), (["echo-ripples"], LEGEND), (["battle-axe"], LEGEND),
     # 66 the fourth hero, Scaldwright (after the charms, so no older cell moves)
-    (["pyromaniac"], EMBER),
+    (["burning-skull"], EMBER),
 ]
 CELL, COLS, GLYPH = 128, 8, 100
 
