@@ -1,32 +1,18 @@
 //! Loading and playing sounds.
+//! Minebound's copy keeps only the Windows (WASAPI) backend; upstream has the others.
 
 #![allow(warnings)]
+
+#[cfg(not(windows))]
+compile_error!("this copy of quad-snd only has the Windows audio backend; see vendor/quad-snd/README.md");
 
 mod error;
 
 pub use error::Error;
 
-#[cfg(target_os = "android")]
-#[path = "opensles_snd.rs"]
-mod snd;
-
-#[cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd"))]
-#[path = "alsa_snd.rs"]
-mod snd;
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[path = "coreaudio_snd.rs"]
-mod snd;
-
-#[cfg(target_os = "windows")]
 #[path = "wasapi_snd.rs"]
 mod snd;
 
-#[cfg(target_arch = "wasm32")]
-#[path = "web_snd.rs"]
-mod snd;
-
-#[cfg(not(target_arch = "wasm32"))]
 mod mixer;
 
 pub use snd::{AudioContext, Playback, Sound};

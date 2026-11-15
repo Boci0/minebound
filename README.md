@@ -6,6 +6,7 @@
 [![Release build](https://github.com/Boci0/minebound/actions/workflows/release.yml/badge.svg)](https://github.com/Boci0/minebound/actions/workflows/release.yml)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
 ![Built with Rust](https://img.shields.io/badge/built%20with-Rust-B7410E)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 You and your enemy each sweep your own boards, one board per element. Crystals are always visible;
 mines are not. Clear every safe tile around a crystal to claim a stack of that board's element, then
@@ -21,6 +22,7 @@ fire now, or flip one more? The enemy plays by exactly the same rules, in full v
 - [Building from source](#building-from-source)
 - [Development](#development)
 - [Credits](#credits)
+- [License](#license)
 
 ## Features
 
@@ -93,8 +95,9 @@ before each boss is all rest sites.
 
 ## Building from source
 
-Requires [Git](https://git-scm.com) and [Rust](https://rustup.rs). On Windows, accept the Visual
-Studio C++ build tools when the Rust installer offers them.
+Minebound builds on Windows only: its audio library keeps just the Windows backend. You need
+[Git](https://git-scm.com) and [Rust](https://rustup.rs); accept the Visual Studio C++ build tools
+when the Rust installer offers them.
 
 ```
 git clone https://github.com/Boci0/minebound.git
@@ -140,4 +143,10 @@ All assets are CC0 (public domain).
 | Music | [Winter Lofi](https://freemusicarchive.org/music/holiznacc0/winter-lofi) by HoliznaCC0 |
 
 Licence files for each asset pack are in `assets/`. Audio playback uses a patched copy of
-[quad-snd](https://github.com/not-fl3/quad-snd) in `vendor/quad-snd` (MIT / Apache-2.0).
+[quad-snd](https://github.com/not-fl3/quad-snd) in `vendor/quad-snd` (MIT / Apache-2.0), cut down
+to its Windows backend.
+
+## License
+
+The game's code is released under the [MIT License](LICENSE). The assets keep their own licences
+(all CC0), listed under [Credits](#credits).

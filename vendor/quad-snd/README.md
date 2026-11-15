@@ -1,5 +1,9 @@
 # quad-snd
 
+> **Minebound's copy** of quad-snd 0.2.8 (https://github.com/not-fl3/quad-snd), patched to decode
+> sounds off the game thread and to follow the Windows default output device. Only the Windows
+> (WASAPI) backend is kept. To build for another platform, restore that backend from upstream.
+
 High-level, light-weight, and opinionated audio library.
 
 - [x] Web: WebAudio  
