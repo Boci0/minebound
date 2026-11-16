@@ -83,10 +83,16 @@ impl Save {
     pub fn record(&mut self, exp: usize, hero: usize, floor_reached: usize, won: bool) -> Option<usize> {
         let b = &mut self.best[exp][hero];
         *b = (*b).max(if won { CLEARED } else { floor_reached });
-        (won && exp + 1 == self.unlocked && self.unlocked < EXPEDITIONS.len()).then(|| {
+        let opened = self.would_open(exp, won);
+        if opened.is_some() {
             self.unlocked += 1;
-            exp + 1
-        })
+        }
+        opened
+    }
+
+    /// The expedition that ending a run of `exp` this way would unlock.
+    pub fn would_open(&self, exp: usize, won: bool) -> Option<usize> {
+        (won && exp + 1 == self.unlocked && self.unlocked < EXPEDITIONS.len()).then_some(exp + 1)
     }
 }
 

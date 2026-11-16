@@ -223,26 +223,47 @@ async fn main() {
                 None => {}
             },
             Screen::Run(run, stage, opened) => {
-                // debug builds only: F9 or a middle click wins the current fight, to walk through a run quickly
-                if cfg!(debug_assertions) && (is_key_pressed(KeyCode::F9) || is_mouse_button_pressed(MouseButton::Middle)) {
-                    if let Stage::Battle(b) = stage {
-                        b.debug_win();
+                // debug builds only, to reach any screen quickly: F9, Ctrl+W or a middle click wins the current
+                // fight, F7 or Ctrl+L loses it, F8 or Ctrl+B jumps to the last floor's boss (laptops often
+                // hide F keys behind Fn). A run that used one is not saved.
+                if cfg!(debug_assertions) {
+                    let ctrl = |k| (is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl)) && is_key_pressed(k);
+                    let win = is_key_pressed(KeyCode::F9) || ctrl(KeyCode::W) || is_mouse_button_pressed(MouseButton::Middle);
+                    let (lose, jump) = (is_key_pressed(KeyCode::F7) || ctrl(KeyCode::L), is_key_pressed(KeyCode::F8) || ctrl(KeyCode::B));
+                    run.debug |= win || lose || jump;
+                    match stage {
+                        Stage::Battle(b) if b.over() => {}
+                        Stage::Battle(b) if win => b.debug_win(),
+                        Stage::Battle(b) if lose => b.f[0].hp = 0,
+                        _ => {}
+                    }
+                    if jump && !matches!(stage, Stage::Battle(b) if b.over()) {
+                        *stage = run.debug_last_fight();
+                        ui::transition();
                     }
                 }
+                // the run's last fight shows the run's summary in place of its result card
+                let mut summarised = false;
                 let next = match stage {
                     Stage::Map => ui::map_screen(run).map(|(c, r)| run.enter(c, r)),
                     Stage::Battle(b) => {
                         // the very first fight waits under a sheet of rules until it is read
                         ui::hold_for_rules(!save.rules_seen);
-                        let done = ui::battle_screen(b, run.floor, &run.charms, &mut ai_timer);
+                        let ending = b.over() && (!b.won() || run.last_fight());
+                        let opens = save.would_open(run.exp, b.won()).filter(|_| !run.debug);
+                        let done = ui::battle_screen(b, run, ending.then_some(opens), &mut ai_timer);
                         if !save.rules_seen && ui::rules() {
                             save.rules_seen = true;
                             save.store();
                         }
                         if !b.over() && ui::surrender() {
+                            run.tally(b);
                             Some(Stage::End(false))
+                        } else if done {
+                            summarised = ending;
+                            Some(run.finish_battle(b))
                         } else {
-                            done.then(|| run.finish_battle(b))
+                            None
                         }
                     }
                     Stage::Pick(options) => {
@@ -279,13 +300,15 @@ async fn main() {
                 };
                 // you may walk away from an expedition anywhere but mid-fight; how far you got still counts
                 if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
-                    save.record(run.exp, run.hero, run.floor + 1, false);
-                    save.store();
+                    if !run.debug {
+                        save.record(run.exp, run.hero, run.floor + 1, false);
+                        save.store();
+                    }
                     quit_run = true;
                 }
                 if let Some(n) = next {
-                    if let Stage::End(won) = n {
-                        *opened = save.record(run.exp, run.hero, run.floor + 1, won);
+                    if let (Stage::End(won), false) = (&n, run.debug) {
+                        *opened = save.record(run.exp, run.hero, run.floor + 1, *won);
                         save.store();
                         if let Some(x) = *opened {
                             pick.0 = x;
@@ -293,6 +316,8 @@ async fn main() {
                     }
                     *stage = n;
                     ui::transition();
+                    // the summary was already read over the last fight
+                    quit_run |= summarised;
                 }
             }
         }

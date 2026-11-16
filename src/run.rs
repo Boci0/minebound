@@ -83,6 +83,12 @@ pub struct Run {
     pub map: Vec<Vec<Node>>,
     pub pos: Option<(usize, usize)>,
     pub note: String,
+    /// for the end screen: fights won, rite damage dealt, and the biggest single rite (damage, name)
+    pub wins: usize,
+    pub dealt: i32,
+    pub best: (i32, &'static str),
+    /// a developer shortcut was used: the run is not saved
+    pub debug: bool,
     /// pacts given up in the choice being applied, so the same trade cannot hand them back
     given: Vec<usize>,
 }
@@ -107,6 +113,10 @@ impl Run {
             map: vec![],
             pos: None,
             note: String::new(),
+            wins: 0,
+            dealt: 0,
+            best: (0, ""),
+            debug: false,
             given: vec![],
         };
         run.gen_map();
@@ -335,15 +345,38 @@ impl Run {
         }
     }
 
+    /// Adds a battle's damage to the run's totals. Called once per battle, also when it is given up.
+    pub fn tally(&mut self, b: &Battle) {
+        self.dealt += b.dealt;
+        if b.best.0 > self.best.0 {
+            self.best = b.best;
+        }
+    }
+
+    /// Developer shortcut: straight to the last floor's boss fight.
+    pub fn debug_last_fight(&mut self) -> Stage {
+        self.debug = true;
+        self.floor = FLOORS - 1;
+        self.gen_map();
+        self.enter(COLS, 0)
+    }
+
+    /// The fight in progress is the last floor's boss: winning it wins the run.
+    pub fn last_fight(&self) -> bool {
+        self.floor + 1 == FLOORS && self.pos.is_some_and(|(c, r)| self.map[c][r].kind == NodeKind::Boss)
+    }
+
     pub fn finish_battle(&mut self, b: &Battle) -> Stage {
         self.hp = b.f[0].hp;
+        self.tally(b);
         if !b.won() {
             return Stage::End(false);
         }
-        let kind = self.pos.map_or(NodeKind::Battle, |(c, r)| self.map[c][r].kind);
-        if kind == NodeKind::Boss && self.floor + 1 == FLOORS {
+        self.wins += 1;
+        if self.last_fight() {
             return Stage::End(true);
         }
+        let kind = self.pos.map_or(NodeKind::Battle, |(c, r)| self.map[c][r].kind);
         let m = self.mods();
         let base = match kind {
             NodeKind::Boss => 40,
@@ -595,7 +628,11 @@ mod tests {
                     assert!(run.hp >= 1 && run.shards >= 0 && run.hp <= run.max_hp());
                     run.after_node()
                 }
-                Stage::End(won) => return (won, run.floor),
+                Stage::End(won) => {
+                    // the end screen's totals: a fight won means rite damage dealt, and the best hit is part of it
+                    assert!(run.wins == 0 || (run.dealt > 0 && run.best.0 > 0 && run.best.0 <= run.dealt));
+                    return (won, run.floor);
+                }
             };
         }
         panic!("run never ends: seed {seed} hero {hero}");

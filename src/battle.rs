@@ -166,6 +166,11 @@ pub struct Battle {
     pub active: usize,
     pub log: Vec<String>,
     pub events: Vec<Event>,
+    /// the hero's rite damage this battle, and its biggest single rite: (damage, rite name)
+    pub dealt: i32,
+    pub best: (i32, &'static str),
+    /// the enemy a wave change just replaced, for the screen to show until the killing blow lands
+    pub fallen: Option<Fighter>,
     rng: Rng,
 }
 
@@ -174,7 +179,7 @@ impl Battle {
         let waves = enemies.len();
         enemies.reverse();
         let first = enemies.pop().expect("a battle needs an enemy");
-        let mut b = Battle { f: [player, first], queue: enemies, wave: 1, waves, turn: 1, active: 0, log: vec![], events: vec![], rng };
+        let mut b = Battle { f: [player, first], queue: enemies, wave: 1, waves, turn: 1, active: 0, log: vec![], events: vec![], dealt: 0, best: (0, ""), fallen: None, rng };
         for _ in 0..b.f[0].mods.start_stacks {
             let k = b.rng.below(b.f[0].elements.len());
             let e = b.f[0].elements[k];
@@ -437,7 +442,7 @@ impl Battle {
         }
         let Some(next) = self.queue.pop() else { return false };
         self.log.push(format!("{} falls. {} steps in.", self.f[1].name, next.name));
-        self.f[1] = next;
+        self.fallen = Some(std::mem::replace(&mut self.f[1], next));
         self.wave += 1;
         let h = self.f[0].mods.heal_after;
         if h > 0 {
@@ -748,6 +753,12 @@ impl Battle {
                     let cur = self.f[t].cur;
                     self.f[t].boards[cur].bury(up(n as i32) as usize, &mut self.rng);
                 }
+            }
+        }
+        if a == 0 && hits {
+            self.dealt += dmg;
+            if dmg > self.best.0 {
+                self.best = (dmg, name);
             }
         }
         let dealt = self.hurt(t, dmg);
