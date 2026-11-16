@@ -35,8 +35,8 @@ fire now, or flip one more? The enemy plays by exactly the same rules, in full v
 
 - **Four heroes**, each with their own elements, rites and play style.
 - **Five elements** and 17 rites that need the right mix of gems, each upgradable to level 3.
-- **Branching runs** across three floors: battles, elites, encounters, shops, shrines, rest sites,
-  treasure and a boss at the end of each floor.
+- **Branching runs** across three floors: battles, elites, encounters, shops, shrines, treasure
+  and a boss at the end of each floor.
 - **38 pacts** in three rarities (common, rare, legendary) that bend the rules of a turn.
 - **12 brands**: beat an elite to burn one onto a rite and give it an extra effect.
 - **10 blessings**: win a shrine fight to take one. You hold one at a time, and each lifts a single
@@ -135,10 +135,13 @@ game reminds you to right click first.
 
 ### Rites and damage
 
-- A rite's damage is **power × gems spent, plus its bonus**, multiplied by surge.
+- A rite's damage is **power × gems spent, plus its bonus**, multiplied by surge. Hover a rite's
+  damage number to see each step that makes it.
+- A rite deals damage only if its text says so. Bulwark, Lodestone, Mistveil and Sandstorm deal
+  none; they only do what they say.
 - **Surge**: each safe flip in a row this turn adds a step, worth +20%, up to 5 steps (+100%).
-  Every rite you cast spends one step, so casting early makes later rites weaker. A mine wipes
-  all your surge.
+  Every rite that deals damage spends one step, so casting early makes later rites weaker. Rites
+  that deal no damage spend nothing. A mine wipes all your surge.
 - Casting does not end your turn. Cast, flip some more, and cast again.
 - **Shield** soaks damage before HP does. Half of it wears off at the start of its owner's next
   turn. Burn goes straight through it.
@@ -149,43 +152,45 @@ game reminds you to right click first.
 
 Each hero can cast four rites: the three made from two of their elements, and the one made from all
 three. Beating a boss lets you **upgrade** a rite, up to level 3. Each level renames the rite, raises
-its numbers by about half, and adds one more gem to its cost.
+its numbers by about half, and adds one more gem to its cost. A level 3 rite is **mastered**: its
+damage, shield and healing are 50% stronger on top.
 
 | Rite | Gems | Effect at level 1 |
 | --- | --- | --- |
 | Steam Burst | Ember, Tide | +4 damage, +1 reveal |
-| Wildfire | Ember, Gale | Burn foe for 3 turns |
+| Raze | Ember, Gale | +2 damage, +2 damage per quarter of your HP lost |
 | Magma | Ember, Stone | Shatter foe's shield, +3 damage |
 | Plasma | Ember, Spark | +3 damage, +1 damage per surge |
-| Mistveil | Tide, Gale | Heal 4, +3 damage |
-| Bulwark | Tide, Stone | Gain 7 shield |
-| Conduction | Tide, Spark | Foe loses 2 stacks, +3 damage |
-| Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, +2 foe mines |
+| Mistveil | Tide, Gale | Heal 8, +2 reveals (no damage) |
+| Bulwark | Tide, Stone | Gain 12 shield (no damage) |
+| Conduction | Tide, Spark | +3 damage, then +2 surge |
+| Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, +2 foe mines (no damage) |
 | Thunderclap | Gale, Spark | Break 1 foe crystal, +2 damage |
-| Lodestone | Stone, Spark | Gain 4 shield, +4 damage |
-| Eruption | Ember, Gale, Stone | +7 damage, detonate foe's burn |
-| Tempest | Tide, Gale, Spark | +6 damage, heal 2 |
-| Geode Surge | Tide, Stone, Spark | +6 damage, gain 6 shield |
+| Lodestone | Stone, Spark | Double your shield (adding at most 12), then +5 shield (no damage) |
+| Upheaval | Ember, Gale, Stone | You lose 4 HP, +11 damage |
+| Tempest | Tide, Gale, Spark | +1 damage per reveal used this turn |
+| Geode Surge | Tide, Stone, Spark | +6 damage, and your shield becomes 150% damage, then it's gone |
 | Forgefire | Ember, Stone, Spark | +8 damage |
 | Maelstrom | Tide, Gale, Stone | Gain 6 shield, heal 4 |
 | Short Circuit | Ember, Gale, Spark | +6 damage, foe loses 1 stack |
-| Boilover | Ember, Tide, Spark | Burn foe for 2 turns, +5 damage |
+| Boilover | Ember, Tide, Spark | Burn 3 on foe, +1 damage per burn on the foe |
 
-**Burn** costs its target 2 HP at the start of each of its turns, for the turns shown.
-**Detonate** sets off all the burn left at once.
+**Burn** stacks. At the start of its turn, the burning side loses 1 HP per burn, straight through
+shield, and then the burn halves. **Detonate** (the Fuse brand) sets off all the burn at once.
 
 ### Heroes
 
 All four play by the same rules. Each brings three elements and a trait that keeps them alive.
 
-| Hero | HP | Elements | Rites | Trait |
-| --- | --- | --- | --- | --- |
-| Ashwarden | 100 | Ember, Gale, Stone | Wildfire, Magma, Sandstorm, Eruption | Mines deal 1 less damage, and every hit on you 3 less |
-| Stormreader | 94 | Tide, Gale, Spark | Mistveil, Conduction, Thunderclap, Tempest | +1 reveal each turn; each reveal left unused becomes 3 shield |
-| Deepforger | 96 | Tide, Stone, Spark | Bulwark, Conduction, Lodestone, Geode Surge | 10 shield at the start of each wave, 2 more every turn |
-| Scaldwright | 96 | Ember, Tide, Spark | Steam Burst, Plasma, Conduction, Boilover | Rites burn the foe for 3 turns and heal you for 15% of their damage |
+| Hero | HP | Power | Elements | Rites | Trait |
+| --- | --- | --- | --- | --- | --- |
+| Ashwarden | 100 | 7 | Ember, Gale, Stone | Raze, Magma, Sandstorm, Upheaval | Mines deal 1 less damage, and every hit on you 3 less |
+| Stormreader | 94 | 7 | Tide, Gale, Spark | Mistveil, Conduction, Thunderclap, Tempest | +1 reveal each turn; each reveal left unused becomes 3 shield |
+| Deepforger | 96 | 6 | Tide, Stone, Spark | Bulwark, Conduction, Lodestone, Geode Surge | Each point of shield you hold stops 2 damage |
+| Scaldwright | 96 | 6 | Ember, Tide, Spark | Steam Burst, Plasma, Conduction, Boilover | Every rite adds 1 burn on the foe and heals you for 15% of its damage |
 
-Every hero starts with 5 power.
+Ashwarden is a berserker who hits harder as he gets hurt. Stormreader turns reveals into damage or
+shield. Deepforger builds a wall of shield and throws it. Scaldwright stacks burn and cashes it in.
 
 ### A run
 
@@ -199,20 +204,22 @@ for that hero.
 ![A floor map: the path splits across battles, a shrine, a shop, treasure, an encounter and an elite, then rest sites before the boss](docs/screenshots/map.png)
 
 Each floor is a map of paths. Pick a node in the next column to move on. The first column is always
-a battle, and the column before the boss is all rest sites. The side panel shows your rites, your
+a battle. The side panel shows your rites, your
 blessing and your pacts, plus the floor's **twist**: one random rule for the whole floor that may
 help or hurt.
 
 | Node | What happens |
 | --- | --- |
-| Battle | One to three enemies in a row (more on later floors). Win 18–24 shards and 5 HP back. |
+| Battle | One to three enemies in a row (more on later floors). Win 18–24 shards. |
 | Elite | A normal enemy, then an elite. Win 25–34 shards and a **brand**. Appears from the third column. |
 | Shrine | A normal battle. Win it and choose a **blessing**. Every floor has at least one. |
-| Shop | Four pacts for sale (one at 25% off), 18 HP for 20 shards, and restocks. |
+| Shop | Four pacts for sale (one at 25% off), and restocks. |
 | Treasure | Choose one pact from three. |
-| Encounter | A short event with a choice: shards, HP, max HP or pacts, often for a price or a gamble. |
-| Rest | Sleep (heal 30% of max HP) or train (+5 max HP). |
+| Encounter | A short event with a choice: shards, max HP or pacts, often for a price or a gamble. |
 | Boss | A floor's boss. Win 40 shards and upgrade one of your rites. |
+
+You heal to **full HP after every battle**, so only the fight in front of you can kill you. Damage
+does carry from one wave to the next inside a battle.
 
 You can **Retreat** anywhere outside a battle; how far you got still counts. In a battle,
 **Surrender** gives up the whole expedition.
@@ -237,7 +244,7 @@ when you hover it.
 | Lucky Coin | Common | The first mine you hit each wave is a dud |
 | Dowsing Rod | Common | 3 mines start flagged on each of your boards |
 | Ward Stone | Common | Gain 10 shield at the start of each wave |
-| Field Rations | Common | Heal 10 after every battle |
+| Field Rations | Common | Heal 10 whenever a new wave steps in |
 | Magpie Purse | Common | +50% shards from battles |
 | Head Start | Common | Begin each battle with 3 random stacks |
 | Bramble Coat | Common | Enemy rites that hit you cost them 4 HP |
@@ -252,7 +259,7 @@ when you hover it.
 | Plate Scraps | Common | Every hit on you deals 2 less |
 | Heart Root | Common | +20 max HP |
 | Quick Fingers | Rare | +1 reveal each turn |
-| Resonator | Rare | Rite damage, shield and healing are 75% stronger |
+| Resonator | Rare | Each rite's listed damage, shield and healing are 75% stronger |
 | Leech Fang | Rare | Heal for 30% of the damage your rites deal |
 | Ambush Wire | Rare | Deal 10 damage at the start of each wave |
 | Running Start | Rare | Begin each turn with 3 surge |
@@ -263,7 +270,7 @@ when you hover it.
 | Salvager | Rare | Crystals you break with a mine still pay out |
 | Spite Fuse | Rare | Mines you hit also deal 6 damage to the enemy |
 | Hourglass | Rare | Each reveal left unused at turn end becomes 3 shield |
-| Hoarder's Sack | Rare | End your turn holding 3+ stacks: 2 shield per stack |
+| Hoarder's Sack | Rare | End your turn holding 3+ stacks: gain 6 shield |
 | Chain Lightning | Rare | Each rite after your first in a turn deals +5 more than the one before |
 | Powder Keg | Rare | Mines no longer end your turn; they still hurt and wipe surge |
 | Twin Vein | Legendary | Crystals give 2 stacks, but your boards hold 2 more mines |
@@ -336,7 +343,7 @@ details.
 | Ash Rat | Normal | Snatches one of your stacks as its turn starts |
 | The Quarrymaster | Elite | Starts with 8 shield; every hit deals 1 less |
 | Gale Duchess | Elite | One extra reveal; the first rite each turn only grazes her |
-| Kiln Tyrant | Elite | Burns harder, and +1 power every turn |
+| Kiln Tyrant | Elite | Its rites set you burning, and +1 power every turn |
 | Minelayer Queen | Boss, floor 1 | 1 extra mine in your boards; gains a stack when you hit one |
 | The Sapper King | Boss, floor 1 | Starts with 6 shield; snatches one of your stacks each turn |
 | The Undertow | Boss, floor 2 | Heals 2 and gains 2 shield each turn |
@@ -353,11 +360,11 @@ Six descents, each harder than the last. Clearing one opens the next.
 | Expedition | Rules |
 | --- | --- |
 | Shallow Mines | No extra rules |
-| Flooded Caverns | Enemies have 15% more HP |
-| Ember Depths | Enemies have 15% more HP; bosses gain +1 power every turn |
-| Crystal Hollows | Enemies have 30% more HP; bosses gain +1 power every turn; 1 fewer reveal each turn |
+| Flooded Caverns | Enemies have 10% more HP |
+| Ember Depths | Enemies have 10% more HP; bosses gain +1 power every 2 turns |
+| Crystal Hollows | Enemies have 15% more HP; bosses gain +1 power every 2 turns; 1 fewer reveal each turn |
 | The Rift | Every law of Crystal Hollows; every floor's twist is a curse; every rite costs 1 more gem, of any element |
-| The Null | Every law of The Rift; enemies have 45% more HP and +1 power |
+| The Null | Every law of The Rift; enemies have 25% more HP and +1 power |
 
 On The Rift and The Null, the extra gem shows as its own socket on each rite, marked with a ring
 cut by a bar. Any element fills it.
@@ -369,7 +376,7 @@ cut by a bar. Any element fills it.
 | --- | --- |
 | Shallow Seams | 1 fewer mine on each of your boards |
 | Tailwind | Begin each turn with 1 surge |
-| Second Wind | Heal 6 more after every battle |
+| Second Wind | Heal 6 whenever a new wave steps in |
 | Gold Dust | +50% shards from battles |
 | Fault Lines | Mines deal 1 more damage to you (curse) |
 | Iron Hides | Enemies start each wave with 6 shield (curse) |
@@ -390,8 +397,10 @@ cut by a bar. Any element fills it.
   Hex) now beats a little extra damage.
 - **Use its board.** Thunderclap, Fracture and Snare break its crystals or bury mines on the board
   it is sweeping. Its gems are visible under its board.
-- **Rest before the boss.** The column before each boss is all rest sites. Sleep if you are low,
-  train if you are not.
+- **Waves are where it hurts.** You heal to full between battles, but not between the waves of
+  one battle, so a two- or three-wave fight is the one to plan for.
+- **Set up for free.** Bulwark, Lodestone, Mistveil and Sandstorm spend no surge, so cast them
+  before the rite that hits.
 - **Spend shards.** They don't carry over between runs.
 
 ### Replaying a run

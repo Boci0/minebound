@@ -6,10 +6,7 @@ use crate::{
 
 pub const FLOORS: usize = 3;
 pub const COLS: usize = 5;
-pub const HEAL_PRICE: i32 = 20;
-pub const HEAL_AMOUNT: i32 = 18;
 /// HP everyone recovers after a won fight
-pub const BREATHER: i32 = 5;
 pub const SHOP_SIZE: usize = 4;
 /// the first restock; each one after costs this much more
 pub const RESTOCK_PRICE: i32 = 10;
@@ -20,7 +17,6 @@ pub enum NodeKind {
     Elite,
     Encounter,
     Shop,
-    Rest,
     Treasure,
     Boss,
     /// a fight whose prize is a blessing
@@ -29,7 +25,7 @@ pub enum NodeKind {
 
 impl NodeKind {
     pub fn name(self) -> &'static str {
-        ["Battle", "Elite", "Encounter", "Shop", "Rest", "Treasure", "Boss", "Shrine"][self as usize]
+        ["Battle", "Elite", "Encounter", "Shop", "Treasure", "Boss", "Shrine"][self as usize]
     }
 }
 
@@ -220,17 +216,13 @@ impl Run {
         if col == COLS {
             return NodeKind::Boss;
         }
-        if col == COLS - 1 {
-            return NodeKind::Rest; // every path gets a chance to heal before the boss
-        }
         match self.rng.below(100) {
             0..=29 => NodeKind::Battle,
-            30..=49 => NodeKind::Encounter,
+            30..=49 | 85..=93 => NodeKind::Encounter,
             50..=64 if col >= 2 => NodeKind::Elite,
             50..=64 => NodeKind::Battle,
             65..=74 => NodeKind::Shop,
             75..=84 => NodeKind::Shrine,
-            85..=93 => NodeKind::Rest,
             _ => NodeKind::Treasure,
         }
     }
@@ -290,7 +282,7 @@ impl Run {
     /// `slow`: how many fewer tiles it flips per turn than a hero. Lesser foes sweep slower.
     fn enemy(&self, d: &EnemyDef, scale: bool, slow: i32) -> Fighter {
         let floor = self.floor as i32;
-        let (hp, power) = if scale { (d.hp * (240 + 160 * floor) / 100, d.power + floor) } else { (d.hp * 150 / 100, d.power) };
+        let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100, d.power + floor) } else { (d.hp * 220 / 100, d.power) };
         let x = &EXPEDITIONS[self.exp];
         let hp = hp * x.hp_pct / 100;
         let mut m = Mods::default();
@@ -338,7 +330,6 @@ impl Run {
                 Stage::Battle(Battle::new(me, foes, Rng::new(self.rng.next())))
             }
             NodeKind::Encounter => Stage::Event(&ENCOUNTERS[self.rng.below(ENCOUNTERS.len())], None),
-            NodeKind::Rest => Stage::Event(&REST, None),
             NodeKind::Shop => Stage::Shop(self.stock(0, &[])),
             NodeKind::Treasure => self.pick(),
         }
@@ -361,8 +352,9 @@ impl Run {
         };
         let shards = base * (100 + m.shard_pct) / 100;
         self.shards += shards;
-        self.hp = (self.hp + BREATHER + m.heal_after).min(self.max_hp());
-        self.note = format!("Won the fight: +{shards} shards.");
+        // every battle ends at full HP: only the fight in front of you can kill you
+        self.hp = self.max_hp();
+        self.note = format!("Won the fight: +{shards} shards, HP restored.");
         match kind {
             NodeKind::Battle => self.after_node(),
             NodeKind::Boss => {
@@ -409,8 +401,6 @@ impl Run {
     fn apply(&mut self, outs: &[Out], give: Option<usize>, msg: &mut Vec<String>) {
         for o in outs {
             match *o {
-                Out::Hp(v) => self.heal(v, msg),
-                Out::HealPct(p) => self.heal(self.max_hp() * p / 100, msg),
                 Out::MaxHp(v) => {
                     self.bonus_hp += v;
                     self.hp = (self.hp + v.max(0)).clamp(1, self.max_hp());
@@ -446,13 +436,6 @@ impl Run {
                 }
             }
         }
-    }
-
-    // encounters never kill: HP stops at 1
-    fn heal(&mut self, v: i32, msg: &mut Vec<String>) {
-        let before = self.hp;
-        self.hp = (self.hp + v).clamp(1, self.max_hp());
-        msg.push(format!("{:+} HP.", self.hp - before));
     }
 
     fn stock(&mut self, restocks: i32, avoid: &[usize]) -> Shop {
@@ -494,15 +477,6 @@ impl Run {
         self.shards -= price;
         let shelf: Vec<usize> = shop.stock.iter().flatten().copied().collect();
         *shop = self.stock(shop.restocks + 1, &shelf);
-        true
-    }
-
-    pub fn buy_heal(&mut self) -> bool {
-        if self.shards < HEAL_PRICE || self.hp >= self.max_hp() {
-            return false;
-        }
-        self.shards -= HEAL_PRICE;
-        self.hp = (self.hp + HEAL_AMOUNT).min(self.max_hp());
         true
     }
 }
@@ -612,7 +586,6 @@ mod tests {
                     for k in 0..shop.stock.len() {
                         run.buy(&mut shop, k);
                     }
-                    while run.buy_heal() {}
                     run.after_node()
                 }
                 Stage::Event(e, _) => {
@@ -631,14 +604,17 @@ mod tests {
     #[test]
     fn simulated_runs_end_and_stay_in_a_sane_balance_band() {
         const RUNS: u64 = 300;
-        for hero in 0..HEROES.len() {
-            let results: Vec<(bool, usize)> = (0..RUNS).map(|s| simulate(s, hero, 0)).collect();
-            let wins = results.iter().filter(|r| r.0).count();
-            let past_floor_1 = results.iter().filter(|r| r.1 >= 1).count();
-            println!(
-                "{:12} wins {:3}/{RUNS}  cleared floor 1: {:3}/{RUNS}",
-                HEROES[hero].name, wins, past_floor_1
-            );
+        // every hero's line first, so one failing does not hide how the others did
+        let tally: Vec<(usize, usize)> = (0..HEROES.len())
+            .map(|hero| {
+                let results: Vec<(bool, usize)> = (0..RUNS).map(|s| simulate(s, hero, 0)).collect();
+                let wins = results.iter().filter(|r| r.0).count();
+                let past_floor_1 = results.iter().filter(|r| r.1 >= 1).count();
+                println!("{:12} wins {:3}/{RUNS}  cleared floor 1: {:3}/{RUNS}", HEROES[hero].name, wins, past_floor_1);
+                (wins, past_floor_1)
+            })
+            .collect();
+        for (hero, &(wins, past_floor_1)) in tally.iter().enumerate() {
             // the bot plays plainly (never banks stacks for a combo), so a human should beat these
             assert!(past_floor_1 as u64 >= RUNS * 30 / 100, "{} dies too early", HEROES[hero].name);
             assert!((wins as u64) >= RUNS * 5 / 100, "{} cannot win", HEROES[hero].name);

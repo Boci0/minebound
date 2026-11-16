@@ -44,6 +44,8 @@ pub struct Mods {
     pub rite_bonus: i32,
     pub rite_burn: i32,
     pub first_pct: i32,
+    /// each point of shield stops this many more damage
+    pub shield_block: i32,
     // crystals and mines
     pub claim_zap: i32,
     pub claim_heal: i32,
@@ -60,6 +62,8 @@ pub struct Mods {
     pub graze: i32,
     pub pilfer: i32,
     pub enrage: i32,
+    /// +1 power every second turn (the deeper descents' bosses)
+    pub slow_enrage: i32,
     // charms that change how a turn plays
     pub reveal_shield: i32,
     pub hoard_shield: i32,
@@ -91,6 +95,20 @@ pub enum Effect {
     Shatter(usize),
     /// plants hidden mines in the foe's board
     Bury(usize),
+    /// surge steps gained after the cast
+    Surge(i32),
+    /// more damage for each reveal the caster used this turn
+    PerReveal(i32),
+    /// the caster's shield doubles, gaining at most this much
+    DoubleShield(i32),
+    /// the caster's shield joins the hit at this percent (no surge), then is gone
+    ShieldBlast(i32),
+    /// more damage for each burn on the foe as the rite lands
+    PerBurn(i32),
+    /// more damage for each quarter of its HP the caster has lost (up to 3)
+    PerQuarterLost(i32),
+    /// the caster pays HP, never below 1
+    SelfDamage(i32),
 }
 use Effect::*;
 
@@ -104,6 +122,13 @@ pub struct Combo {
 
 /// Highest level a skill can reach.
 pub const MAX_LEVEL: usize = 3;
+/// A rite at `MAX_LEVEL` is mastered: its damage, shield and healing are this much stronger.
+pub const MASTERED_PCT: i32 = 50;
+
+/// `v`, made stronger if the rite is mastered.
+pub fn mastered(v: i32, lvl: usize) -> i32 {
+    if lvl >= MAX_LEVEL { v * (100 + MASTERED_PCT) / 100 } else { v }
+}
 
 /// An effect's number at skill level `lvl`: +50% per level, and always at least +1 per level
 /// (so a 1 still grows: 1, 2, 3).
@@ -125,16 +150,24 @@ impl Combo {
 
 /// What a rite does at `lvl`, with the brand burnt onto it, if any. A brand stays at level 1.
 pub fn rite_text(c: &Combo, lvl: usize, brand: Option<&Brand>) -> String {
-    let parts: Vec<String> = c.effects.iter().map(|&e| e.text(lvl)).chain(brand.map(|b| b.effect.text(1))).collect();
+    let mut parts: Vec<String> = c.effects.iter().map(|&e| e.text(lvl)).chain(brand.map(|b| b.effect.text(1))).collect();
+    if lvl >= MAX_LEVEL {
+        parts.push(format!("mastered: +{MASTERED_PCT}% damage, shield and healing"));
+    }
     let s = parts.join(", ");
     s[..1].to_uppercase() + &s[1..]
 }
 
 impl Effect {
+    /// True if a rite with this effect deals damage. The player's rites without one only do what they say.
+    pub fn hits(self) -> bool {
+        matches!(self, Damage(_) | PerSurge(_) | Detonate | PerReveal(_) | ShieldBlast(_) | PerBurn(_) | PerQuarterLost(_))
+    }
+
     pub fn text(self, lvl: usize) -> String {
         match self {
             Damage(v) => format!("+{} damage", at_level(v, lvl)),
-            Burn(n) => format!("burn foe for {} turns", at_level(n, lvl)),
+            Burn(n) => format!("+{} burn on foe", at_level(n, lvl)),
             Shield(v) => format!("gain {} shield", at_level(v, lvl)),
             Heal(v) => format!("heal {}", at_level(v, lvl)),
             Weaken(n) => format!("foe's attacks halved, {} turns", at_level(n, lvl)),
@@ -157,6 +190,16 @@ impl Effect {
                 let k = at_level(n as i32, lvl);
                 format!("+{k} foe mine{}", if k == 1 { "" } else { "s" })
             }
+            Surge(v) => format!("+{} surge", at_level(v, lvl)),
+            PerReveal(v) => format!("+{} damage per reveal used", at_level(v, lvl)),
+            DoubleShield(cap) => format!("double your shield (up to +{})", at_level(cap, lvl)),
+            ShieldBlast(p) => match at_level(p, lvl) {
+                100 => "all your shield becomes damage".into(),
+                q => format!("your shield becomes {q}% damage"),
+            },
+            PerBurn(v) => format!("+{} damage per burn on foe", at_level(v, lvl)),
+            PerQuarterLost(v) => format!("+{} damage per quarter of HP lost", at_level(v, lvl)),
+            SelfDamage(v) => format!("you lose {} HP", at_level(v, lvl)),
         }
     }
 }
@@ -217,22 +260,22 @@ const fn combo(name: &'static str, up: [&'static str; 2], needs: &'static [Eleme
 
 pub static COMBOS: &[Combo] = &[
     combo("Steam Burst", ["Scald Geyser", "Steamquake"], &[Ember, Tide], &[Damage(4), Reveal(1)]),
-    combo("Wildfire", ["Firestorm", "Inferno"], &[Ember, Gale], &[Burn(3)]),
+    combo("Raze", ["Bloodrush", "Rampage"], &[Ember, Gale], &[Damage(2), PerQuarterLost(2)]),
     combo("Magma", ["Lava Lance", "Molten Core"], &[Ember, Stone], &[Pierce, Damage(3)]),
     combo("Plasma", ["Plasma Lance", "Plasma Nova"], &[Ember, Spark], &[Damage(3), PerSurge(1)]),
-    combo("Mistveil", ["Mist Shroud", "Veil of Mists"], &[Tide, Gale], &[Heal(4), Damage(3)]),
-    combo("Bulwark", ["Rampart", "Citadel"], &[Tide, Stone], &[Shield(7)]),
-    combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Drain(2), Damage(3)]),
+    combo("Mistveil", ["Mist Shroud", "Veil of Mists"], &[Tide, Gale], &[Heal(8), Reveal(2)]),
+    combo("Bulwark", ["Rampart", "Citadel"], &[Tide, Stone], &[Shield(12)]),
+    combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Damage(3), Surge(2)]),
     combo("Sandstorm", ["Dust Devil", "Desert Wrath"], &[Gale, Stone], &[Weaken(2), Bury(2)]),
     combo("Thunderclap", ["Thunderstrike", "Skybreaker"], &[Gale, Spark], &[Shatter(1), Damage(2)]),
-    combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[Shield(4), Damage(4)]),
-    combo("Eruption", ["Cataclysm", "Worldbreaker"], &[Ember, Gale, Stone], &[Damage(7), Detonate]),
-    combo("Tempest", ["Hurricane", "Eye of the Storm"], &[Tide, Gale, Spark], &[Damage(6), Heal(2)]),
-    combo("Geode Surge", ["Crystal Tide", "Geode Titan"], &[Tide, Stone, Spark], &[Damage(6), Shield(6)]),
+    combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[DoubleShield(12), Shield(5)]),
+    combo("Upheaval", ["Cataclysm", "Worldbreaker"], &[Ember, Gale, Stone], &[SelfDamage(4), Damage(11)]),
+    combo("Tempest", ["Hurricane", "Eye of the Storm"], &[Tide, Gale, Spark], &[PerReveal(1)]),
+    combo("Geode Surge", ["Crystal Tide", "Geode Titan"], &[Tide, Stone, Spark], &[Damage(6), ShieldBlast(150)]),
     combo("Forgefire", ["Starforge", "Sunforge"], &[Ember, Stone, Spark], &[Damage(8)]),
     combo("Maelstrom", ["Abyssal Gyre", "Leviathan"], &[Tide, Gale, Stone], &[Shield(6), Heal(4)]),
     combo("Short Circuit", ["Arc Flash", "Blackout"], &[Ember, Gale, Spark], &[Damage(6), Drain(1)]),
-    combo("Boilover", ["Scalding Flood", "Hellbroth"], &[Ember, Tide, Spark], &[Burn(2), Damage(5)]),
+    combo("Boilover", ["Scalding Flood", "Hellbroth"], &[Ember, Tide, Spark], &[Burn(3), PerBurn(1)]),
 ];
 
 /// Position of `c` in `COMBOS`.
@@ -261,7 +304,7 @@ pub static HEROES: &[Hero] = &[
         name: "Ashwarden",
         sprite: HD,
         hp: 100,
-        power: 5,
+        power: 7,
         elements: [Ember, Gale, Stone],
         passive: |m| {
             m.mine_guard += 1;
@@ -273,7 +316,7 @@ pub static HEROES: &[Hero] = &[
         name: "Stormreader",
         sprite: HD + 1,
         hp: 94,
-        power: 5,
+        power: 7,
         elements: [Tide, Gale, Spark],
         passive: |m| {
             m.reveals += 1;
@@ -285,25 +328,24 @@ pub static HEROES: &[Hero] = &[
         name: "Deepforger",
         sprite: HD + 2,
         hp: 96,
-        power: 5,
+        power: 6,
         elements: [Tide, Stone, Spark],
         passive: |m| {
-            m.start_shield += 10;
-            m.shield_turn += 2;
+            m.shield_block += 1;
         },
-        passive_desc: "Plated: gain 10 shield at the start of each wave and 2 more every turn.",
+        passive_desc: "Plated: each point of shield you hold stops 2 damage.",
     },
     Hero {
         name: "Scaldwright",
         sprite: HD + 66,
         hp: 96,
-        power: 5,
+        power: 6,
         elements: [Ember, Tide, Spark],
         passive: |m| {
-            m.rite_burn += 3;
+            m.rite_burn += 1;
             m.lifesteal_pct += 15;
         },
-        passive_desc: "Searing touch: your rites burn the foe for 3 turns and heal you for 15% of their damage.",
+        passive_desc: "Searing touch: every rite adds 1 burn on the foe and heals you for 15% of its damage.",
     },
 ];
 
@@ -349,7 +391,7 @@ pub static CHARMS: &[Charm] = &[
     charm("Lucky Coin", Common, (HD + 28, PLAIN), "duds", "The first mine you hit each wave is a dud.", |m| m.duds += 1),
     charm("Dowsing Rod", Common, (HD + 29, PLAIN), "scouts", "3 mines start flagged on each of your boards.", |m| m.scouts += 3),
     charm("Ward Stone", Common, (HD + 30, PLAIN), "start_shield", "Gain 10 shield at the start of each wave.", |m| m.start_shield += 10),
-    charm("Field Rations", Common, (HD + 31, PLAIN), "heal_after", "Heal 10 after every battle.", |m| m.heal_after += 10),
+    charm("Field Rations", Common, (HD + 31, PLAIN), "heal_after", "Heal 10 whenever a new wave steps in.", |m| m.heal_after += 10),
     charm("Magpie Purse", Common, (HD + 32, PLAIN), "shard_pct", "+50% shards from battles.", |m| m.shard_pct += 50),
     charm("Head Start", Common, (HD + 33, PLAIN), "start_stacks", "Begin each battle with 3 random stacks.", |m| m.start_stacks += 3),
     charm("Bramble Coat", Common, (HD + 34, PLAIN), "thorns", "Enemy rites that hit you cost them 4 HP.", |m| m.thorns += 4),
@@ -357,15 +399,15 @@ pub static CHARMS: &[Charm] = &[
     charm("Sweeper's Map", Common, (HD + 36, PLAIN), "fewer_mines", "1 fewer mine on each of your boards.", |m| m.fewer_mines += 1),
     charm("Shell Fragment", Common, (HD + 37, PLAIN), "shield_turn", "Gain 4 shield at the start of your turn.", |m| m.shield_turn += 4),
     charm("Whetted Shard", Common, (HD + 38, PLAIN), "rite_bonus", "Your rites deal +5 damage.", |m| m.rite_bonus += 5),
-    charm("Kindling", Common, (HD + 39, PLAIN), "rite_burn", "Your rites set the enemy burning for 3 turns.", |m| m.rite_burn += 3),
-    charm("Slow Fuse", Common, (HD + 40, PLAIN), "burn_bonus", "Your burns deal +2 damage per turn.", |m| m.burn_bonus += 2),
+    charm("Kindling", Common, (HD + 39, PLAIN), "rite_burn", "Every rite you cast adds 1 burn on the enemy.", |m| m.rite_burn += 1),
+    charm("Slow Fuse", Common, (HD + 40, PLAIN), "burn_bonus", "Your burns deal +2 more damage each turn.", |m| m.burn_bonus += 2),
     charm("Sap Tap", Common, (HD + 41, PLAIN), "claim_heal", "Each crystal you claim heals you for 2.", |m| m.claim_heal += 2),
     charm("Crystal Skin", Common, (HD + 42, PLAIN), "claim_shield", "Each crystal you claim gives 3 shield.", |m| m.claim_shield += 3),
     charm("Plate Scraps", Common, (HD + 43, PLAIN), "armor", "Every hit on you deals 2 less.", |m| m.armor += 2),
     charm("Heart Root", Common, (HD + 44, PLAIN), "max_hp", "+20 max HP.", |m| m.max_hp += 20),
     // rares change how a turn is played
     charm("Quick Fingers", Rare, (HD + 45, PLAIN), "reveals", "+1 reveal each turn.", |m| m.reveals += 1),
-    charm("Resonator", Rare, (HD + 46, PLAIN), "combo_pct", "Rite damage, shield and healing are 75% stronger.", |m| m.combo_pct += 75),
+    charm("Resonator", Rare, (HD + 46, PLAIN), "combo_pct", "Each rite's listed damage, shield and healing are 75% stronger.", |m| m.combo_pct += 75),
     charm("Leech Fang", Rare, (HD + 47, PLAIN), "lifesteal_pct", "Heal for 30% of the damage your rites deal.", |m| m.lifesteal_pct += 30),
     charm("Ambush Wire", Rare, (HD + 48, PLAIN), "opening", "Deal 10 damage at the start of each wave.", |m| m.opening += 10),
     charm("Running Start", Rare, (HD + 49, PLAIN), "surge_start", "Begin each turn with 3 surge.", |m| m.surge_start += 3),
@@ -376,7 +418,7 @@ pub static CHARMS: &[Charm] = &[
     charm("Salvager", Rare, (HD + 54, PLAIN), "salvage", "Crystals you break with a mine still pay out.", |m| m.salvage += 1),
     charm("Spite Fuse", Rare, (HD + 55, PLAIN), "mine_spite", "Mines you hit also deal 6 damage to the enemy.", |m| m.mine_spite += 6),
     charm("Hourglass", Rare, (HD + 56, PLAIN), "reveal_shield", "Each reveal you leave unused when your turn ends becomes 3 shield.", |m| m.reveal_shield += 3),
-    charm("Hoarder's Sack", Rare, (HD + 57, PLAIN), "hoard_shield", "End your turn holding 3 or more stacks: gain 2 shield per stack.", |m| m.hoard_shield += 2),
+    charm("Hoarder's Sack", Rare, (HD + 57, PLAIN), "hoard_shield", "End your turn holding 3 or more stacks: gain 6 shield.", |m| m.hoard_shield += 6),
     charm("Chain Lightning", Rare, (HD + 58, PLAIN), "chain", "Each rite after your first in a turn deals +5 more than the one before.", |m| m.chain += 5),
     charm("Powder Keg", Rare, (HD + 59, PLAIN), "mine_no_end", "Mines no longer end your turn. They still hurt and wipe surge.", |m| m.mine_no_end += 1),
     // legendaries bend a core rule
@@ -440,7 +482,8 @@ pub static ELITES: &[EnemyDef] = &[
         m.evade = 1;
         m.graze = 1
     }),
-    foe("Kiln Tyrant", HD + 13, "Burns harder, and +1 power every turn.", 42, 2, &[Ember, Gale, Stone], 3, |m| {
+    foe("Kiln Tyrant", HD + 13, "Its rites set you burning, and it gains +1 power every turn.", 42, 2, &[Ember, Gale, Stone], 3, |m| {
+        m.rite_burn = 1;
         m.burn_bonus = 1;
         m.enrage = 1
     }),
@@ -513,8 +556,8 @@ pub static EXPEDITIONS: &[Expedition] = &[
     Expedition {
         name: "Flooded Caverns",
         text: "Groundwater found the lower tunnels first. Things down here grew fat on it.",
-        rules: &["Enemies have 15% more HP."],
-        hp_pct: 115,
+        rules: &["Enemies have 10% more HP."],
+        hp_pct: 110,
         me: NOTHING,
         foe: NOTHING,
         boss: NOTHING,
@@ -523,47 +566,47 @@ pub static EXPEDITIONS: &[Expedition] = &[
     Expedition {
         name: "Ember Depths",
         text: "The rock is warm to the touch, and the bosses here have learned to burn hotter.",
-        rules: &["Enemies have 15% more HP.", "Bosses gain +1 power every turn."],
-        hp_pct: 115,
+        rules: &["Enemies have 10% more HP.", "Bosses gain +1 power every 2 turns."],
+        hp_pct: 110,
         me: NOTHING,
         foe: NOTHING,
-        boss: |m| m.enrage += 1,
+        boss: |m| m.slow_enrage += 1,
         curses: false,
     },
     Expedition {
         name: "Crystal Hollows",
         text: "Caves of glass. Every step rings, and the boards hide more than they show.",
-        rules: &["Enemies have 30% more HP.", "Bosses gain +1 power every turn.", "1 fewer reveal each turn."],
-        hp_pct: 130,
+        rules: &["Enemies have 15% more HP.", "Bosses gain +1 power every 2 turns.", "1 fewer reveal each turn."],
+        hp_pct: 115,
         me: |m| m.reveals -= 1,
         foe: NOTHING,
-        boss: |m| m.enrage += 1,
+        boss: |m| m.slow_enrage += 1,
         curses: false,
     },
     Expedition {
         name: "The Rift",
         text: "A crack in the world, below the deepest shaft. Nothing here is kind.",
         rules: &["Every law of Crystal\u{a0}Hollows.", "Every floor rolls a curse.", "Rites cost 1 more gem, any kind."],
-        hp_pct: 130,
+        hp_pct: 115,
         me: |m| {
             m.reveals -= 1;
             m.toll += 1
         },
         foe: NOTHING,
-        boss: |m| m.enrage += 1,
+        boss: |m| m.slow_enrage += 1,
         curses: true,
     },
     Expedition {
         name: "The Null",
         text: "Where the maps stop. Whoever drew them never came back to finish.",
-        rules: &["Every law of The\u{a0}Rift.", "Enemies have 45% more HP and +1 power."],
-        hp_pct: 145,
+        rules: &["Every law of The\u{a0}Rift.", "Enemies have 25% more HP and +1 power."],
+        hp_pct: 125,
         me: |m| {
             m.reveals -= 1;
             m.toll += 1
         },
         foe: |m| m.power += 1,
-        boss: |m| m.enrage += 1,
+        boss: |m| m.slow_enrage += 1,
         curses: true,
     },
 ];
@@ -587,7 +630,7 @@ const NOTHING: Tweak = |_| {};
 pub static TWISTS: &[Twist] = &[
     twist("Shallow Seams", 1, "1 fewer mine on each of your boards.", |m| m.fewer_mines += 1, NOTHING),
     twist("Tailwind", 1, "Begin each turn with 1 surge.", |m| m.surge_start += 1, NOTHING),
-    twist("Second Wind", 1, "Heal 6 more after every battle.", |m| m.heal_after += 6, NOTHING),
+    twist("Second Wind", 1, "Heal 6 whenever a new wave steps in.", |m| m.heal_after += 6, NOTHING),
     twist("Gold Dust", 1, "+50% shards from battles.", |m| m.shard_pct += 50, NOTHING),
     twist("Fault Lines", -1, "Mines deal 1 more damage to you.", |m| m.mine_guard -= 1, NOTHING),
     twist("Iron Hides", -1, "Enemies start each wave with 6 shield.", NOTHING, |m| m.start_shield += 6),
@@ -598,8 +641,6 @@ pub static TWISTS: &[Twist] = &[
 ];
 
 pub enum Out {
-    Hp(i32),
-    HealPct(i32),
     MaxHp(i32),
     Shards(i32),
     GainCharm,
@@ -627,18 +668,12 @@ const fn pick(label: &'static str, outs: &'static [Out]) -> Choice {
 
 const LEAVE: Choice = pick("Walk on.", &[Text("You leave it be.")]);
 
-pub static REST: Encounter = Encounter {
-    title: "Quiet Hollow",
-    text: "A dry alcove with no tiles to step on. For once, nothing here wants to explode.",
-    choices: &[pick("Sleep. (Heal 30% HP)", &[HealPct(30)]), pick("Train. (+5 max HP)", &[MaxHp(5)])],
-};
-
 pub static ENCOUNTERS: &[Encounter] = &[
     Encounter {
         title: "The Humming Crate",
         text: "A sealed crate sits in the middle of the path, humming a tune you almost recognise.",
         choices: &[
-            pick("Pry it open. (-6 HP, gain a pact)", &[Hp(-6), GainCharm]),
+            pick("Pry it open. (-3 max HP, gain a pact)", &[MaxHp(-3), GainCharm]),
             pick("Sell it unopened. (+25 shards)", &[Shards(25)]),
             LEAVE,
         ],
@@ -648,7 +683,7 @@ pub static ENCOUNTERS: &[Encounter] = &[
         text: "A tinker with far too many pockets offers you a deal, then a different deal.",
         choices: &[
             pick("Strike a bargain. (-30 shards, gain a pact)", &[Shards(-30), GainCharm]),
-            pick("Sell some blood. (-8 HP, +30 shards)", &[Hp(-8), Shards(30)]),
+            pick("Sell some blood. (-4 max HP, +30 shards)", &[MaxHp(-4), Shards(30)]),
             LEAVE,
         ],
     },
@@ -656,7 +691,7 @@ pub static ENCOUNTERS: &[Encounter] = &[
         title: "Collapsed Tunnel",
         text: "Rubble blocks the way. Something glitters underneath it.",
         choices: &[
-            pick("Dig. (50%: +40 shards, else -8 HP)", &[Chance(50, &[Shards(40)], &[Text("The ceiling answers."), Hp(-8)])]),
+            pick("Dig. (50%: +40 shards, else -4 max HP)", &[Chance(50, &[Shards(40)], &[Text("The ceiling answers."), MaxHp(-4)])]),
             pick("Go around.", &[Text("The long way is only long.")]),
         ],
     },
@@ -664,7 +699,7 @@ pub static ENCOUNTERS: &[Encounter] = &[
         title: "Shrine of Small Mercies",
         text: "A tiny shrine, swept clean. Someone still looks after it.",
         choices: &[
-            pick("Pray. (Heal 15 HP)", &[Hp(15)]),
+            pick("Pray. (+3 max HP)", &[MaxHp(3)]),
             pick("Leave an offering. (-20 shards, +6 max HP)", &[Shards(-20), MaxHp(6)]),
         ],
     },
@@ -681,15 +716,15 @@ pub static ENCOUNTERS: &[Encounter] = &[
         text: "A pale figure taps the ground with a stick, counting under its breath.",
         choices: &[
             pick("Listen to its counting. (+4 max HP)", &[MaxHp(4)]),
-            pick("Take its satchel. (+30 shards, -5 HP)", &[Shards(30), Hp(-5)]),
+            pick("Take its satchel. (+30 shards, -3 max HP)", &[Shards(30), MaxHp(-3)]),
         ],
     },
     Encounter {
         title: "Glowing Vein",
         text: "A seam of bright ore runs along the wall, warm to the touch.",
         choices: &[
-            pick("Mine it. (+35 shards, 40%: -10 HP)", &[Shards(35), Chance(40, &[Text("The vein bites back."), Hp(-10)], &[])]),
-            pick("Reach inside. (50%: pact, else -12 HP)", &[Chance(50, &[GainCharm], &[Text("Something reaches back."), Hp(-12)])]),
+            pick("Mine it. (+35 shards, 40%: -5 max HP)", &[Shards(35), Chance(40, &[Text("The vein bites back."), MaxHp(-5)], &[])]),
+            pick("Reach inside. (50%: pact, else -6 max HP)", &[Chance(50, &[GainCharm], &[Text("Something reaches back."), MaxHp(-6)])]),
             LEAVE,
         ],
     },
@@ -697,7 +732,7 @@ pub static ENCOUNTERS: &[Encounter] = &[
         title: "Deserter's Camp",
         text: "A lone deserter keeps a small fire going and eyes your pack.",
         choices: &[
-            pick("Share the fire. (Heal 10 HP)", &[Hp(10)]),
+            pick("Share the fire. (+3 max HP)", &[MaxHp(3)]),
             pick("Rob the camp. (+30 shards, -4 max HP)", &[Shards(30), MaxHp(-4)]),
         ],
     },
@@ -706,15 +741,15 @@ pub static ENCOUNTERS: &[Encounter] = &[
         text: "Your footsteps come back from the well a moment too late.",
         choices: &[
             pick("Throw in 10 shards. (60%: gain a pact)", &[Shards(-10), Chance(60, &[GainCharm], &[Text("Only an echo.")])]),
-            pick("Drink. (Heal 8 HP)", &[Hp(8)]),
+            pick("Drink. (+2 max HP)", &[MaxHp(2)]),
         ],
     },
     Encounter {
         title: "Unstable Ground",
         text: "The floor ahead is cracked like old glaze.",
         choices: &[
-            pick("Sprint across. (-4 HP, +6 shards)", &[Hp(-4), Shards(6)]),
-            pick("Tiptoe. (70%: +10 shards, else -12 HP)", &[Chance(70, &[Shards(10)], &[Text("Crack."), Hp(-12)])]),
+            pick("Sprint across. (-2 max HP, +6 shards)", &[MaxHp(-2), Shards(6)]),
+            pick("Tiptoe. (70%: +10 shards, else -6 max HP)", &[Chance(70, &[Shards(10)], &[Text("Crack."), MaxHp(-6)])]),
             LEAVE,
         ],
     },
@@ -736,8 +771,8 @@ pub static ENCOUNTERS: &[Encounter] = &[
         title: "Flooded Gallery",
         text: "Black water fills the tunnel to the waist. Something shiny rests at the deep end.",
         choices: &[
-            pick("Wade along the edge. (-5 HP, +25 shards)", &[Hp(-5), Shards(25)]),
-            pick("Swim for it. (40%: gain a pact, else -10 HP)", &[Chance(40, &[GainCharm], &[Text("Cold, dark, empty."), Hp(-10)])]),
+            pick("Wade along the edge. (-3 max HP, +25 shards)", &[MaxHp(-3), Shards(25)]),
+            pick("Swim for it. (40%: gain a pact, else -5 max HP)", &[Chance(40, &[GainCharm], &[Text("Cold, dark, empty."), MaxHp(-5)])]),
             LEAVE,
         ],
     },
@@ -746,15 +781,15 @@ pub static ENCOUNTERS: &[Encounter] = &[
         text: "Crystals grow from the walls like flowers, ringing softly when you breathe.",
         choices: &[
             pick("Harvest them. (+40 shards, -3 max HP)", &[Shards(40), MaxHp(-3)]),
-            pick("Sit and listen. (Heal 20% HP)", &[HealPct(20)]),
+            pick("Sit and listen. (+4 max HP)", &[MaxHp(4)]),
         ],
     },
     Encounter {
         title: "Lost Prospector",
         text: "An old prospector sits on his pack, map upside down, lamp nearly out.",
         choices: &[
-            pick("Walk him out. (-6 HP, +6 max HP)", &[Hp(-6), MaxHp(6)]),
-            pick("Take his pack. (+35 shards, 30%: -10 HP)", &[Shards(35), Chance(30, &[Text("He fights back."), Hp(-10)], &[])]),
+            pick("Walk him out. (-3 max HP, +6 max HP)", &[MaxHp(-3), MaxHp(6)]),
+            pick("Take his pack. (+35 shards, 30%: -5 max HP)", &[Shards(35), Chance(30, &[Text("He fights back."), MaxHp(-5)], &[])]),
             LEAVE,
         ],
     },

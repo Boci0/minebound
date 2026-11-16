@@ -73,6 +73,10 @@ struct Shot {
     skill: (usize, usize),
     /// the effect of the brand on that rite, if it has one
     brand: Option<Effect>,
+    /// false for a rite that deals no damage: it rises from the caster and settles back on them
+    hits: bool,
+    /// dodged: it flies past and fizzles, with no impact, shake or effects
+    miss: bool,
 }
 
 /// Shot timing, in units of `SHOT_TIME`: upgraded skills charge up first, then fire one bolt per level.
@@ -142,6 +146,8 @@ struct Fx {
     ended_at: f64,
     /// sheet animations playing: (frames, centre, size, start, duration, tint)
     anims: Vec<(&'static [(f32, f32, f32)], Vec2, f32, f64, f32, Color)>,
+    /// your board as last drawn: (which one, tiles turned over, when it last came in anew)
+    board_seen: (usize, usize, f64),
 }
 
 thread_local! {
@@ -517,8 +523,13 @@ const DISPLAY_FROM: f32 = 24.0;
 /// Which face, the font size to ask for, and the scale back to the canvas, for text of design `size`.
 /// The glyphs are rasterised at the window's real pixel size, so text stays crisp at any scale.
 fn face(size: f32) -> (usize, u16, f32) {
+    face_in(if size >= DISPLAY_FROM { 0 } else { 1 }, size)
+}
+
+/// `face`, in font `which` whatever the size: text that grows or shrinks keeps one look.
+fn face_in(which: usize, size: f32) -> (usize, u16, f32) {
     let k = scale();
-    let (which, want) = if size >= DISPLAY_FROM { (0, size * DISPLAY_K) } else { (1, size * BODY_K) };
+    let want = size * if which == 0 { DISPLAY_K } else { BODY_K };
     // ask in logical pixels; macroquad multiplies by the screen's dpi itself
     let px = (want * k).max(1.0);
     // Every new size rasterises a new set of glyphs into the font's atlas, which grows (it is
@@ -539,7 +550,11 @@ fn snap(p: Vec2) -> Vec2 {
 }
 
 fn text(s: &str, x: f32, y: f32, size: f32, c: Color) {
-    let (which, font_size, font_scale) = face(size);
+    text_in(face(size), s, x, y, c);
+}
+
+/// Text in an already chosen face (see `face_in`).
+fn text_in((which, font_size, font_scale): (usize, u16, f32), s: &str, x: f32, y: f32, c: Color) {
     let at = snap(vec2(x, y));
     FONT.with(|f| {
         let fonts = f.borrow();
@@ -606,8 +621,8 @@ fn keyword(word: &str) -> Option<(Color, Option<Motion>)> {
 fn glossary(word: &str) -> Option<(&'static str, &'static str)> {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
     Some(match w.as_str() {
-        "burn" | "burns" | "burning" => ("Burn", "Loses 2 HP at the start of each of its turns, straight through shield, for the turns shown. A new burn keeps whichever lasts longer."),
-        "detonate" => ("Detonate", "All the burn left on the foe goes off at once: its turns times its damage. Then the burn is gone."),
+        "burn" | "burns" | "burning" => ("Burn", "Loses 1 HP for each burn on it as its turn starts, straight through shield. Then the burn halves. New burn adds to what is there."),
+        "detonate" => ("Detonate", "All the burn on the foe goes off at once, 3 damage for each. Then the burn is gone."),
         "weak" | "weaken" | "halved" => ("Weak", "Its rites deal half damage for the turns shown."),
         "shield" => ("Shield", "Soaks damage before HP does. Half of it wears off at the start of its owner's next turn. Burn goes straight through."),
         "armor" => ("Armor", "Every hit on it deals this much less, down to 1."),
@@ -626,6 +641,16 @@ fn glossary(word: &str) -> Option<(&'static str, &'static str)> {
 }
 
 thread_local!(static TIP: std::cell::Cell<Option<(&'static str, &'static str)>> = const { std::cell::Cell::new(None) });
+
+thread_local!(static STEPS: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(vec![]) });
+
+/// Asks for a rite's damage steps to be shown by the mouse this frame, ending in `total`.
+fn steps_tip(mut steps: Vec<(String, String)>, total: i32) {
+    if !modal() {
+        steps.push(("damage".into(), total.to_string()));
+        STEPS.with(|c| *c.borrow_mut() = steps);
+    }
+}
 
 /// Asks for `tip` to be shown by the mouse this frame, over everything else.
 fn tip(t: (&'static str, &'static str)) {
@@ -651,6 +676,24 @@ fn wrap(s: &str, w: f32, size: f32) -> Vec<String> {
 
 /// The tooltip asked for this frame, in a plate beside the mouse and kept on screen.
 fn draw_tip() {
+    let steps = STEPS.with(|c| std::mem::take(&mut *c.borrow_mut()));
+    if !steps.is_empty() {
+        // how the number is made, one step a line, the total last
+        let h = 44.0 + steps.len() as f32 * 21.0;
+        let m = mouse();
+        let r = Rect::new((m.x + 16.0).min(VIEW.x - 330.0), if m.y + 20.0 + h > VIEW.y { m.y - 12.0 - h } else { m.y + 20.0 }, 318.0, h);
+        plate(r, CARD);
+        text("How it adds up", r.x + 14.0, r.y + 24.0, 16.0, INK);
+        let last = steps.len() - 1;
+        for (k, (what, v)) in steps.iter().enumerate() {
+            let (y, c) = (r.y + 48.0 + k as f32 * 21.0, if k == last { INK } else { MUTED });
+            if k == last {
+                draw_line(r.x + 14.0, y - 16.0, r.x + r.w - 14.0, y - 16.0, 1.0, FAINT);
+            }
+            text(what, r.x + 14.0, y, 15.0, c);
+            right(v, r.x + r.w - 14.0, y, 15.0, c);
+        }
+    }
     let Some((head, body)) = TIP.with(|c| c.take()) else { return };
     let lines = wrap(body, 290.0, 15.0);
     let h = 44.0 + lines.len() as f32 * 19.0;
@@ -1371,6 +1414,7 @@ fn draw_shots(shots: &[Shot], now: f64) {
     for sh in shots {
         let p = (now - sh.t0) as f32 / SHOT_TIME;
         let (a, z) = (STAND[sh.from], STAND[1 - sh.from]);
+        let feet = a + vec2(0.0, FIGHTER[sh.from] * 0.45);
         let (id, lvl) = sh.skill;
         let c = &COMBOS[id];
         let (e1, e2) = (c.needs[0], c.needs[1]);
@@ -1390,8 +1434,9 @@ fn draw_shots(shots: &[Shot], now: f64) {
         if lvl >= 3 && p < first_hit + 1.2 {
             let alpha = if p < first_hit { p / first_hit } else { 1.0 - (p - first_hit) / 1.2 };
             let w = 18.0 + 40.0 * alpha;
-            draw_rectangle(z.x - w / 2.0, -60.0, w, z.y + 110.0, fade(mix(c1, INK, 0.3), alpha * 0.55));
-            draw_rectangle(z.x - w / 6.0, -60.0, w / 3.0, z.y + 110.0, fade(INK, alpha * 0.8));
+            let at = if sh.hits { z } else { a };
+            draw_rectangle(at.x - w / 2.0, -60.0, w, at.y + 110.0, fade(mix(c1, INK, 0.3), alpha * 0.55));
+            draw_rectangle(at.x - w / 6.0, -60.0, w / 3.0, at.y + 110.0, fade(INK, alpha * 0.8));
         }
         let arc = match e1 {
             Element::Ember => 26.0,
@@ -1407,7 +1452,18 @@ fn draw_shots(shots: &[Shot], now: f64) {
                 let wobble = if e1 == Element::Gale { (q * PI * 4.0).sin() * 14.0 } else { 0.0 };
                 a + (z - a) * q - vec2(0.0, (q * PI).sin() * arc * bend + wobble)
             };
-            if (0.0..1.0).contains(&q) {
+            if (0.0..1.0).contains(&q) && !sh.hits {
+                // nothing is thrown: a ward circle at the caster's feet tightens while loose dust
+                // of the rite's gems is drawn in
+                let w = 120.0 - 40.0 * q + k as f32 * 18.0;
+                let glow = (q * PI).sin();
+                draw_ellipse_lines(feet.x, feet.y, w / 2.0, w / 7.0, 0.0, 2.0, fade(c1, 0.7 * glow));
+                draw_ellipse_lines(feet.x, feet.y, w / 3.0, w / 10.5, 0.0, 1.5, fade(c2, 0.5 * glow));
+                if gen_range(0.0, 1.0) < 0.35 {
+                    let from = feet + vec2(gen_range(-w, w) / 2.0, gen_range(-8.0, 4.0));
+                    stream(from, a, 1, fade(mix(c1, INK, 0.25), 0.7));
+                }
+            } else if (0.0..1.0).contains(&q) {
                 let head = along(q);
                 match e1 {
                     Element::Spark => lightning(a, z, 6.0 + 2.0 * lvl as f32, c1),
@@ -1448,6 +1504,15 @@ fn draw_shots(shots: &[Shot], now: f64) {
                 if e1 != Element::Spark {
                     gem(e1, head, 24.0);
                 }
+            } else if q >= 1.0 && q - step < 1.0 && !sh.hits {
+                // it takes hold quietly: no shake, flash or hit-pause, since nothing was struck
+                rise(feet, 6 + 3 * lvl, 34.0, fade(mix(c1, INK, 0.3), 0.6));
+                if k == 0 {
+                    rite_effects(sh, c, a, z, c2);
+                }
+            } else if q >= 1.0 && q - step < 1.0 && sh.miss {
+                // dodged: a few sparks where it should have struck, nothing more
+                burst(z + vec2(30.0, -10.0), 8, 120.0, 4.0, fade(c1, 0.6));
             } else if q >= 1.0 && q - step < 1.0 {
                 // the frame this bolt lands
                 anim(fx_impact(e1), z + vec2(gen_range(-10.0, 10.0), gen_range(-10.0, 10.0)), 100.0 + 20.0 * lvl as f32, 0.4, mix(el_color(e1), WHITE, 0.25));
@@ -1464,34 +1529,23 @@ fn draw_shots(shots: &[Shot], now: f64) {
                     punch();
                 }
                 if k == 0 {
-                    for e in c.effects.iter().chain(&sh.brand) {
-                        match e {
-                            Effect::Burn(_) => {
-                                rise(z, 30, 30.0, mix(GOLD_C, BAD, 0.5));
-                                anim(FX_FLAME, z - vec2(0.0, 8.0), 110.0, 0.7, el_color(Element::Ember));
-                            }
-                            Effect::Heal(_) => {
-                                rise(a, 22, 30.0, GOOD);
-                                anim(FX_HEAL, a, 120.0, 0.5, GOOD);
-                            }
-                            Effect::Drain(_) => stream(z, a, 16, mix(c2, INK, 0.3)),
-                            Effect::Pierce => burst(z, 28, 440.0, 8.0, ICE),
-                            Effect::Shatter(_) => burst(z, 24, 320.0, 7.0, INK),
-                            Effect::Bury(_) => burst(z, 16, 160.0, 6.0, BAD),
-                            Effect::Detonate => burst(z, 36, 420.0, 9.0, rgb(0xff8a4c)),
-                            Effect::Reveal(_) => burst(a, 12, 140.0, 5.0, rgb(0x5fe0c8)),
-                            _ => {}
-                        }
-                    }
+                    rite_effects(sh, c, a, z, c2);
                 }
             }
         }
-        // lingering after the first hit: a shockwave, and the shield dome or hex ring if it has one
+        // lingering after the first hit: a shockwave (a ring round the caster for a rite that does
+        // not hit), and the shield dome or hex ring if it has one
         let u = p - first_hit;
         if (0.0..1.6).contains(&u) {
             let q = u / 1.6;
-            let half = 24.0 + q * (150.0 + 40.0 * lvl as f32);
-            draw_rectangle_lines(z.x - half, z.y - half, half * 2.0, half * 2.0, 14.0 * (1.0 - q), fade(c1, 1.0 - q));
+            if sh.miss {
+            } else if sh.hits {
+                let half = 24.0 + q * (150.0 + 40.0 * lvl as f32);
+                draw_rectangle_lines(z.x - half, z.y - half, half * 2.0, half * 2.0, 14.0 * (1.0 - q), fade(c1, 1.0 - q));
+            } else {
+                let w = 60.0 + q * 70.0;
+                draw_ellipse_lines(feet.x, feet.y, w, w / 3.5, 0.0, 2.0, fade(c1, 0.6 * (1.0 - q)));
+            }
         }
         if (0.0..2.4).contains(&u) {
             let fadeout = 1.0 - u / 2.4;
@@ -1516,6 +1570,29 @@ fn draw_shots(shots: &[Shot], now: f64) {
     }
 }
 
+/// The visuals of a rite's effects (and its brand's), as its first bolt lands.
+fn rite_effects(sh: &Shot, c: &Combo, a: Vec2, z: Vec2, c2: Color) {
+    for e in c.effects.iter().chain(&sh.brand) {
+        match e {
+            Effect::Burn(_) => {
+                rise(z, 30, 30.0, mix(GOLD_C, BAD, 0.5));
+                anim(FX_FLAME, z - vec2(0.0, 8.0), 110.0, 0.7, el_color(Element::Ember));
+            }
+            Effect::Heal(_) => {
+                rise(a, 22, 30.0, GOOD);
+                anim(FX_HEAL, a, 120.0, 0.5, GOOD);
+            }
+            Effect::Drain(_) => stream(z, a, 16, mix(c2, INK, 0.3)),
+            Effect::Pierce => burst(z, 28, 440.0, 8.0, ICE),
+            Effect::Shatter(_) => burst(z, 24, 320.0, 7.0, INK),
+            Effect::Bury(_) => burst(z, 16, 160.0, 6.0, BAD),
+            Effect::Detonate => burst(z, 36, 420.0, 9.0, rgb(0xff8a4c)),
+            Effect::Reveal(_) => burst(a, 12, 140.0, 5.0, rgb(0x5fe0c8)),
+            _ => {}
+        }
+    }
+}
+
 /// Draws the battle and handles input. Returns true once it is over and the player clicks Continue.
 /// Game seconds a new wave takes to arrive; your input waits for it.
 const WAVE_IN: f64 = 1.4;
@@ -1531,10 +1608,15 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     // compare with last frame: HP changes become floating numbers and a shake, new stacks bounce in,
     // and every skill that landed becomes a shot across the arena
     let now = now();
+    // crystals claimed this frame fly to the stacks once the stacks are laid out below
+    let mut claims = vec![];
     for e in std::mem::take(&mut b.events) {
         match e {
             Event::Flip => play(Sfx::Flip),
-            Event::Claim => play(Sfx::Claim),
+            Event::Claim { side, element, tiles } => {
+                play(Sfx::Claim);
+                claims.push((side, element, tiles));
+            }
             Event::Mine => {
                 play(Sfx::Mine);
                 play(Sfx::Boom);
@@ -1543,7 +1625,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             }
             Event::Cast { from, name, element, miss, skill } => {
                 fx(|fx| {
-                    let shot = Shot { from, t0: now, skill, brand: b.f[from].brand(&COMBOS[skill.0]).map(|x| x.effect) };
+                    let shot = Shot { from, t0: now, skill, brand: b.f[from].brand(&COMBOS[skill.0]).map(|x| x.effect), hits: b.hits(from, &COMBOS[skill.0]), miss };
                     fx.shots.push(shot);
                     if miss {
                         fx.floats.push((STAND[1 - from] - vec2(0.0, 30.0), "MISS".into(), MUTED, lands_at(&shot), 30.0));
@@ -1749,9 +1831,6 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             let r = Rect::new(PEEK.x + (i % W) as f32 * 25.0, PEEK.y + (i / W) as f32 * 25.0, 23.0, 23.0);
             let key = (1, foe.cur, i);
             let seen = fx(|fx| fx.pops.contains_key(&key));
-            if t.crystal && t.claimed && !seen {
-                stream(r.center(), vec2(PEEK.x + 20.0, 266.0), 10, INK);
-            }
             if t.revealed && t.mine && !seen {
                 burst(r.center(), 20, 180.0, 6.0, BAD);
             }
@@ -1793,8 +1872,10 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     // you, on the left: name, life, conditions and your stacks, one chip per element
     let me = &b.f[0];
     let hx = 56.0 + shake[0];
-    text(&me.name, hx, 434.0, 34.0, INK);
-    wrapped(&me.desc, hx, 458.0, 330.0, 15.0, MUTED);
+    // a trait that wraps past two lines lifts the name with it, so it never runs into the HP bar
+    let lift = wrap(&me.desc, 330.0, 15.0).len().saturating_sub(2) as f32 * 19.0;
+    text(&me.name, hx, 434.0 - lift, 34.0, INK);
+    wrapped(&me.desc, hx, 458.0 - lift, 330.0, 15.0, MUTED);
     label("HP", hx, 506.0);
     right(&format!("{} / {}", me.hp.max(0), me.max_hp), hx + 330.0, 506.0, 16.0, INK);
     life(Rect::new(hx, 514.0, 330.0, 8.0), me.hp as f32 / me.max_hp as f32, ghost[0] / me.max_hp as f32);
@@ -1803,6 +1884,22 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
     let chip_step = 78.0f32.min(330.0 / held.len().max(1) as f32);
     let chip = |j: usize| Rect::new(hx + j as f32 * chip_step, 596.0, chip_step - 10.0, 40.0);
     let chip_of = |e: Element| held.iter().position(|x| x.0 == e).map_or(vec2(hx, 616.0), |j| chip(j).center());
+    // just claimed: each crystal shatters and its pieces fly to the stacks, even when its board
+    // has already been dealt anew under it
+    for (side, element, tiles) in &claims {
+        for &i in tiles {
+            let (at, to, n) = if *side == 0 {
+                let at = BOARD + vec2((i % W) as f32 * STEP, (i / W) as f32 * STEP) + vec2(TILE, TILE) / 2.0;
+                (at, chip_of(*element), 16)
+            } else {
+                (PEEK + vec2((i % W) as f32 * 25.0, (i / W) as f32 * 25.0) + vec2(11.5, 11.5), vec2(PEEK.x + 20.0, 266.0), 10)
+            };
+            stream(at, to, n, INK);
+            if *side == 0 {
+                burst(at, 10, 150.0, 6.0, INK);
+            }
+        }
+    }
 
     // your board, in the middle, with whose turn it is and the surge above it
     let board = me.board();
@@ -1818,8 +1915,26 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         x -= 17.0;
     }
     right("SURGE", x - 2.0, 316.0, 15.0, MUTED);
+    // a board dealt anew (fewer tiles turned than a moment ago) or another one put up drops in, tile by tile
+    let shown = board.tiles.iter().filter(|t| t.revealed).count();
+    let (came, redealt) = fx(|fx| {
+        let (k, n, _) = fx.board_seen;
+        let (new, redealt) = (k != me.cur || shown < n, k == me.cur && shown < n);
+        fx.board_seen = (me.cur, shown, if new { now } else { fx.board_seen.2 });
+        (fx.board_seen.2, redealt)
+    });
+    if redealt {
+        play(Sfx::Whoosh);
+    }
     for (i, t) in board.tiles.iter().enumerate() {
         let r = Rect::new(BOARD.x + (i % W) as f32 * STEP, BOARD.y + (i / W) as f32 * STEP, TILE, TILE);
+        // corner to corner, each tile a beat after the one before; it falls a little as it grows
+        let p = (((now - came - ((i % W) + (i / W)) as f64 * 0.025) / 0.2) as f32).clamp(0.0, 1.0);
+        let k = if came > 0.0 { 1.0 - (1.0 - p).powi(3) } else { 1.0 };
+        if k < 0.05 {
+            continue;
+        }
+        let r = scaled(Rect::new(r.x, r.y - (1.0 - k) * 18.0, r.w, r.h), k);
         let mid = r.center();
         // tiles around a crystal that can still be claimed stand out brighter
         let near = Board::neighbors(i).any(|c| board.live(c));
@@ -1829,11 +1944,6 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             rock(r);
         } else if t.crystal {
             if t.claimed {
-                if !fx(|fx| fx.pops.contains_key(&key)) {
-                    // just claimed: it shatters and the pieces fly to your stacks
-                    stream(mid, chip_of(board.element), 16, INK);
-                    burst(mid, 10, 150.0, 6.0, INK);
-                }
                 let k = pop(key);
                 outline(r, FAINT);
                 sign(board.element, mid, 12.0 * k, MUTED);
@@ -1951,7 +2061,7 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         let toward = (STAND[1 - s] - STAND[s]).normalize();
         let lunge = shots
             .iter()
-            .filter(|c| c.from == s)
+            .filter(|c| c.from == s && c.hits)
             .map(|c| (now - c.t0) as f32 / SHOT_TIME - charge(c.skill.1))
             .filter(|p| (0.0..1.0).contains(p))
             .last();
@@ -2059,8 +2169,16 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         // a brand can make the line long: shrink it rather than run into the next panel
         let line = me.describe(c);
         rich(&line, rx, y + rh - 12.0, if measure(&line, 14.0).width > 300.0 { 12.0 } else { 14.0 }, MUTED);
-        if lit {
-            right(&format!("{} dmg", b.hit_damage(0, c)), rx + 350.0, y + rh - 12.0, 15.0, INK);
+        if lit && b.hits(0, c) {
+            // hover the number to see how it adds up
+            let (d, steps) = b.hit_steps(0, c);
+            let (num, nx, ny) = (format!("{d} dmg"), rx + 350.0, y + rh - 12.0);
+            let w = measure(&num, 15.0).width;
+            right(&num, nx, ny, 15.0, INK);
+            draw_line(nx - w, ny + 4.0, nx, ny + 4.0, 1.0, FAINT);
+            if Rect::new(nx - w, ny - 16.0, w, 22.0).contains(mouse()) {
+                steps_tip(steps, d);
+            }
         }
         if let Some((e, at)) = unslot {
             // take a gem back out of its socket
@@ -2100,7 +2218,12 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
                         cost.len() + paid_toll(cost, v).len()
                     };
                     v.push(e);
-                    burst(vec2(rx + 350.0 - (all - j) as f32 * 32.0 + 19.0, r.y + 23.0), 14, 160.0, 6.0, el_color(e));
+                    let socket = vec2(rx + 350.0 - (all - j) as f32 * 32.0 + 19.0, r.y + 23.0);
+                    if tapped {
+                        // sent by a click, not carried: the gem flies from your stacks to its socket
+                        stream(fx(|fx| fx.drag_from), socket, 14, el_color(e));
+                    }
+                    burst(socket, 14, 160.0, 6.0, el_color(e));
                     play(Sfx::Claim);
                 } else {
                     // refused: say why instead of silently handing the gem back
@@ -2207,7 +2330,10 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
             // pops, holds a moment, then drifts up and fades over 1.5 s
             let p = el / 1.5;
             let kick = if el < 0.1 { 1.0 + 0.5 * (1.0 - el / 0.1) } else { 1.0 };
-            stamped(label, at.x, at.y - p * 40.0, (size + 12.0 * (1.0 - p)) * kick, fade(*c, 1.6 - p * 1.6));
+            // one font all the way: growing and shrinking must not cross into the other face
+            let f = face_in(if *size >= DISPLAY_FROM { 0 } else { 1 }, (size + 12.0 * (1.0 - p)) * kick);
+            let w = FONT.with(|ft| measure_text(label, ft.borrow()[f.0].as_ref(), f.1, f.2)).width;
+            text_in(f, label, at.x - w / 2.0, at.y - p * 40.0, fade(*c, 1.6 - p * 1.6));
         }
     });
     // below a quarter HP the screen edge throbs red with a heartbeat
@@ -2244,7 +2370,6 @@ fn node_look(k: NodeKind) -> usize {
         NodeKind::Elite => HD + 21,
         NodeKind::Encounter => HD + 22,
         NodeKind::Shop => HD + 23,
-        NodeKind::Rest => HD + 24,
         NodeKind::Treasure => HD + 25,
         NodeKind::Boss => HD + 26,
         // a standing stone carved with marks
@@ -2341,12 +2466,13 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     }
     let mut held = None;
     if let Some(bl) = run.blessing {
-        text("BLESSING", x, y + 18.0, 15.0, ACCENT);
         let r = Rect::new(x - 8.0, y + 2.0, 298.0, 22.0);
         if r.contains(mouse()) {
+            // the highlight first, so the label stays on top of it
             block(r, CARD_HI);
             held = Some(&BLESSINGS[bl]);
         }
+        text("BLESSING", x, y + 18.0, 15.0, ACCENT);
         text(BLESSINGS[bl].name, x + 90.0, y + 18.0, 16.0, GOLD_C);
         y += 24.0;
     }
@@ -2639,12 +2765,6 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
     }
 
     // services
-    let can_heal = run.shards >= HEAL_PRICE && run.hp < run.max_hp();
-    if button(Rect::new(356.0, 590.0, 320.0, 44.0), &format!("Patch up: +{HEAL_AMOUNT} HP for {HEAL_PRICE}"), can_heal, false) && run.buy_heal() {
-        play(Sfx::Coins);
-        rise(vec2(193.0, 360.0), 20, 40.0, GOOD);
-        say("Hold still. This stings.");
-    }
     let restock = Run::restock_price(shop);
     if button(Rect::new(692.0, 590.0, 260.0, 44.0), &format!("Restock for {restock}"), run.shards >= restock && run.can_restock(shop), false) && run.restock(shop) {
         play(Sfx::Coins);
