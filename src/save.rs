@@ -1,7 +1,7 @@
 //! Progress kept between launches, as a few lines of text in %APPDATA%\Minebound\save.txt.
 //! No mid-run save: only what the overworld and the settings need.
 
-use crate::data::{EXPEDITIONS, HEROES};
+use crate::data::{ENDINGS, EXPEDITIONS, HEROES};
 use crate::run::{Run, FLOORS};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -16,11 +16,13 @@ pub struct Save {
     pub rules_seen: bool,
     /// the last daily descent tried: (day, result like `best`); one try a day
     pub daily: (u64, usize),
+    /// secret endings found, one bit per index in `ENDINGS`
+    pub endings: u32,
 }
 
 impl Default for Save {
     fn default() -> Save {
-        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8), rules_seen: false, daily: (0, 0) }
+        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8), rules_seen: false, daily: (0, 0), endings: 0 }
     }
 }
 
@@ -47,6 +49,7 @@ impl Save {
                 (Some("volume"), &[m, s]) => save.volume = (m.min(10) as i32, s.min(10) as i32),
                 (Some("rules"), &[n]) => save.rules_seen = n > 0,
                 (Some("daily"), &[day, r]) => save.daily = (day as u64, r.min(CLEARED)),
+                (Some("endings"), &[bits]) => save.endings = bits as u32 & ((1 << ENDINGS.len()) - 1),
                 (Some("best"), &[x, ref heroes @ ..]) if x < EXPEDITIONS.len() => {
                     for (h, &b) in heroes.iter().enumerate().take(HEROES.len()) {
                         save.best[x][h] = b.min(CLEARED);
@@ -59,7 +62,7 @@ impl Save {
     }
 
     fn text(&self) -> String {
-        let mut s = format!("unlocked {}\nvolume {} {}\nrules {}\ndaily {} {}\n", self.unlocked, self.volume.0, self.volume.1, self.rules_seen as u8, self.daily.0, self.daily.1);
+        let mut s = format!("unlocked {}\nvolume {} {}\nrules {}\ndaily {} {}\nendings {}\n", self.unlocked, self.volume.0, self.volume.1, self.rules_seen as u8, self.daily.0, self.daily.1, self.endings);
         for (x, heroes) in self.best.iter().enumerate() {
             let list: Vec<String> = heroes.iter().map(|b| b.to_string()).collect();
             s += &format!("best {x} {}\n", list.join(" "));
@@ -93,10 +96,15 @@ impl Save {
         opened
     }
 
-    /// Notes how far a run got: a daily descent as its day's result, any other as its hero's best.
-    /// A run that used a developer shortcut is not kept. Returns the expedition this opened, if any.
+    /// Notes how far a run got: a daily descent as its day's result, any other as its hero's best,
+    /// and the secret endings it found. Past the last floor's boss a run counts as won, even if an
+    /// ending's floor ends it. A run that used a developer shortcut is not kept.
+    /// Returns the expedition this opened, if any.
     pub fn finish(&mut self, run: &Run, won: bool) -> Option<usize> {
-        let reached = run.floor + 1;
+        let (reached, won) = (run.floor + 1, won || run.floor >= FLOORS);
+        if !run.debug {
+            self.endings |= run.found.iter().fold(0, |bits, &e| bits | 1 << e);
+        }
         match (run.debug, run.daily) {
             (true, _) => None,
             (_, Some(day)) => {
@@ -133,10 +141,19 @@ mod tests {
         assert_eq!((s.daily, s.unlocked), ((20_000, 2), 2));
         assert_eq!(Save::parse(&s.text()), s);
         assert_eq!(s.best[0], vec![CLEARED, 2, CLEARED, 0]);
+        // an ending's boss counts as found even when a later floor ends the run, and the run as won
+        let (mut deep, _) = Run::new(5, 3, 0);
+        deep.keys = vec![0, 2];
+        deep.floor = FLOORS + 1;
+        deep.found = vec![0];
+        assert_eq!(s.finish(&deep, false), None);
+        assert_eq!((s.endings, s.best[0][3]), (1, CLEARED));
+        assert_eq!(Save::parse(&s.text()), s);
         // a save from before the fourth hero still loads; the new hero starts fresh
         assert_eq!(Save::parse(&format!("best 0 {CLEARED} 2 {CLEARED}")).best[0], vec![CLEARED, 2, CLEARED, 0]);
         let junk = Save::parse("unlocked 99\nbest 0 1 x\nbest 77 1\nvolume 4\nnonsense");
         assert_eq!(junk.unlocked, EXPEDITIONS.len());
         assert_eq!(junk.volume, (6, 8));
+        assert_eq!(Save::parse("endings 255").endings, 7, "only endings that exist");
     }
 }

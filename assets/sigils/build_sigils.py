@@ -36,6 +36,13 @@ SIGILS = [
     (["gems"], LEGEND), (["shard-sword"], LEGEND), (["smoke-bomb"], LEGEND), (["third-eye"], LEGEND), (["echo-ripples"], LEGEND), (["battle-axe"], LEGEND),
     # 66 the fourth hero, Scaldwright (after the charms, so no older cell moves)
     (["burning-skull"], EMBER),
+    # 67-81 the secret endings' enemies, five each (three normals, an elite, the boss):
+    # the Drowned Archive, the Furnace Heart, the Silent Engine
+    (["eel"], TIDE), (["jellyfish"], TIDE), (["fish-monster"], TIDE), (["angler-fish"], TIDE), (["evil-book"], TIDE),
+    (["salamander"], EMBER), (["fluffy-flame"], EMBER), (["flame-spin"], EMBER), (["rock-golem"], EMBER), (["furnace"], EMBER),
+    (["spider-bot"], SPARK), (["delivery-drone"], SPARK), (["walking-turret"], SPARK), (["battle-mech"], SPARK), (["clockwork"], SPARK),
+    # 82-84 their keys: Brine Lantern, Cinder Seal, Clockwork Eye
+    (["lantern-flame"], LEGEND), (["wax-seal"], LEGEND), (["brass-eye"], LEGEND),
 ]
 CELL, COLS, GLYPH = 128, 8, 100
 

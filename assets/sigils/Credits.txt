@@ -2,10 +2,10 @@ Glyphs from game-icons.net, CC BY 3.0 (https://creativecommons.org/licenses/by/3
 Recoloured with a gradient and glow for Minebound.
 
 darkzaitzev: smoke-bomb
-delapouite: wizard-face, diving-helmet, golem-head, rat, ant, goblin-head, mermaid, spell-book, coins-pile, two-coins, water-diviner-stick, meal, toolbox, time-dynamite, running-shoe, dynamite, barrel
+delapouite: wizard-face, diving-helmet, golem-head, rat, ant, goblin-head, mermaid, spell-book, coins-pile, two-coins, water-diviner-stick, meal, toolbox, time-dynamite, running-shoe, dynamite, barrel, eel, fish-monster, rock-golem, furnace, spider-bot, delivery-drone, walking-turret, battle-mech
 faithtoken: nautilus-shell
 kier-heyl: dwarf-helmet
-lorc: hound, imp-laugh, spark-spirit, leeching-worm, butterfly, thorny-vine, harpy, ifrit, octopus, cultist, robot-golem, crossed-swords, horned-skull, campfire, crowned-skull, hood, rune-stone, swap-bag, sprint, thorn-helix, treasure-map, crystal-shine, burning-embers, droplets, crystal-growth, breastplate, root-tip, glowing-hands, tripwire, meditation, crystal-cluster, recycle, hourglass, knapsack, gems, shard-sword, third-eye, echo-ripples, battle-axe
+lorc: hound, imp-laugh, spark-spirit, leeching-worm, butterfly, thorny-vine, harpy, ifrit, octopus, cultist, robot-golem, crossed-swords, horned-skull, campfire, crowned-skull, hood, rune-stone, swap-bag, sprint, thorn-helix, treasure-map, crystal-shine, burning-embers, droplets, crystal-growth, breastplate, root-tip, glowing-hands, tripwire, meditation, crystal-cluster, recycle, hourglass, knapsack, gems, shard-sword, third-eye, echo-ripples, battle-axe, jellyfish, angler-fish, evil-book, salamander, fluffy-flame, flame-spin, clockwork, lantern-flame, wax-seal, brass-eye
 priorblue: battery-plus
 skoll: troll, open-treasure-chest, sound-waves, fangs, chess-knight, burning-skull
 willdabeast: chain-lightning

@@ -871,9 +871,9 @@ fn sprite_rect(idx: usize, r: Rect, tint: Color) {
     if idx >= HD {
         let k = idx - HD;
         let source = Rect::new((k % 8) as f32 * 128.0, (k / 8) as f32 * 128.0, 128.0, 128.0);
-        // the sigils are still, so characters (the first 20 and the shopkeeper) breathe:
+        // the sigils are still, so characters (the first 20, the shopkeeper, the endings' enemies) breathe:
         // a slow squash from the feet up. Map and charm icons hold still.
-        let alive = k < 20 || k == 27;
+        let alive = k < 20 || k == 27 || (67..82).contains(&k);
         let b = if alive { 0.025 * (1.0 + (now() as f32 * 2.4 + k as f32 * 1.3).sin()) } else { 0.0 };
         // the atlas is white; any colour tint from a call site becomes its brightness, so nothing turns colourful
         let v = tint.r.max(tint.g).max(tint.b);
@@ -958,7 +958,7 @@ pub fn status(run: &Run) {
     for (label, value, c) in [
         ("HP", format!("{}/{}", run.hp, run.max_hp()), GOOD),
         ("Shards", run.shards.to_string(), GOLD_C),
-        ("Floor", format!("{}/{}", run.floor + 1, FLOORS), INK),
+        ("Floor", format!("{}/{}", run.floor + 1, run.floors()), INK),
         ("Pacts", run.charms.len().to_string(), ACCENT),
     ] {
         text(label, x, 43.0, 18.0, MUTED);
@@ -1185,7 +1185,8 @@ fn land(unlocked: usize) -> Vec<Vec<u8>> {
 pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     let mut go = None;
     text("The Below", 48.0, 70.0, 44.0, INK);
-    text(&format!("{} of {} descents open", save.unlocked, EXPEDITIONS.len()), 50.0, 96.0, 15.0, MUTED);
+    let found = save.endings.count_ones();
+    text(&format!("{} of {} descents open  ·  secret endings found: {found} of {}", save.unlocked, EXPEDITIONS.len(), ENDINGS.len()), 50.0, 96.0, 15.0, MUTED);
     let tx = 48.0 + measure("The Below", 44.0).width + 28.0;
     if button(Rect::new(tx, 40.0, 110.0, 36.0), "< Title", true, false) {
         go = Some(Go::Back);
@@ -1951,7 +1952,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     {
         let foe = fallen.as_ref().unwrap_or(&b.f[1]);
         let ex = FOE.x + shake[1];
-        if BOSSES.iter().flatten().any(|d| d.name == foe.name) {
+        if is_boss(&foe.name) {
             lively_centered(&foe.name, 640.0 + shake[1], 186.0, 40.0, BLOOD, Motion::Tremble);
         } else {
             stamped(&foe.name, 640.0 + shake[1], 186.0, 40.0, INK);
@@ -2568,10 +2569,17 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             return summary(run, Some(b), b.won(), opened);
         }
         let k = bounce(now - shown);
-        let r = scaled(Rect::new(440.0, 270.0, 400.0, 180.0), k);
+        // an ending's boss fell: the card says which ending was found
+        let found = run.ending().filter(|_| b.won() && is_boss(&b.f[1].name));
+        let extra = if found.is_some() { 76.0 } else { 0.0 };
+        let r = scaled(Rect::new(440.0, 270.0 - extra / 2.0, 400.0, 180.0 + extra), k);
         plate(r, BG);
         stamped(if b.won() { "Victory" } else { "Defeated" }, 640.0, r.y + 74.0 * k, 50.0 * k, if b.won() { GOOD } else { BAD });
-        return shown > 0.25 && button(Rect::new(540.0, 380.0, 200.0, 40.0), "Continue", true, true);
+        if let Some(e) = found {
+            lively_centered("SECRET ENDING FOUND", 640.0, r.y + 112.0 * k, 16.0 * k, GOLD, Motion::Wave);
+            stamped(ENDINGS[e].name, 640.0, r.y + 148.0 * k, 30.0 * k, INK);
+        }
+        return shown > 0.25 && button(Rect::new(540.0, 380.0 + extra / 2.0, 200.0, 40.0), "Continue", true, true);
     }
     false
 }
@@ -2591,7 +2599,9 @@ fn node_look(k: NodeKind) -> usize {
 
 fn node_at(run: &Run, c: usize, r: usize) -> Vec2 {
     let n = run.map[c].len() as f32;
-    vec2(110.0 + c as f32 * 150.0, 390.0 + (r as f32 - (n - 1.0) / 2.0) * 150.0)
+    // a shorter map (an ending's floor) sits in the middle of the space a full one takes
+    let inset = (COLS + 1 - run.map.len()) as f32 * 75.0;
+    vec2(110.0 + inset + c as f32 * 150.0, 390.0 + (r as f32 - (n - 1.0) / 2.0) * 150.0)
 }
 
 /// Returns the node the player clicked, if it is one they may enter.
@@ -2688,9 +2698,26 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
         text(BLESSINGS[bl].name, x + 90.0, y + 18.0, 16.0, GOLD_C);
         y += 24.0;
     }
+    // keys carried: each one's boon and curse on hover
+    let mut key_tip = None;
+    for &k in &run.keys {
+        let e = &ENDINGS[k];
+        let r = Rect::new(x - 8.0, y + 2.0, 298.0, 22.0);
+        if r.contains(mouse()) {
+            block(r, CARD_HI);
+            key_tip = Some((format!("{} {} Opens {}.", e.boon, e.curse, e.name), e.key));
+        }
+        text("KEY", x, y + 18.0, 15.0, ACCENT);
+        sprite(e.key_sprite, x + 88.0, y + 3.0, 20.0, WHITE);
+        text(e.key, x + 114.0, y + 18.0, 16.0, GOLD_C);
+        y += 24.0;
+    }
     text("PACTS", x, y + 18.0, 15.0, ACCENT);
     let top = y + 28.0;
     let (mut tip, mut tip_label) = held.map_or((HEROES[run.hero].passive_desc, "PASSIVE"), |b| (b.desc, "BLESSING"));
+    if let Some((desc, name)) = &key_tip {
+        (tip, tip_label) = (desc, name);
+    }
     let rows = 22.0f32.min((576.0 - top) / run.charms.len().max(1) as f32);
     let n = run.charms.len();
     if rows >= 22.0 {
@@ -3045,8 +3072,10 @@ pub fn event(run: &mut Run, e: &Encounter, result: &mut Option<String>) -> bool 
         }
         return false;
     }
-    for (k, c) in e.choices.iter().enumerate() {
-        if button(Rect::new(240.0, y + k as f32 * 60.0, 800.0, 44.0), c.label, run.can_afford(c), false) {
+    // a way toward a key is hidden once that key cannot be taken
+    let shown: Vec<(usize, &Choice)> = e.choices.iter().enumerate().filter(|(_, c)| run.shows(c)).collect();
+    for (row, (k, c)) in shown.into_iter().enumerate() {
+        if button(Rect::new(240.0, y + row as f32 * 60.0, 800.0, 44.0), c.label, run.can_afford(c), false) {
             if c.outs.iter().any(|o| matches!(o, Out::LoseCharm)) {
                 GIVING.with(|g| g.set(Some((e as *const Encounter, k))));
             } else {
@@ -3085,7 +3114,7 @@ fn summary(run: &Run, b: Option<&Battle>, won: bool, opened: Option<usize>) -> b
         lively_centered("Your run ends here.", 640.0, r.y + 142.0, 40.0, fade(BLOOD, p), Motion::Tremble);
     }
     let place = run.daily.map_or(EXPEDITIONS[run.exp].name.to_string(), |d| format!("{} (daily)", daily_name(d)));
-    let sub = format!("{}  ·  {place}  ·  floor {} of {}", HEROES[run.hero].name, run.floor + 1, FLOORS);
+    let sub = format!("{}  ·  {place}  ·  floor {} of {}", HEROES[run.hero].name, run.floor + 1, run.floors());
     centered(&sub, 640.0, r.y + 174.0, 18.0, fade(MUTED, p));
     draw_line(r.x + 50.0, r.y + 196.0, r.right() - 50.0, r.y + 196.0, 1.0, fade(FAINT, p));
     // the numbers, one line at a time; the damage counts up
@@ -3118,6 +3147,29 @@ fn summary(run: &Run, b: Option<&Battle>, won: bool, opened: Option<usize>) -> b
         }
     }
     let mut last = pacts_at + 0.15 + n as f32 * 0.07;
+    // secret endings whose boss fell, counting a last fight just won
+    let mut found = run.found.clone();
+    if let (Some(e), true) = (run.ending(), b.is_some_and(|b| b.won())) {
+        if !found.contains(&e) {
+            found.push(e);
+        }
+    }
+    let mut y = r.y + 460.0;
+    if !found.is_empty() {
+        last += 0.35;
+        if at_beat(last) {
+            play(Sfx::LevelUp);
+        }
+        if t >= last {
+            let k = bounce(t0 + last as f64);
+            lively_centered(if found.len() == 1 { "SECRET ENDING FOUND" } else { "SECRET ENDINGS FOUND" }, 640.0, r.y + 424.0, 16.0, GOLD, Motion::Wave);
+            let names = found.iter().map(|&e| ENDINGS[e].name).collect::<Vec<_>>().join("  ·  ");
+            // body size, below the display font's, so the size it pops in at measures the same
+            let size = 18.0 * (540.0 / measure(&names, 18.0).width).min(1.0);
+            centered(&names, 640.0, r.y + 454.0, size * k, INK);
+        }
+        y += 22.0;
+    }
     if let Some(x) = opened {
         last += 0.35;
         if at_beat(last) {
@@ -3125,8 +3177,8 @@ fn summary(run: &Run, b: Option<&Battle>, won: bool, opened: Option<usize>) -> b
         }
         if t >= last {
             let k = bounce(t0 + last as f64);
-            lively_centered("A NEW PATH OPENS", 640.0, r.y + 460.0, 16.0, GOLD, Motion::Wave);
-            centered(EXPEDITIONS[x].name, 640.0, r.y + 492.0, 28.0 * k, INK);
+            lively_centered("A NEW PATH OPENS", 640.0, y, 16.0, GOLD, Motion::Wave);
+            centered(EXPEDITIONS[x].name, 640.0, y + 32.0, 28.0 * k, INK);
         }
     }
     text(&format!("seed {}", run.seed), r.x + 24.0, r.bottom() - 18.0, 14.0, FAINT);

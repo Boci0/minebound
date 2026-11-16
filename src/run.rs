@@ -57,6 +57,8 @@ pub struct Shop {
     /// the ware sold at a quarter off
     pub sale: usize,
     pub restocks: i32,
+    /// prices, in percent of normal
+    pub markup: i32,
 }
 
 /// Who carries day `day`'s daily descent, and where (one of the first three expeditions): (hero, expedition).
@@ -105,6 +107,16 @@ pub struct Run {
     pub debug: bool,
     /// the day this daily descent belongs to (days since 1970, UTC); `None` for an ordinary run
     pub daily: Option<u64>,
+    /// keys carried, by index in `ENDINGS`, in that order: each opens a floor past the last boss
+    pub keys: Vec<usize>,
+    /// endings whose boss fell this run
+    pub found: Vec<usize>,
+    /// a key offered as soon as the current node is done
+    omen: Option<usize>,
+    /// the floor whose forge was stoked
+    kindled: Option<usize>,
+    /// shops left in a row without buying
+    bare_shops: usize,
     /// pacts given up in the choice being applied, so the same trade cannot hand them back
     given: Vec<usize>,
 }
@@ -134,6 +146,11 @@ impl Run {
             best: (0, ""),
             debug: false,
             daily: None,
+            keys: vec![],
+            found: vec![],
+            omen: None,
+            kindled: None,
+            bare_shops: 0,
             given: vec![],
         };
         run.gen_map();
@@ -162,7 +179,30 @@ impl Run {
         }
         (TWISTS[self.twist].me)(&mut m);
         (EXPEDITIONS[self.exp].me)(&mut m);
+        for &k in &self.keys {
+            (ENDINGS[k].me)(&mut m);
+        }
         m
+    }
+
+    /// Floors this run has: the usual three, and one more for each key carried.
+    pub fn floors(&self) -> usize {
+        FLOORS + self.keys.len()
+    }
+
+    /// The secret ending this floor belongs to, past the last boss.
+    pub fn ending(&self) -> Option<usize> {
+        self.floor.checked_sub(FLOORS).map(|i| self.keys[i])
+    }
+
+    /// Columns before the boss: an ending's floor is shorter.
+    pub fn cols(&self) -> usize {
+        if self.ending().is_some() { 3 } else { COLS }
+    }
+
+    /// Whether choice `c` is shown: a way toward a key only while the key can still be taken.
+    pub fn shows(&self, c: &Choice) -> bool {
+        c.outs.iter().all(|o| !matches!(*o, Out::Omen(k) if self.keys.contains(&k) || self.floor >= FLOORS))
     }
 
     /// Takes blessing `b` in place of the one held (None keeps it). Max HP gained comes as HP too.
@@ -176,7 +216,10 @@ impl Run {
     }
 
     pub fn boss_def(&self) -> &'static EnemyDef {
-        &BOSSES[self.floor.min(BOSSES.len() - 1)][self.boss]
+        match self.ending() {
+            Some(e) => &ENDINGS[e].boss,
+            None => &BOSSES[self.floor.min(BOSSES.len() - 1)][self.boss],
+        }
     }
 
     pub fn level(&self, id: usize) -> usize {
@@ -249,7 +292,7 @@ impl Run {
         if col == 0 {
             return NodeKind::Battle;
         }
-        if col == COLS {
+        if col == self.cols() {
             return NodeKind::Boss;
         }
         match self.rng.below(100) {
@@ -271,7 +314,8 @@ impl Run {
         } else {
             self.rng.below(TWISTS.len())
         };
-        let mut sizes: Vec<usize> = (0..COLS).map(|_| 2 + self.rng.below(2)).collect();
+        let cols = self.cols();
+        let mut sizes: Vec<usize> = (0..cols).map(|_| 2 + self.rng.below(2)).collect();
         sizes.push(1);
         let mut map: Vec<Vec<Node>> = Vec::new();
         for (c, &n) in sizes.iter().enumerate() {
@@ -279,11 +323,11 @@ impl Run {
         }
         // every floor has at least one shrine, somewhere between the first fight and the rest stop
         if !map.iter().flatten().any(|n| n.kind == NodeKind::Shrine) {
-            let c = 1 + self.rng.below(COLS - 2);
+            let c = 1 + self.rng.below(cols - 2);
             let r = self.rng.below(map[c].len());
             map[c][r].kind = NodeKind::Shrine;
         }
-        for c in 0..COLS {
+        for c in 0..cols {
             let (n, m) = (sizes[c], sizes[c + 1]);
             // walk both columns top to bottom together: links made this way can never cross,
             // and every node on both sides gets one
@@ -317,10 +361,11 @@ impl Run {
 
     /// `slow`: how many fewer tiles it flips per turn than a hero. Lesser foes sweep slower.
     fn enemy(&self, d: &EnemyDef, scale: bool, slow: i32) -> Fighter {
+        // an ending's floor scales on from the last one: each ending past the first is deeper still
         let floor = self.floor as i32;
         let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100, d.power + floor) } else { (d.hp * 220 / 100, d.power) };
         let x = &EXPEDITIONS[self.exp];
-        let hp = hp * x.hp_pct / 100;
+        let hp = self.keys.iter().fold(hp * x.hp_pct / 100, |hp, &k| hp * ENDINGS[k].hp_pct / 100);
         let mut m = Mods::default();
         (d.mods)(&mut m);
         (TWISTS[self.twist].foe)(&mut m);
@@ -334,7 +379,8 @@ impl Run {
     }
 
     fn random_normal(&mut self) -> Fighter {
-        let d = &NORMALS[self.rng.below(NORMALS.len())];
+        let pool = self.ending().map_or(NORMALS, |e| ENDINGS[e].normals);
+        let d = &pool[self.rng.below(pool.len())];
         self.enemy(d, true, 3)
     }
 
@@ -354,7 +400,10 @@ impl Run {
                         (0..waves).map(|_| self.random_normal()).collect()
                     }
                     NodeKind::Elite => {
-                        let elite = &ELITES[self.rng.below(ELITES.len())];
+                        let elite = match self.ending() {
+                            Some(e) => &ENDINGS[e].elite,
+                            None => &ELITES[self.rng.below(ELITES.len())],
+                        };
                         vec![self.random_normal(), self.enemy(elite, true, 2)]
                     }
                     _ => vec![self.enemy(self.boss_def(), false, 1)],
@@ -387,9 +436,19 @@ impl Run {
         self.enter(COLS, 0)
     }
 
+    /// Developer shortcut: carry every key and go to the first ending's boss fight.
+    pub fn debug_endings(&mut self) -> Stage {
+        self.debug = true;
+        self.keys = (0..ENDINGS.len()).collect();
+        self.hp = self.max_hp();
+        self.floor = FLOORS;
+        self.gen_map();
+        self.enter(self.cols(), 0)
+    }
+
     /// The fight in progress is the last floor's boss: winning it wins the run.
     pub fn last_fight(&self) -> bool {
-        self.floor + 1 == FLOORS && self.pos.is_some_and(|(c, r)| self.map[c][r].kind == NodeKind::Boss)
+        self.floor + 1 == self.floors() && self.pos.is_some_and(|(c, r)| self.map[c][r].kind == NodeKind::Boss)
     }
 
     pub fn finish_battle(&mut self, b: &Battle) -> Stage {
@@ -399,10 +458,16 @@ impl Run {
             return Stage::End(false);
         }
         self.wins += 1;
+        let kind = self.pos.map_or(NodeKind::Battle, |(c, r)| self.map[c][r].kind);
+        if let Some(e) = self.ending().filter(|_| kind == NodeKind::Boss) {
+            self.found.push(e);
+        }
+        if kind == NodeKind::Elite && self.kindled == Some(self.floor) {
+            self.omen = Some(1);
+        }
         if self.last_fight() {
             return Stage::End(true);
         }
-        let kind = self.pos.map_or(NodeKind::Battle, |(c, r)| self.map[c][r].kind);
         let m = self.mods();
         let base = match kind {
             NodeKind::Boss => 40,
@@ -434,13 +499,31 @@ impl Run {
 
     /// Back to the map; past a boss, that means the next floor.
     pub fn after_node(&mut self) -> Stage {
-        if matches!(self.pos, Some((c, _)) if c == COLS) {
+        // a key's condition was just met: it is offered before the map, and only before the endings
+        if let Some(k) = self.omen.take().filter(|k| !self.keys.contains(k) && self.floor < FLOORS) {
+            return Stage::Event(&ENDINGS[k].offer, None);
+        }
+        if matches!(self.pos, Some((c, _)) if c == self.cols()) {
             self.floor += 1;
             self.pos = None;
             self.gen_map();
-            self.note = format!("{}, floor {}.", EXPEDITIONS[self.exp].name, self.floor + 1);
+            self.note = match self.ending() {
+                Some(e) => format!("{}, past the last boss.", ENDINGS[e].name),
+                None => format!("{}, floor {}.", EXPEDITIONS[self.exp].name, self.floor + 1),
+            };
         }
         Stage::Map
+    }
+
+    /// Leaves a shop. The second shop in a row left without buying offers the Clockwork Eye.
+    pub fn leave_shop(&mut self, shop: &Shop) -> Stage {
+        let bought = shop.stock.iter().any(|w| w.is_none());
+        self.bare_shops = if bought { 0 } else { self.bare_shops + 1 };
+        if self.bare_shops >= 2 {
+            self.bare_shops = 0;
+            self.omen = Some(2);
+        }
+        self.after_node()
     }
 
     pub fn can_afford(&self, c: &Choice) -> bool {
@@ -489,6 +572,17 @@ impl Run {
                     }
                 }
                 Out::Text(s) => msg.push(s.into()),
+                Out::Key(k) => {
+                    if !self.keys.contains(&k) {
+                        let before = self.max_hp();
+                        self.keys.push(k);
+                        self.keys.sort_unstable();
+                        self.hp = (self.hp + (self.max_hp() - before).max(0)).min(self.max_hp());
+                        msg.push(format!("You carry the {}. {} {}", ENDINGS[k].key, ENDINGS[k].boon, ENDINGS[k].curse));
+                    }
+                }
+                Out::Omen(k) => self.omen = Some(k),
+                Out::Kindle => self.kindled = Some(self.floor),
                 Out::Chance(pct, win, lose) => {
                     let outs = if self.rng.chance(pct) { win } else { lose };
                     self.apply(outs, give, msg);
@@ -500,11 +594,12 @@ impl Run {
     fn stock(&mut self, restocks: i32, avoid: &[usize]) -> Shop {
         let ids = self.offer(SHOP_SIZE, avoid);
         let sale = self.rng.below(ids.len().max(1));
-        Shop { stock: ids.into_iter().map(Some).collect(), sale, restocks }
+        let markup = self.keys.iter().fold(100, |p, &k| p * ENDINGS[k].price_pct / 100);
+        Shop { stock: ids.into_iter().map(Some).collect(), sale, restocks, markup }
     }
 
     pub fn price(shop: &Shop, k: usize) -> i32 {
-        let p = shop.stock[k].map_or(0, |id| CHARMS[id].rarity.price());
+        let p = shop.stock[k].map_or(0, |id| CHARMS[id].rarity.price() * shop.markup / 100);
         if k == shop.sale { p * 3 / 4 } else { p }
     }
 
@@ -625,9 +720,18 @@ mod tests {
         }
     }
 
-    /// Plays a whole run with the enemy AI in the player's seat. Returns (won, floor reached).
+    /// Plays a whole run with the enemy AI in the player's seat. Returns (won, floor reached), where
+    /// a run past the last floor's boss counts as won on floor 3, as the save counts it.
     fn simulate(seed: u64, hero: usize, exp: usize) -> (bool, usize) {
+        let (run, won) = play(seed, hero, exp, &[]);
+        (won || run.floor >= FLOORS, run.floor.min(FLOORS - 1))
+    }
+
+    /// Plays a whole run, carrying `keys` from the start. Returns the run as it ended, and whether it won.
+    fn play(seed: u64, hero: usize, exp: usize, keys: &[usize]) -> (Run, bool) {
         let (mut run, mut stage) = Run::new(seed, hero, exp);
+        run.keys = keys.to_vec();
+        run.hp = run.max_hp();
         let mut pick = Rng::new(seed ^ 0xABCD);
         for _ in 0..500 {
             stage = match stage {
@@ -659,10 +763,10 @@ mod tests {
                     for k in 0..shop.stock.len() {
                         run.buy(&mut shop, k);
                     }
-                    run.after_node()
+                    run.leave_shop(&shop)
                 }
                 Stage::Event(e, _) => {
-                    let ok: Vec<&Choice> = e.choices.iter().filter(|c| run.can_afford(c)).collect();
+                    let ok: Vec<&Choice> = e.choices.iter().filter(|c| run.can_afford(c) && run.shows(c)).collect();
                     let c = ok[pick.below(ok.len())];
                     run.choose(c, None);
                     assert!(run.hp >= 1 && run.shards >= 0 && run.hp <= run.max_hp());
@@ -671,11 +775,123 @@ mod tests {
                 Stage::End(won) => {
                     // the end screen's totals: a fight won means rite damage dealt, and the best hit is part of it
                     assert!(run.wins == 0 || (run.dealt > 0 && run.best.0 > 0 && run.best.0 <= run.dealt));
-                    return (won, run.floor);
+                    // every ending's boss that fell is one whose floor was played, in order
+                    assert!(run.found.iter().enumerate().all(|(i, &e)| run.keys.get(i) == Some(&e)));
+                    return (run, won);
                 }
             };
         }
         panic!("run never ends: seed {seed} hero {hero}");
+    }
+
+    #[test]
+    fn each_key_is_offered_by_its_deed_and_carries_its_boon_and_curse() {
+        let (mut run, _) = Run::new(3, 0, 0);
+        let reveals = run.mods().reveals;
+        // the Brine Lantern: climbing down the well, then taking the lantern the card offers
+        let well = ENCOUNTERS.iter().find(|e| e.title == "Echoing Well").unwrap();
+        let down = well.choices.iter().find(|c| c.outs.iter().any(|o| matches!(o, Out::Omen(0)))).unwrap();
+        run.choose(down, None);
+        let Stage::Event(offer, None) = run.after_node() else { panic!("the lantern is offered") };
+        run.choose(&offer.choices[0], None);
+        assert_eq!((run.keys.clone(), run.mods().reveals), (vec![0], reveals + 1));
+        assert!(!run.shows(down), "a key held is not offered again");
+        assert!(matches!(run.after_node(), Stage::Map));
+        // the Cinder Seal: a stoked forge, then an elite beaten on the same floor
+        let forge = ENCOUNTERS.iter().find(|e| e.title == "Abandoned Forge").unwrap();
+        run.shards = 50;
+        run.choose(&forge.choices[1], None);
+        run.map[1][0].kind = NodeKind::Elite;
+        let Stage::Battle(mut b) = run.enter(1, 0) else { panic!("an elite fight") };
+        b.debug_win();
+        assert!(matches!(run.finish_battle(&b), Stage::Brand(_)));
+        let Stage::Event(offer, None) = run.burn_brand(run.rites()[0], 0) else { panic!("the seal is offered") };
+        run.choose(&offer.choices[0], None);
+        assert_eq!((run.keys.clone(), run.mods().rite_pct, run.mods().self_burn), (vec![0, 1], 25, 4));
+        // the Clockwork Eye: two shops in a row left without buying; buying in between starts the count again
+        let shop = run.stock(0, &[]);
+        assert!(matches!(run.leave_shop(&shop), Stage::Map));
+        let mut bought = run.stock(0, &[]);
+        run.shards = 500;
+        assert!(run.buy(&mut bought, 0));
+        assert!(matches!(run.leave_shop(&bought), Stage::Map));
+        assert!(matches!(run.leave_shop(&shop), Stage::Map));
+        let Stage::Event(offer, None) = run.leave_shop(&shop) else { panic!("the eye is offered") };
+        let walk_past = run.choose(&offer.choices[1], None);
+        assert!(run.keys.len() == 2 && !walk_past.is_empty(), "leaving it leaves it");
+        run.keys.push(2);
+        let marked = run.stock(0, &[]);
+        assert_eq!(Run::price(&marked, (marked.sale + 1) % marked.stock.len()), marked.stock[(marked.sale + 1) % marked.stock.len()].map(|id| CHARMS[id].rarity.price() * 125 / 100).unwrap());
+    }
+
+    #[test]
+    fn keys_add_short_floors_past_the_last_boss_in_order() {
+        let (mut run, _) = Run::new(9, 1, 0);
+        run.keys = vec![0, 2];
+        assert_eq!(run.floors(), FLOORS + 2);
+        run.floor = FLOORS - 1;
+        run.gen_map();
+        // winning the last regular floor's boss leads on, not to the end
+        let Stage::Battle(mut b) = run.enter(COLS, 0) else { panic!() };
+        let hp_regular = b.f[1].max_hp;
+        b.debug_win();
+        assert!(!run.last_fight());
+        let mut stage = run.finish_battle(&b);
+        while !matches!(stage, Stage::Map) {
+            stage = match stage {
+                Stage::Upgrade(ids) => run.upgrade(ids[0]),
+                Stage::Pick(_) => run.after_node(),
+                _ => panic!("only rewards before the next floor"),
+            };
+        }
+        assert_eq!((run.floor, run.ending(), run.cols(), run.map.len()), (FLOORS, Some(0), 3, 4));
+        assert_eq!(run.boss_def().name, ENDINGS[0].boss.name);
+        let Stage::Battle(b) = run.enter(0, 0) else { panic!() };
+        assert!(ENDINGS[0].normals.iter().any(|d| d.name == b.f[1].name), "the ending's own enemies");
+        // its boss falls: found, and on to the next key's floor, whose boss is the last fight
+        let Stage::Battle(mut b) = run.enter(3, 0) else { panic!() };
+        assert!(b.f[1].max_hp > hp_regular && is_boss(&b.f[1].name));
+        b.debug_win();
+        let mut stage = run.finish_battle(&b);
+        while !matches!(stage, Stage::Map) {
+            stage = match stage {
+                Stage::Upgrade(ids) => run.upgrade(ids[0]),
+                Stage::Pick(_) => run.after_node(),
+                _ => panic!("only rewards before the next floor"),
+            };
+        }
+        assert_eq!((run.found.clone(), run.ending()), (vec![0], Some(2)));
+        run.pos = Some((3, 0));
+        assert!(run.last_fight());
+    }
+
+    #[test]
+    fn the_endings_can_be_cleared_but_ask_for_more() {
+        // the bot carrying one key from the start: how often it clears floor 3, then the ending as well
+        const RUNS: u64 = 120;
+        for e in 0..ENDINGS.len() {
+            let (mut past3, mut found) = (0, 0);
+            for hero in 0..HEROES.len() {
+                for s in 0..RUNS {
+                    let (run, _) = play(s, hero, 0, &[e]);
+                    past3 += (run.floor >= FLOORS) as usize;
+                    found += run.found.contains(&e) as usize;
+                }
+            }
+            println!("{:20} past floor 3: {past3:3}  found: {found:3}  (of {})", ENDINGS[e].name, RUNS as usize * HEROES.len());
+            assert!(found > 0, "{} can never be cleared", ENDINGS[e].name);
+            assert!(found < past3, "{} is never lost", ENDINGS[e].name);
+        }
+        // all three keys at once: each ending deeper than the one before, and every curse stacked
+        let all: Vec<usize> = (0..ENDINGS.len()).collect();
+        let mut reached = [0; 4];
+        for hero in 0..HEROES.len() {
+            for s in 0..RUNS {
+                reached[play(s, hero, 0, &all).0.found.len()] += 1;
+            }
+        }
+        println!("all keys: runs ending with 0/1/2/3 endings found: {reached:?}");
+        assert!(reached[3] > 0, "all three endings can be cleared in one run");
     }
 
     #[test]

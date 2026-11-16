@@ -322,6 +322,10 @@ impl Battle {
             d = (d * (100 + f.mods.first_pct) + 50) / 100;
             steps.push((format!("first rite +{}%", f.mods.first_pct), format!("= {d}")));
         }
+        if f.mods.rite_pct != 0 {
+            d = (d * (100 + f.mods.rite_pct) + 50) / 100;
+            steps.push((format!("rites +{}%", f.mods.rite_pct), format!("= {d}")));
+        }
         // thrown shield is not boosted by surge
         plus(steps, &mut d, "your shield, thrown".into(), blast);
         if lvl >= MAX_LEVEL {
@@ -410,6 +414,7 @@ impl Battle {
             self.deal(s);
             self.f[s].shield += self.f[s].mods.start_shield;
             self.f[s].duds = self.f[s].mods.duds;
+            self.f[s].burn += self.f[s].mods.self_burn.max(0);
             let m = self.f[s].mods.clone();
             self.procs(s, &[("start_shield", m.start_shield > 0), ("scouts", m.scouts > 0), ("fewer_mines", m.fewer_mines > 0), ("foe_mines", m.foe_mines > 0)]);
         }

@@ -72,6 +72,10 @@ pub struct Mods {
     pub sense: i32,
     pub echo: i32,
     pub desperate: i32,
+    /// every rite's damage, in percent more
+    pub rite_pct: i32,
+    /// burn on yourself as each wave starts
+    pub self_burn: i32,
 }
 
 pub type Tweak = fn(&mut Mods);
@@ -525,6 +529,153 @@ pub static BOSSES: &[[EnemyDef; 2]] = &[
     ],
 ];
 
+/// A secret ending: a floor past the last boss, opened by carrying its key. A key is strong and
+/// cursed at once, and both hold for the rest of the run. Held keys add their floors in this order.
+pub struct Ending {
+    pub name: &'static str,
+    pub key: &'static str,
+    pub key_sprite: usize,
+    pub boon: &'static str,
+    pub curse: &'static str,
+    /// the boon, and any curse on you
+    pub me: Tweak,
+    /// enemies' HP, in percent of normal
+    pub hp_pct: i32,
+    /// shop prices, in percent of normal
+    pub price_pct: i32,
+    /// the card that offers the key, once its condition is met
+    pub offer: Encounter,
+    pub normals: &'static [EnemyDef],
+    pub elite: EnemyDef,
+    pub boss: EnemyDef,
+}
+
+pub static ENDINGS: &[Ending] = &[
+    Ending {
+        name: "The Drowned Archive",
+        key: "Brine Lantern",
+        key_sprite: HD + 82,
+        boon: "+1 reveal each turn.",
+        curse: "Enemies have 15% more HP.",
+        me: |m| m.reveals += 1,
+        hp_pct: 115,
+        price_pct: 100,
+        offer: Encounter {
+            title: "Brine Lantern",
+            text: "At the bottom of the flooded stair a lantern burns under the water, lighting a door no map shows. \
+                   Carry it: +1 reveal each turn, but enemies have 15% more HP. Past the last boss, the door opens.",
+            choices: &[pick("Take the lantern.", &[Key(0)]), pick("Leave it burning.", &[Text("The light goes out behind you.")])],
+        },
+        normals: &[
+            foe("Lamprey", HD + 67, "Snatches one of your stacks as its turn starts, and heals for half the damage it deals.", 18, 2, &[Tide, Gale], 2, |m| {
+                m.pilfer = 1;
+                m.lifesteal_pct = 50
+            }),
+            foe("Ink Jelly", HD + 68, "Every rite that hits it deals 3 back. Jams your surge at 3.", 16, 2, &[Tide, Spark], 3, |m| {
+                m.thorns = 3;
+                m.foe_surge_cap = 3
+            }),
+            foe("Deepkin", HD + 69, "Heals 3 each turn. Every hit deals 1 less.", 22, 2, &[Tide, Stone], 3, |m| {
+                m.regen = 3;
+                m.armor = 1
+            }),
+        ],
+        elite: foe("The Angler", HD + 70, "Its lure hides 2 more mines in your boards. The first rite each turn only grazes it.", 50, 3, &[Tide, Gale, Spark], 4, |m| {
+            m.foe_mines = 2;
+            m.evade = 1;
+            m.graze = 1
+        }),
+        boss: foe("The Archivist Below", HD + 71, "Snatches two of your stacks as its turn starts. Heals 3 each turn.", 200, 5, &[Tide, Stone, Spark], 5, |m| {
+            m.pilfer = 2;
+            m.regen = 3
+        }),
+    },
+    Ending {
+        name: "The Furnace Heart",
+        key: "Cinder Seal",
+        key_sprite: HD + 83,
+        boon: "Your rites deal 25% more damage.",
+        curse: "You start every wave with 4 burn.",
+        me: |m| {
+            m.rite_pct += 25;
+            m.self_burn += 4
+        },
+        hp_pct: 100,
+        price_pct: 100,
+        offer: Encounter {
+            title: "Cinder Seal",
+            text: "The forge you stoked kept burning while you fought. In its ashes lies a seal, still red and still warm. \
+                   Carry it: your rites deal 25% more damage, but you start every wave with 4 burn. Past the last boss, the heat leads down.",
+            choices: &[pick("Take the seal.", &[Key(1)]), pick("Let it cool.", &[Text("It hisses into grey ash.")])],
+        },
+        normals: &[
+            foe("Salamander", HD + 72, "Its rites set you burning.", 16, 2, &[Ember, Stone], 2, |m| {
+                m.rite_burn = 1;
+                m.burn_bonus = 1
+            }),
+            foe("Living Flame", HD + 73, "+1 power every turn. Mines it hits burst at you for 5.", 14, 3, &[Ember, Gale], 3, |m| {
+                m.enrage = 1;
+                m.mine_spite = 5
+            }),
+            foe("Cinder Whirl", HD + 74, "Each crystal it claims scorches you for 3.", 15, 2, &[Ember, Spark], 2, |m| m.claim_zap = 3),
+        ],
+        elite: foe("Slag Colossus", HD + 75, "Starts with 12 shield and gains 3 each turn. Its rites set you burning.", 55, 3, &[Ember, Stone, Spark], 4, |m| {
+            m.start_shield = 12;
+            m.shield_turn = 3;
+            m.rite_burn = 1
+        }),
+        boss: foe("The Furnace Heart", HD + 76, "Each of its rites stacks 3 burn on you, and your burn hurts 2 more.", 210, 5, &[Ember, Stone, Gale], 5, |m| {
+            m.rite_burn = 3;
+            m.burn_bonus = 2
+        }),
+    },
+    Ending {
+        name: "The Silent Engine",
+        key: "Clockwork Eye",
+        key_sprite: HD + 84,
+        boon: "Begin each battle with 4 random stacks.",
+        curse: "Shop prices are 25% higher.",
+        me: |m| m.start_stacks += 4,
+        hp_pct: 100,
+        price_pct: 125,
+        offer: Encounter {
+            title: "Clockwork Eye",
+            text: "Two keepers watched you leave with your purse full. On the way out, a brass eye on the wall turns to follow you, ticking. \
+                   Carry it: begin each battle with 4 random stacks, but shop prices are 25% higher. Past the last boss, something is still running.",
+            choices: &[pick("Pry the eye loose.", &[Key(2)]), pick("Walk past it.", &[Text("It keeps watching.")])],
+        },
+        normals: &[
+            foe("Spindle Crawler", HD + 77, "Plants 1 more mine in your boards, and gains a stack when you hit one.", 16, 2, &[Spark, Stone], 2, |m| {
+                m.foe_mines = 1;
+                m.foe_mine_gift = 1
+            }),
+            foe("Hover Drone", HD + 78, "One extra reveal. The first rite each turn only grazes it.", 13, 2, &[Spark, Gale], 2, |m| {
+                m.reveals = 1;
+                m.evade = 1;
+                m.graze = 1
+            }),
+            foe("Rivet Turret", HD + 79, "Fires 6 damage at you as each wave starts. Every hit deals 3 less.", 20, 3, &[Spark, Stone], 3, |m| {
+                m.opening = 6;
+                m.armor = 3
+            }),
+        ],
+        elite: foe("The Foreman", HD + 80, "Jams your surge at 2. Every hit deals 2 less.", 52, 3, &[Stone, Spark, Ember], 4, |m| {
+            m.foe_surge_cap = 2;
+            m.armor = 2
+        }),
+        boss: foe("The Silent Engine", HD + 81, "Jams your surge at 2 and plants 2 more mines in your boards. Every hit deals 1 less.", 200, 5, &[Spark, Stone, Tide], 5, |m| {
+            m.foe_surge_cap = 2;
+            m.foe_mines = 2;
+            m.armor = 1
+        }),
+    },
+];
+
+/// True for any boss, a floor's or an ending's.
+pub fn is_boss(name: &str) -> bool {
+    BOSSES.iter().flatten().chain(ENDINGS.iter().map(|e| &e.boss)).any(|d| d.name == name)
+}
+
 /// The places on the overworld, unlocked one after another by winning the one before.
 /// Each is harder than the last; its rules stack on everything else.
 pub struct Expedition {
@@ -648,6 +799,12 @@ pub enum Out {
     LoseCharm,
     Text(&'static str),
     Chance(u32, &'static [Out], &'static [Out]),
+    /// take ending `k`'s key
+    Key(usize),
+    /// ending `k`'s key is offered once this encounter is over
+    Omen(usize),
+    /// the forge is lit: an elite beaten on this floor offers the Cinder Seal
+    Kindle,
 }
 use Out::*;
 
@@ -742,6 +899,7 @@ pub static ENCOUNTERS: &[Encounter] = &[
         choices: &[
             pick("Throw in 10 shards. (60%: gain a pact)", &[Shards(-10), Chance(60, &[GainCharm], &[Text("Only an echo.")])]),
             pick("Drink. (+2 max HP)", &[MaxHp(2)]),
+            pick("Climb down toward the light. (-4 max HP)", &[MaxHp(-4), Text("Far below, something glows under the water."), Omen(0)]),
         ],
     },
     Encounter {
@@ -763,7 +921,7 @@ pub static ENCOUNTERS: &[Encounter] = &[
         text: "The coals are still warm. A crucible waits, big enough for something small and precious.",
         choices: &[
             pick("Melt a pact down. (Give up a pact you choose, +60 shards)", &[LoseCharm, Shards(60)]),
-            pick("Stoke the fire. (-10 shards, +5 max HP)", &[Shards(-10), MaxHp(5)]),
+            pick("Stoke the fire. (-10 shards, +5 max HP)", &[Shards(-10), MaxHp(5), Kindle]),
             LEAVE,
         ],
     },
@@ -773,6 +931,7 @@ pub static ENCOUNTERS: &[Encounter] = &[
         choices: &[
             pick("Wade along the edge. (-3 max HP, +25 shards)", &[MaxHp(-3), Shards(25)]),
             pick("Swim for it. (40%: gain a pact, else -5 max HP)", &[Chance(40, &[GainCharm], &[Text("Cold, dark, empty."), MaxHp(-5)])]),
+            pick("Dive toward the light below. (-4 max HP)", &[MaxHp(-4), Text("Deeper than the shiny thing, something glows."), Omen(0)]),
             LEAVE,
         ],
     },

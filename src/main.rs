@@ -12,7 +12,7 @@ mod ui;
 
 use macroquad::audio::{load_sound, load_sound_from_bytes, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
-use run::{Run, Stage};
+use run::{Run, Stage, FLOORS};
 use save::Save;
 use ui::Go;
 
@@ -112,7 +112,7 @@ impl Music {
 /// The music a screen calls for: a fight's, a boss fight's, or the calm between.
 fn mood(screen: &Screen) -> u8 {
     match screen {
-        Screen::Run(_, Stage::Battle(b), _) if data::BOSSES.iter().flatten().any(|d| d.name == b.f[1].name) => BOSS,
+        Screen::Run(_, Stage::Battle(b), _) if data::is_boss(&b.f[1].name) => BOSS,
         Screen::Run(_, Stage::Battle(_), _) => FIGHT,
         _ => CALM,
     }
@@ -220,7 +220,11 @@ async fn main() {
             Screen::World => match ui::world(&save, &mut pick, today) {
                 Some(Go::Play) => {
                     let seed = fixed_seed.unwrap_or((miniquad::date::now() * 1000.0) as u64);
-                    let (run, stage) = Run::new(seed, pick.1, pick.0);
+                    let (mut run, mut stage) = Run::new(seed, pick.1, pick.0);
+                    // debug builds only: MINEBOUND_ENDINGS=1 starts every run as Ctrl+E does, for when keys can't be sent
+                    if cfg!(debug_assertions) && std::env::var_os("MINEBOUND_ENDINGS").is_some() {
+                        stage = run.debug_endings();
+                    }
                     to = Some(Screen::Run(run, stage, None));
                 }
                 Some(Go::Daily) => {
@@ -236,20 +240,22 @@ async fn main() {
             Screen::Run(run, stage, opened) => {
                 // debug builds only, to reach any screen quickly: F9, Ctrl+W or a middle click wins the current
                 // fight, F7 or Ctrl+L loses it, F8 or Ctrl+B jumps to the last floor's boss (laptops often
-                // hide F keys behind Fn). A run that used one is not saved.
+                // hide F keys behind Fn), Ctrl+E takes every key and jumps to the first ending's boss.
+                // A run that used one is not saved.
                 if cfg!(debug_assertions) {
                     let ctrl = |k| (is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl)) && is_key_pressed(k);
                     let win = is_key_pressed(KeyCode::F9) || ctrl(KeyCode::W) || is_mouse_button_pressed(MouseButton::Middle);
                     let (lose, jump) = (is_key_pressed(KeyCode::F7) || ctrl(KeyCode::L), is_key_pressed(KeyCode::F8) || ctrl(KeyCode::B));
-                    run.debug |= win || lose || jump;
+                    let endings = ctrl(KeyCode::E);
+                    run.debug |= win || lose || jump || endings;
                     match stage {
                         Stage::Battle(b) if b.over() => {}
                         Stage::Battle(b) if win => b.debug_win(),
                         Stage::Battle(b) if lose => b.f[0].hp = 0,
                         _ => {}
                     }
-                    if jump && !matches!(stage, Stage::Battle(b) if b.over()) {
-                        *stage = run.debug_last_fight();
+                    if (jump || endings) && !matches!(stage, Stage::Battle(b) if b.over()) {
+                        *stage = if endings { run.debug_endings() } else { run.debug_last_fight() };
                         ui::transition();
                     }
                 }
@@ -261,7 +267,8 @@ async fn main() {
                         // the very first fight waits under a sheet of rules until it is read
                         ui::hold_for_rules(!save.rules_seen);
                         let ending = b.over() && (!b.won() || run.last_fight());
-                        let opens = save.would_open(run.exp, b.won()).filter(|_| !run.debug && run.daily.is_none());
+                        // past the last floor's boss the run counts as won, whatever an ending's floor does
+                        let opens = save.would_open(run.exp, b.won() || run.floor >= FLOORS).filter(|_| !run.debug && run.daily.is_none());
                         let done = ui::battle_screen(b, run, ending.then_some(opens), &mut ai_timer);
                         if !save.rules_seen && ui::rules() {
                             save.rules_seen = true;
@@ -298,7 +305,7 @@ async fn main() {
                     }
                     Stage::Shop(shop) => {
                         ui::status(run);
-                        ui::shop(run, shop).then(|| run.after_node())
+                        ui::shop(run, shop).then(|| run.leave_shop(shop))
                     }
                     Stage::Event(e, result) => {
                         ui::status(run);
