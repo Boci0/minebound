@@ -543,7 +543,7 @@ pub static EXPEDITIONS: &[Expedition] = &[
     Expedition {
         name: "The Rift",
         text: "A crack in the world, below the deepest shaft. Nothing here is kind.",
-        rules: &["Every law of Crystal Hollows.", "Every floor rolls a curse.", "Rites cost 1 more gem, any kind."],
+        rules: &["Every law of Crystal\u{a0}Hollows.", "Every floor rolls a curse.", "Rites cost 1 more gem, any kind."],
         hp_pct: 130,
         me: |m| {
             m.reveals -= 1;
@@ -556,7 +556,7 @@ pub static EXPEDITIONS: &[Expedition] = &[
     Expedition {
         name: "The Null",
         text: "Where the maps stop. Whoever drew them never came back to finish.",
-        rules: &["Every law of The Rift.", "Enemies have 45% more HP and +1 power."],
+        rules: &["Every law of The\u{a0}Rift.", "Enemies have 45% more HP and +1 power."],
         hp_pct: 145,
         me: |m| {
             m.reveals -= 1;

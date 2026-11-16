@@ -1047,7 +1047,8 @@ pub fn title() -> Option<Go> {
         draw_ellipse(x, 640.0, 40.0, 7.0, 0.0, fade(OUT, 0.6));
         sprite(h.sprite, x - 48.0, 548.0 + (t * 2.0 + i as f32 * 2.1).sin() * 3.0, 96.0, WHITE);
     }
-    let rise = 1.0 - (((now() - fx(|fx| fx.fade)) / 0.6) as f32).min(1.0);
+    // the name drops in once, as the game opens; coming back from the map it is simply there
+    let rise = if fx(|fx| fx.fade) > 0.0 { 0.0 } else { 1.0 - ((now() / 0.6) as f32).min(1.0) };
     lively_centered("MINEBOUND", 640.0, 140.0 - rise * 30.0, 92.0, INK, Motion::Wave);
     centered("Sweep your boards for power. Spend it before theirs spends you.", 640.0, 184.0, 20.0, MUTED);
     let mut go = None;
@@ -1213,14 +1214,19 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
     }
     y += 22.0;
     if !open {
-        y = wrapped(&format!("Win {} to open the way here.", EXPEDITIONS[shown - 1].name), lx, y, w, 15.0, INK) + 14.0;
+        // no-break spaces keep a place name whole, so "Ember" or "Mines" in it is not read as a rules word
+        let prev = EXPEDITIONS[shown - 1].name.replace(' ', "\u{a0}");
+        y = wrapped(&format!("Win {prev} to open the way here."), lx, y, w, 15.0, INK) + 14.0;
     }
-    // who waits at the bottom of each floor
+    // who waits at the bottom of each floor; a sealed descent keeps them to one line, so its longer law still fits
     label("LORDS BELOW", lx, y);
     y += 8.0;
-    for pair in BOSSES {
-        let names: Vec<&str> = pair.iter().map(|d| if open { d.name } else { "???" }).collect();
-        y = wrapped(&names.join(" or "), lx, y + 20.0, w, 15.0, if open { INK } else { MUTED }) - 6.0;
+    if !open {
+        wrapped("Unseen until the way opens.", lx, y + 20.0, w, 15.0, MUTED);
+    }
+    for pair in BOSSES.iter().filter(|_| open) {
+        let names: Vec<&str> = pair.iter().map(|d| d.name).collect();
+        y = wrapped(&names.join(" or "), lx, y + 20.0, w, 15.0, INK) - 6.0;
     }
 
     // the bearer: one sigil per hero; the chosen one is outlined, with its numbers below
