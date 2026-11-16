@@ -2026,7 +2026,12 @@ pub fn battle_screen(b: &mut Battle, floor: usize, charms: &[usize], ai_timer: &
         if cur {
             draw_line(r.x + 4.0, r.bottom(), r.right() - 4.0, r.bottom(), 2.0, INK);
         }
-        if hot && clicked() {
+        // keys 1-3 pick a board too; the faint number in the corner says which
+        let key = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3].get(k).copied();
+        if key.is_some() {
+            text(&(k + 1).to_string(), r.x + 3.0, r.y + 11.0, 12.0, FAINT);
+        }
+        if (hot && clicked()) || (mine && !cur && !modal() && key.is_some_and(is_key_pressed)) {
             swap = Some(k);
         }
         tx += 42.0;

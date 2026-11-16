@@ -375,7 +375,11 @@ impl Battle {
     fn deal_board(&mut self, s: usize, k: usize) {
         // one fewer, the usual, or one more: boards differ in danger as well as shape
         let roll = self.rng.below(3) as i32 - 1;
-        let mines = (BASE_MINES + roll + self.f[1 - s].mods.foe_mines - self.f[s].mods.fewer_mines).clamp(2, 14);
+        let mut mines = (BASE_MINES + roll + self.f[1 - s].mods.foe_mines - self.f[s].mods.fewer_mines).clamp(2, 14);
+        // debug builds only: MINEBOUND_NO_MINES=1 gives the hero mine-free boards, so one flip claims a whole board
+        if cfg!(debug_assertions) && s == 0 && std::env::var_os("MINEBOUND_NO_MINES").is_some() {
+            mines = 0;
+        }
         let mut board = Board::deal(&mut self.rng, self.f[s].elements[k], mines as usize);
         board.flag_mines(self.f[s].mods.scouts.max(0) as usize);
         if k < self.f[s].boards.len() {
