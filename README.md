@@ -438,8 +438,8 @@ and that the heroes stay roughly balanced.
 Push a version tag. GitHub Actions builds `Minebound-setup.exe` and publishes it as a release:
 
 ```
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```
 
 The installer is defined in `installer/minebound.iss`. Never change its `AppId`: it is how a new
