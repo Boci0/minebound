@@ -59,6 +59,20 @@ pub struct Shop {
     pub restocks: i32,
 }
 
+/// Who carries day `day`'s daily descent, and where (one of the first three expeditions): (hero, expedition).
+pub fn daily(day: u64) -> (usize, usize) {
+    let heroes = HEROES.len() as u64;
+    ((day % heroes) as usize, (day / heroes % 3) as usize)
+}
+
+/// Day `day`'s daily descent goes by a name of its own, like "Sunken Lode".
+pub fn daily_name(day: u64) -> String {
+    const HOW: [&str; 12] = ["Ashen", "Sunken", "Hollow", "Silent", "Gilded", "Broken", "Pale", "Hungry", "Crooked", "Drowned", "Bitter", "Still"];
+    const WHAT: [&str; 10] = ["Vein", "Seam", "Lode", "Drift", "Pit", "Shaft", "Delve", "Warren", "Rift", "Hoard"];
+    // 12 and 10 share a factor, so the noun steps on a slower count to reach every pair
+    format!("{} {}", HOW[(day % 12) as usize], WHAT[(day / 12 % 10) as usize])
+}
+
 pub struct Run {
     pub seed: u64,
     rng: Rng,
@@ -89,6 +103,8 @@ pub struct Run {
     pub best: (i32, &'static str),
     /// a developer shortcut was used: the run is not saved
     pub debug: bool,
+    /// the day this daily descent belongs to (days since 1970, UTC); `None` for an ordinary run
+    pub daily: Option<u64>,
     /// pacts given up in the choice being applied, so the same trade cannot hand them back
     given: Vec<usize>,
 }
@@ -117,11 +133,21 @@ impl Run {
             dealt: 0,
             best: (0, ""),
             debug: false,
+            daily: None,
             given: vec![],
         };
         run.gen_map();
         run.note = format!("{}, floor 1.", EXPEDITIONS[exp].name);
         let stage = run.pick();
+        (run, stage)
+    }
+
+    /// Day `day`'s daily descent: the same run for everyone, every floor cursed.
+    pub fn new_daily(day: u64) -> (Run, Stage) {
+        let (hero, exp) = daily(day);
+        let (mut run, stage) = Run::new(day.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03, hero, exp);
+        run.daily = Some(day);
+        run.gen_map(); // again, now that every floor is cursed
         (run, stage)
     }
 
@@ -239,7 +265,7 @@ impl Run {
 
     fn gen_map(&mut self) {
         self.boss = self.rng.below(2);
-        self.twist = if EXPEDITIONS[self.exp].curses {
+        self.twist = if EXPEDITIONS[self.exp].curses || self.daily.is_some() {
             let curses: Vec<usize> = (0..TWISTS.len()).filter(|&i| TWISTS[i].tone < 0).collect();
             curses[self.rng.below(curses.len())]
         } else {
@@ -517,6 +543,20 @@ impl Run {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_daily_descent_is_the_same_all_day_and_cursed() {
+        let (a, b) = (Run::new_daily(20_000).0, Run::new_daily(20_000).0);
+        assert_eq!((a.seed, a.hero, a.exp, a.twist), (b.seed, b.hero, b.exp, b.twist));
+        assert_ne!(a.seed, Run::new_daily(20_001).0.seed);
+        assert!(TWISTS[a.twist].tone < 0 && a.exp < 3);
+        // over a few days every hero takes a turn
+        let heroes: std::collections::HashSet<usize> = (0..8).map(|d| daily(d).0).collect();
+        assert_eq!(heroes.len(), HEROES.len());
+        // names repeat only after every pairing has had its day
+        let names: std::collections::HashSet<String> = (0..120).map(daily_name).collect();
+        assert_eq!(names.len(), 120);
+    }
 
     #[test]
     fn giving_up_a_pact_takes_the_one_chosen() {

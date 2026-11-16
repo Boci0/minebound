@@ -1051,6 +1051,8 @@ fn charm_bar(charms: &[usize]) {
 pub enum Go {
     Play,
     Back,
+    /// today's daily descent
+    Daily,
 }
 
 /// A four-point star of radius `r`, turned by `spin` radians.
@@ -1138,6 +1140,8 @@ pub fn title() -> Option<Go> {
 
 /// Each descent's place on the map of The Below.
 const PLACES: [Vec2; 6] = [vec2(170.0, 560.0), vec2(330.0, 410.0), vec2(520.0, 520.0), vec2(610.0, 300.0), vec2(790.0, 430.0), vec2(820.0, 180.0)];
+/// The daily descent's medallion, on an island of its own in the north-west.
+const DAILY_AT: Vec2 = vec2(110.0, 190.0);
 /// The land is a grid of tiles: (left, top), tile pitch, columns, rows.
 const LAND: (f32, f32, f32, usize, usize) = (40.0, 110.0, 22.0, 39, 27);
 
@@ -1151,6 +1155,8 @@ fn noise(c: usize, r: usize) -> f32 {
 /// The land is a few soft blobs round the places, minus three chasms, its edge roughened per tile.
 fn land(unlocked: usize) -> Vec<Vec<u8>> {
     let mut blobs: Vec<(f32, f32, f32)> = PLACES.iter().map(|p| (p.x, p.y, 62.0)).collect();
+    // the daily descent's island, apart from the rest
+    blobs.push((DAILY_AT.x, DAILY_AT.y, 50.0));
     blobs.extend([(250.0, 500.0, 55.0), (430.0, 470.0, 58.0), (470.0, 330.0, 48.0), (700.0, 330.0, 52.0), (690.0, 520.0, 44.0), (690.0, 200.0, 46.0), (100.0, 470.0, 40.0), (880.0, 300.0, 40.0), (250.0, 300.0, 36.0), (560.0, 640.0, 34.0)]);
     let chasms = [(560.0, 400.0, 58.0), (230.0, 640.0, 40.0), (880.0, 560.0, 46.0)];
     let (x0, y0, cell, cols, rows) = LAND;
@@ -1163,7 +1169,7 @@ fn land(unlocked: usize) -> Vec<Vec<u8>> {
                     let field = pull(&blobs, p) - pull(&chasms, p) + (noise(c, r) - 0.5) * 0.5;
                     if field <= 0.9 {
                         0
-                    } else if PLACES[..unlocked].iter().any(|q| q.distance(p) < 105.0) {
+                    } else if PLACES[..unlocked].iter().any(|q| q.distance(p) < 105.0) || DAILY_AT.distance(p) < 40.0 {
                         2
                     } else {
                         1
@@ -1176,7 +1182,7 @@ fn land(unlocked: usize) -> Vec<Vec<u8>> {
 
 /// The world map, The Below: pick an open descent and a bearer, then descend.
 /// `pick` is (descent, hero) and lasts between visits.
-pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
+pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     let mut go = None;
     text("The Below", 48.0, 70.0, 44.0, INK);
     text(&format!("{} of {} descents open", save.unlocked, EXPEDITIONS.len()), 50.0, 96.0, 15.0, MUTED);
@@ -1239,7 +1245,7 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
         if hot {
             shown = i;
         }
-        let chosen = i == pick.0;
+        let chosen = i == pick.0 && !DAILY_ON.with(|d| d.get());
         let edge = if open { INK } else { MUTED };
         let r = if hot && open { 35.0 } else { 32.0 };
         draw_poly(p.x, p.y, 4, r, 0.0, if chosen { INK } else { BG });
@@ -1258,19 +1264,66 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
         if hot && open && clicked() {
             play(Sfx::Click);
             pick.0 = i;
+            DAILY_ON.with(|d| d.set(false));
         }
     }
 
+    // today's descent, on its own island: the same run for everyone, one try a day. Picked, it fills
+    // the card on the right like any descent.
+    thread_local!(static DAILY_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    let (dhero, dexp) = daily(today);
+    let done = (save.daily.0 == today).then_some(save.daily.1);
+    let daily_hot = {
+        let p = DAILY_AT;
+        let on = DAILY_ON.with(|d| d.get());
+        let hot = (mouse() - p).length() < 34.0 && !modal();
+        let r = if hot { 35.0 } else { 32.0 };
+        draw_circle(p.x, p.y, r, if on { GOLD } else if hot { CARD_HI } else { BG });
+        draw_circle_lines(p.x, p.y, r, 2.0, if done.is_some() { MUTED } else { GOLD });
+        sprite(HEROES[dhero].sprite, p.x - 20.0, p.y - 20.0, 40.0, if on { BLACK } else if done.is_some() { fade(WHITE, 0.4) } else { WHITE });
+        let result = match done {
+            None => "Daily".to_string(),
+            Some(b) if b >= CLEARED => "Daily · cleared".to_string(),
+            Some(b) => format!("Daily · floor {b}"),
+        };
+        let lw = measure(&result, 14.0).width;
+        block(Rect::new(p.x - lw / 2.0 - 6.0, p.y + 38.0, lw + 12.0, 20.0), BG);
+        centered(&result, p.x, p.y + 52.0, 14.0, if done.is_some() { MUTED } else { GOLD });
+        if hot && clicked() {
+            play(Sfx::Click);
+            DAILY_ON.with(|d| d.set(true));
+        }
+        hot
+    };
+    let daily_on = DAILY_ON.with(|d| d.get());
+    // the card shows what is pointed at, else what is picked
+    let show_daily = daily_hot || (daily_on && shown == pick.0);
+
     // the chosen (or pointed at) descent, and who carries it down
+    let shown = if show_daily { dexp } else { shown };
     let x = &EXPEDITIONS[shown];
-    let open = shown < save.unlocked;
+    let open = show_daily || shown < save.unlocked;
     draw_line(950.0, 48.0, 950.0, 672.0, 1.0, FAINT);
     let (lx, w) = (982.0, 256.0);
-    label(&format!("DESCENT {}", ["I", "II", "III", "IV", "V", "VI"][shown]), lx, 72.0);
-    text(if open { x.name } else { "Unknown" }, lx, 112.0, 36.0, if open { INK } else { MUTED });
-    let mut y = wrapped(x.text, lx, 140.0, w, 15.0, MUTED) + 14.0;
+    if show_daily {
+        lively("TODAY'S DESCENT", lx, 72.0, 15.0, GOLD, Motion::Wave);
+    } else {
+        label(&format!("DESCENT {}", ["I", "II", "III", "IV", "V", "VI"][shown]), lx, 72.0);
+    }
+    // the daily goes by its own name, shrunk to fit the column if it runs long
+    let title = if show_daily { daily_name(today) } else if open { x.name.to_string() } else { "Unknown".to_string() };
+    let size = 36.0f32.min(36.0 * w / measure(&title, 36.0).width);
+    text(&title, lx, 112.0, size, if open { INK } else { MUTED });
+    let blurb = if show_daily {
+        format!("Down through {}. The same run for everyone today, one try. Tomorrow brings another.", x.name.replace(' ', "\u{a0}"))
+    } else {
+        x.text.to_string()
+    };
+    let mut y = wrapped(&blurb, lx, 140.0, w, 15.0, MUTED) + 14.0;
     label("ITS LAW", lx, y);
-    for rule in x.rules {
+    let daily_law = ["Every floor is cursed."];
+    let rules = x.rules.iter().filter(|r| !(show_daily && r.starts_with("No extra")));
+    for rule in daily_law.iter().filter(|_| show_daily).chain(rules) {
         y = wrapped(rule, lx, y + 20.0, w, 15.0, INK) - 6.0;
     }
     y += 22.0;
@@ -1290,28 +1343,33 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
         y = wrapped(&names.join(" or "), lx, y + 20.0, w, 15.0, INK) - 6.0;
     }
 
-    // the bearer: one sigil per hero; the chosen one is outlined, with its numbers below
+    // the bearer: one sigil per hero; the chosen one is outlined, with its numbers below. The daily's
+    // bearer is set for the day.
     let by = 466.0;
-    label("BEARER", lx, by);
+    label(if show_daily { "BEARER · SET FOR TODAY" } else { "BEARER" }, lx, by);
+    let bearer = if show_daily { dhero } else { pick.1 };
     for (i, h) in HEROES.iter().enumerate() {
         let r = Rect::new(lx + i as f32 * 60.0, by + 12.0, 50.0, 50.0);
-        let on = i == pick.1;
-        let hot = r.contains(mouse()) && !modal();
+        let on = i == bearer;
+        let hot = r.contains(mouse()) && !modal() && !show_daily;
         if hot {
             block(r, CARD_HI);
         }
         outline(r, if on { INK } else { FAINT });
-        sprite(h.sprite, r.x + 5.0, r.y + 5.0, 40.0, if on || hot { WHITE } else { fade(WHITE, 0.45) });
+        let dim = if show_daily { 0.15 } else { 0.45 };
+        sprite(h.sprite, r.x + 5.0, r.y + 5.0, 40.0, if on || hot { WHITE } else { fade(WHITE, dim) });
         if hot && clicked() {
             play(Sfx::Click);
             pick.1 = i;
         }
     }
-    let h = &HEROES[pick.1];
+    let h = &HEROES[bearer];
     text(h.name, lx, by + 94.0, 24.0, INK);
-    let best = match save.best[pick.0][pick.1] {
+    let best = match if show_daily { done.unwrap_or(0) } else { save.best[pick.0][pick.1] } {
+        0 if show_daily => "not tried today".to_string(),
         0 => "new here".to_string(),
-        b if b >= CLEARED => "cleared".to_string(),
+        b if b >= CLEARED => if show_daily { "cleared today" } else { "cleared" }.to_string(),
+        b if show_daily => format!("today: floor {b}"),
         b => format!("best: floor {b}"),
     };
     text(&format!("{} HP · {} power · {best}", h.hp, h.power), lx, by + 114.0, 14.0, MUTED);
@@ -1319,9 +1377,11 @@ pub fn world(save: &Save, pick: &mut (usize, usize)) -> Option<Go> {
     for (k, &e) in h.elements.iter().enumerate() {
         gem(e, vec2(lx + 200.0 + k as f32 * 20.0, by + 87.0), 7.0);
     }
-    let descend = button(Rect::new(lx, 662.0, w, 46.0), "Descend", pick.0 < save.unlocked, true);
-    if descend || (is_key_pressed(KeyCode::Enter) && !modal()) {
-        go = Some(Go::Play);
+    // the button goes where the pick is: the daily once tried waits for tomorrow
+    let ok = if daily_on { done.is_none() } else { pick.0 < save.unlocked };
+    let descend = button(Rect::new(lx, 662.0, w, 46.0), if daily_on && !ok { "Tried today" } else { "Descend" }, ok, true);
+    if ok && (descend || (is_key_pressed(KeyCode::Enter) && !modal())) {
+        go = Some(if daily_on { Go::Daily } else { Go::Play });
     }
     go
 }
@@ -3024,7 +3084,8 @@ fn summary(run: &Run, b: Option<&Battle>, won: bool, opened: Option<usize>) -> b
     } else {
         lively_centered("Your run ends here.", 640.0, r.y + 142.0, 40.0, fade(BLOOD, p), Motion::Tremble);
     }
-    let sub = format!("{}  ·  {}  ·  floor {} of {}", HEROES[run.hero].name, EXPEDITIONS[run.exp].name, run.floor + 1, FLOORS);
+    let place = run.daily.map_or(EXPEDITIONS[run.exp].name.to_string(), |d| format!("{} (daily)", daily_name(d)));
+    let sub = format!("{}  ·  {place}  ·  floor {} of {}", HEROES[run.hero].name, run.floor + 1, FLOORS);
     centered(&sub, 640.0, r.y + 174.0, 18.0, fade(MUTED, p));
     draw_line(r.x + 50.0, r.y + 196.0, r.right() - 50.0, r.y + 196.0, 1.0, fade(FAINT, p));
     // the numbers, one line at a time; the damage counts up

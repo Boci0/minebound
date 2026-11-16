@@ -206,17 +206,28 @@ async fn main() {
         ui::begin_frame();
         music.tick(mood(&screen)).await;
         let mut quit_run = false;
+        // days since 1970 (UTC): the daily descent changes as this does
+        let today = (miniquad::date::now() / 86_400.0) as u64;
         let mut to = None;
         match &mut screen {
             Screen::Title => match ui::title() {
                 Some(Go::Play) => to = Some(Screen::World),
                 Some(Go::Back) => break,
-                None => {}
+                Some(Go::Daily) | None => {}
             },
-            Screen::World => match ui::world(&save, &mut pick) {
+            // debug builds only: Ctrl+R on the overworld gives back today's daily try, to test it again
+            Screen::World if cfg!(debug_assertions) && is_key_down(KeyCode::LeftControl) && is_key_pressed(KeyCode::R) => save.daily = (0, 0),
+            Screen::World => match ui::world(&save, &mut pick, today) {
                 Some(Go::Play) => {
                     let seed = fixed_seed.unwrap_or((miniquad::date::now() * 1000.0) as u64);
                     let (run, stage) = Run::new(seed, pick.1, pick.0);
+                    to = Some(Screen::Run(run, stage, None));
+                }
+                Some(Go::Daily) => {
+                    // the day's one try is spent as soon as it starts, so quitting mid-run cannot buy another
+                    let (run, stage) = Run::new_daily(today);
+                    save.daily = (today, 1);
+                    save.store();
                     to = Some(Screen::Run(run, stage, None));
                 }
                 Some(Go::Back) => to = Some(Screen::Title),
@@ -250,7 +261,7 @@ async fn main() {
                         // the very first fight waits under a sheet of rules until it is read
                         ui::hold_for_rules(!save.rules_seen);
                         let ending = b.over() && (!b.won() || run.last_fight());
-                        let opens = save.would_open(run.exp, b.won()).filter(|_| !run.debug);
+                        let opens = save.would_open(run.exp, b.won()).filter(|_| !run.debug && run.daily.is_none());
                         let done = ui::battle_screen(b, run, ending.then_some(opens), &mut ai_timer);
                         if !save.rules_seen && ui::rules() {
                             save.rules_seen = true;
@@ -300,15 +311,13 @@ async fn main() {
                 };
                 // you may walk away from an expedition anywhere but mid-fight; how far you got still counts
                 if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
-                    if !run.debug {
-                        save.record(run.exp, run.hero, run.floor + 1, false);
-                        save.store();
-                    }
+                    save.finish(run, false);
+                    save.store();
                     quit_run = true;
                 }
                 if let Some(n) = next {
-                    if let (Stage::End(won), false) = (&n, run.debug) {
-                        *opened = save.record(run.exp, run.hero, run.floor + 1, *won);
+                    if let Stage::End(won) = n {
+                        *opened = save.finish(run, won);
                         save.store();
                         if let Some(x) = *opened {
                             pick.0 = x;
