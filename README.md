@@ -166,7 +166,7 @@ damage, shield and healing are 50% stronger on top.
 | Conduction | Tide, Spark | +3 damage, then +2 surge |
 | Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, +2 foe mines (no damage) |
 | Thunderclap | Gale, Spark | Break 1 foe crystal, +2 damage |
-| Lodestone | Stone, Spark | Double your shield (adding at most 12), then +5 shield (no damage) |
+| Lodestone | Stone, Spark | Double your shield (adding at most 12, 24 at level 2, no cap at level 3; no damage) |
 | Upheaval | Ember, Gale, Stone | You lose 4 HP, +11 damage |
 | Tempest | Tide, Gale, Spark | +1 damage per reveal used this turn |
 | Geode Surge | Tide, Stone, Spark | +6 damage, and your shield becomes 150% damage, then it's gone |

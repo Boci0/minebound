@@ -195,6 +195,11 @@ impl Run {
         self.floor.checked_sub(FLOORS).map(|i| self.keys[i])
     }
 
+    /// The secret ending fight `b` finds: its floor's ending, if `b` was that ending's boss and fell.
+    pub fn ending_found(&self, b: &Battle) -> Option<usize> {
+        self.ending().filter(|_| b.won() && is_boss(&b.f[1].name))
+    }
+
     /// Columns before the boss: an ending's floor is shorter.
     pub fn cols(&self) -> usize {
         if self.ending().is_some() { 3 } else { COLS }
@@ -363,7 +368,9 @@ impl Run {
     fn enemy(&self, d: &EnemyDef, scale: bool, slow: i32) -> Fighter {
         // an ending's floor scales on from the last one: each ending past the first is deeper still
         let floor = self.floor as i32;
-        let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100, d.power + floor) } else { (d.hp * 220 / 100, d.power) };
+        // bosses grow only past the first ending's floor, so a later ending's boss keeps up with its floor
+        let deeper = self.floor.saturating_sub(FLOORS) as i32;
+        let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100, d.power + floor) } else { (d.hp * (220 + 40 * deeper) / 100, d.power + deeper) };
         let x = &EXPEDITIONS[self.exp];
         let hp = self.keys.iter().fold(hp * x.hp_pct / 100, |hp, &k| hp * ENDINGS[k].hp_pct / 100);
         let mut m = Mods::default();

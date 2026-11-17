@@ -129,6 +129,11 @@ pub const MAX_LEVEL: usize = 3;
 /// A rite at `MAX_LEVEL` is mastered: its damage, shield and healing are this much stronger.
 pub const MASTERED_PCT: i32 = 50;
 
+/// How much shield doubling may add at `lvl`: the cap, twice it at level 2, and no cap once mastered.
+pub fn double_cap(cap: i32, lvl: usize) -> Option<i32> {
+    (lvl < MAX_LEVEL).then_some(cap * lvl as i32)
+}
+
 /// `v`, made stronger if the rite is mastered.
 pub fn mastered(v: i32, lvl: usize) -> i32 {
     if lvl >= MAX_LEVEL { v * (100 + MASTERED_PCT) / 100 } else { v }
@@ -174,7 +179,10 @@ impl Effect {
             Burn(n) => format!("+{} burn on foe", at_level(n, lvl)),
             Shield(v) => format!("gain {} shield", at_level(v, lvl)),
             Heal(v) => format!("heal {}", at_level(v, lvl)),
-            Weaken(n) => format!("foe's attacks halved, {} turns", at_level(n, lvl)),
+            Weaken(n) => {
+                let k = at_level(n, lvl);
+                format!("halve foe's hits, {k} turn{}", if k == 1 { "" } else { "s" })
+            }
             Drain(n) => {
                 let k = at_level(n as i32, lvl);
                 format!("foe loses {k} stack{}", if k == 1 { "" } else { "s" })
@@ -196,7 +204,10 @@ impl Effect {
             }
             Surge(v) => format!("+{} surge", at_level(v, lvl)),
             PerReveal(v) => format!("+{} damage per reveal used", at_level(v, lvl)),
-            DoubleShield(cap) => format!("double your shield (up to +{})", at_level(cap, lvl)),
+            DoubleShield(cap) => match double_cap(cap, lvl) {
+                Some(c) => format!("double your shield (up to +{c})"),
+                None => "double your shield".into(),
+            },
             ShieldBlast(p) => match at_level(p, lvl) {
                 100 => "all your shield becomes damage".into(),
                 q => format!("your shield becomes {q}% damage"),
@@ -272,7 +283,7 @@ pub static COMBOS: &[Combo] = &[
     combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Damage(3), Surge(2)]),
     combo("Sandstorm", ["Dust Devil", "Desert Wrath"], &[Gale, Stone], &[Weaken(2), Bury(2)]),
     combo("Thunderclap", ["Thunderstrike", "Skybreaker"], &[Gale, Spark], &[Shatter(1), Damage(2)]),
-    combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[DoubleShield(12), Shield(5)]),
+    combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[DoubleShield(12)]),
     combo("Upheaval", ["Cataclysm", "Worldbreaker"], &[Ember, Gale, Stone], &[SelfDamage(4), Damage(11)]),
     combo("Tempest", ["Hurricane", "Eye of the Storm"], &[Tide, Gale, Spark], &[PerReveal(1)]),
     combo("Geode Surge", ["Crystal Tide", "Geode Titan"], &[Tide, Stone, Spark], &[Damage(6), ShieldBlast(150)]),

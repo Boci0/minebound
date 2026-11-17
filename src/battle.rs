@@ -748,8 +748,8 @@ impl Battle {
                 // in hit_damage, worked out before any effect lands
                 Effect::PerSurge(_) | Effect::Detonate | Effect::PerReveal(_) | Effect::PerBurn(_) | Effect::PerQuarterLost(_) => {}
                 Effect::Surge(v) => self.f[a].surge = (self.f[a].surge + up(v)).min(self.surge_cap(a)),
-                // capped, or casting it again and again would grow shield without end
-                Effect::DoubleShield(cap) => self.f[a].shield += self.f[a].shield.clamp(0, up(cap)),
+                // capped until mastered, or casting it again and again would grow shield without end
+                Effect::DoubleShield(cap) => self.f[a].shield += self.f[a].shield.clamp(0, double_cap(cap, lvl).unwrap_or(i32::MAX)),
                 Effect::ShieldBlast(_) => self.f[a].shield = 0,
                 Effect::SelfDamage(v) => self.f[a].hp = (self.f[a].hp - up(v)).max(1),
                 Effect::Reveal(n) => self.f[a].reveals_left += up(n),
@@ -1326,13 +1326,15 @@ mod tests {
         b.f[0].stacks = vec![Tide, Stone, Stone, Spark, Tide, Stone, Spark];
         assert!(b.cast(combo("Bulwark")));
         assert!(b.cast(combo("Lodestone")));
-        assert_eq!((b.f[0].shield, b.f[1].hp), (12 * 2 + 5, 100), "doubled, then 5 more, and no damage");
-        // Geode Surge: 3 gems x 3 power, +6, then the 29 shield thrown at 150% (43), and the steps add up
+        assert_eq!((b.f[0].shield, b.f[1].hp), (12 * 2, 100), "doubled, and no damage");
+        // doubling adds at most 12, then 24 at level 2, and anything once mastered
+        assert_eq!([1, 2, 3].map(|l| double_cap(12, l)), [Some(12), Some(24), None]);
+        // Geode Surge: 3 gems x 3 power, +6, then the 24 shield thrown at 150% (36), and the steps add up
         let (d, steps) = b.hit_steps(0, combo("Geode Surge"));
-        assert_eq!(d, 9 + 6 + 43);
+        assert_eq!(d, 9 + 6 + 36);
         assert_eq!(steps.iter().map(|s| s.1.trim_start_matches('+').parse::<i32>().unwrap()).sum::<i32>(), d);
         assert!(b.cast(combo("Geode Surge")));
-        assert_eq!((b.f[0].shield, b.f[1].hp), (0, 100 - 58));
+        assert_eq!((b.f[0].shield, b.f[1].hp), (0, 100 - 51));
         // Plated: each point of shield stops 2 damage
         b.f[0].shield = 5;
         assert_eq!((b.hurt(0, 7), b.f[0].shield), (0, 1));

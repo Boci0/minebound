@@ -215,8 +215,6 @@ async fn main() {
                 Some(Go::Back) => break,
                 Some(Go::Daily) | None => {}
             },
-            // debug builds only: Ctrl+R on the overworld gives back today's daily try, to test it again
-            Screen::World if cfg!(debug_assertions) && is_key_down(KeyCode::LeftControl) && is_key_pressed(KeyCode::R) => save.daily = (0, 0),
             Screen::World => match ui::world(&save, &mut pick, today) {
                 Some(Go::Play) => {
                     let seed = fixed_seed.unwrap_or((miniquad::date::now() * 1000.0) as u64);
@@ -228,10 +226,7 @@ async fn main() {
                     to = Some(Screen::Run(run, stage, None));
                 }
                 Some(Go::Daily) => {
-                    // the day's one try is spent as soon as it starts, so quitting mid-run cannot buy another
                     let (run, stage) = Run::new_daily(today);
-                    save.daily = (today, 1);
-                    save.store();
                     to = Some(Screen::Run(run, stage, None));
                 }
                 Some(Go::Back) => to = Some(Screen::Title),
@@ -318,7 +313,10 @@ async fn main() {
                 };
                 // you may walk away from an expedition anywhere but mid-fight; how far you got still counts
                 if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
-                    save.finish(run, false);
+                    // past the last boss a retreat still counts as a win: show what it opened
+                    if let Some(x) = save.finish(run, false) {
+                        pick.0 = x;
+                    }
                     save.store();
                     quit_run = true;
                 }

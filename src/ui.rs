@@ -131,8 +131,10 @@ struct Fx {
     boom: Option<f64>,
     /// a killing blow on its way: (game time it lands, side that falls)
     fell: Option<(f64, usize)>,
-    /// the enemy a wave change replaced, shown until the blow that felled it lands
+    /// the enemy a wave change replaced, shown until its replacement walks in
     fallen: Option<Fighter>,
+    /// when the replacement's name and bar take over from the fallen enemy's (game time)
+    takeover: Option<f64>,
     /// HP each bar shows, and the change it is waiting to show: (game time, HP)
     bar: [i32; 2],
     due: [Option<(f64, i32)>; 2],
@@ -611,6 +613,13 @@ fn wrapped(s: &str, x: f32, mut y: f32, w: f32, size: f32, c: Color) -> f32 {
 // Colour, used sparingly against the grey: rules keywords, and the few names that move.
 const BLOOD: Color = rgb(0xff5d5d);
 const GOLD: Color = rgb(0xf0c75e);
+/// a mastered rite's name: dark red, still readable on the near-black panels
+const MASTERED: Color = rgb(0xc0302f);
+
+/// The colour an upgraded rite's name takes: gold, then dark red once mastered.
+fn level_color(lvl: usize) -> Color {
+    if lvl >= MAX_LEVEL { MASTERED } else { GOLD }
+}
 
 /// The colour a rules word is printed in, if it has one (punctuation and case ignored), and how
 /// it moves: effects that linger (burn, weaken, detonate) and rarities are alive on the page.
@@ -1269,27 +1278,24 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
         }
     }
 
-    // today's descent, on its own island: the same run for everyone, one try a day. Picked, it fills
+    // today's descent, on its own island: the same run for everyone, as many tries as you like. Picked, it fills
     // the card on the right like any descent.
     thread_local!(static DAILY_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
     let (dhero, dexp) = daily(today);
-    let done = (save.daily.0 == today).then_some(save.daily.1);
+    let cleared = save.daily == (today, CLEARED);
     let daily_hot = {
         let p = DAILY_AT;
         let on = DAILY_ON.with(|d| d.get());
         let hot = (mouse() - p).length() < 34.0 && !modal();
         let r = if hot { 35.0 } else { 32.0 };
         draw_circle(p.x, p.y, r, if on { GOLD } else if hot { CARD_HI } else { BG });
-        draw_circle_lines(p.x, p.y, r, 2.0, if done.is_some() { MUTED } else { GOLD });
-        sprite(HEROES[dhero].sprite, p.x - 20.0, p.y - 20.0, 40.0, if on { BLACK } else if done.is_some() { fade(WHITE, 0.4) } else { WHITE });
-        let result = match done {
-            None => "Daily".to_string(),
-            Some(b) if b >= CLEARED => "Daily · cleared".to_string(),
-            Some(b) => format!("Daily · floor {b}"),
-        };
-        let lw = measure(&result, 14.0).width;
+        draw_circle_lines(p.x, p.y, r, 2.0, GOLD);
+        sprite(HEROES[dhero].sprite, p.x - 20.0, p.y - 20.0, 40.0, if on { BLACK } else { WHITE });
+        // how deep a try got says little; only whether today's run was beaten
+        let result = if cleared { "Daily · cleared" } else { "Daily" };
+        let lw = measure(result, 14.0).width;
         block(Rect::new(p.x - lw / 2.0 - 6.0, p.y + 38.0, lw + 12.0, 20.0), BG);
-        centered(&result, p.x, p.y + 52.0, 14.0, if done.is_some() { MUTED } else { GOLD });
+        centered(result, p.x, p.y + 52.0, 14.0, GOLD);
         if hot && clicked() {
             play(Sfx::Click);
             DAILY_ON.with(|d| d.set(true));
@@ -1316,7 +1322,7 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     let size = 36.0f32.min(36.0 * w / measure(&title, 36.0).width);
     text(&title, lx, 112.0, size, if open { INK } else { MUTED });
     let blurb = if show_daily {
-        format!("Down through {}. The same run for everyone today, one try. Tomorrow brings another.", x.name.replace(' ', "\u{a0}"))
+        format!("Down through {}. The same run for everyone today. Tomorrow brings another.", x.name.replace(' ', "\u{a0}"))
     } else {
         x.text.to_string()
     };
@@ -1366,11 +1372,10 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     }
     let h = &HEROES[bearer];
     text(h.name, lx, by + 94.0, 24.0, INK);
-    let best = match if show_daily { done.unwrap_or(0) } else { save.best[pick.0][pick.1] } {
-        0 if show_daily => "not tried today".to_string(),
+    let best = match save.best[pick.0][pick.1] {
+        _ if show_daily => if cleared { "cleared today" } else { "not cleared today" }.to_string(),
         0 => "new here".to_string(),
-        b if b >= CLEARED => if show_daily { "cleared today" } else { "cleared" }.to_string(),
-        b if show_daily => format!("today: floor {b}"),
+        b if b >= CLEARED => "cleared".to_string(),
         b => format!("best: floor {b}"),
     };
     text(&format!("{} HP · {} power · {best}", h.hp, h.power), lx, by + 114.0, 14.0, MUTED);
@@ -1378,9 +1383,9 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     for (k, &e) in h.elements.iter().enumerate() {
         gem(e, vec2(lx + 200.0 + k as f32 * 20.0, by + 87.0), 7.0);
     }
-    // the button goes where the pick is: the daily once tried waits for tomorrow
-    let ok = if daily_on { done.is_none() } else { pick.0 < save.unlocked };
-    let descend = button(Rect::new(lx, 662.0, w, 46.0), if daily_on && !ok { "Tried today" } else { "Descend" }, ok, true);
+    // the button goes where the pick is; the daily may be tried again and again
+    let ok = daily_on || pick.0 < save.unlocked;
+    let descend = button(Rect::new(lx, 662.0, w, 46.0), "Descend", ok, true);
     if ok && (descend || (is_key_pressed(KeyCode::Enter) && !modal())) {
         go = Some(if daily_on { Go::Daily } else { Go::Play });
     }
@@ -1889,6 +1894,13 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 shake[s] = (since * 75.0).sin() * 7.0 * (1.0 - since / 0.45);
             }
         }
+        // the new enemy steps in: its name and full bar replace the fallen one's
+        if fx.takeover.is_some_and(|t| now >= t) {
+            fx.takeover = None;
+            fx.fallen = None;
+            let hp = b.f[1].hp.max(0);
+            (fx.bar[1], fx.ghost[1], fx.due[1]) = (hp, hp as f32, None);
+        }
         // the killing blow lands
         if let Some((_, s)) = fx.fell.filter(|f| now >= f.0) {
             fx.fell = None;
@@ -1910,17 +1922,17 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             burst(STAND[1], 140, 600.0, 14.0, INK);
             burst(STAND[1], 90, 440.0, 11.0, BAD);
             rise(STAND[1], 50, 50.0, GOLD_C);
-            let sprite = fx(|fx| fx.fallen.take().map_or(b.f[1].sprite, |f| f.sprite));
+            let sprite = fx(|fx| fx.fallen.as_ref().map_or(b.f[1].sprite, |f| f.sprite));
             fx(|fx| fx.vanish = Some((sprite, now)));
             if over {
                 play(Sfx::Win);
                 fx(|fx| fx.ended_at = get_time());
             } else {
-                // the new enemy's bar takes over; it is announced once the dust settles, then walks in
+                // the fallen enemy's name and emptied bar (draining in slow motion) hold until the new
+                // enemy is announced once the dust settles; it takes over as it walks in
                 let wave = ["WAVE 2", "WAVE 3", "WAVE 4"][b.wave.saturating_sub(2).min(2)];
                 fx(|fx| {
-                    let hp = b.f[1].hp.max(0);
-                    (fx.bar[1], fx.ghost[1], fx.due[1]) = (hp, hp as f32, None);
+                    fx.takeover = Some(now + 0.45);
                     fx.intro = Some(now);
                     fx.banner.push((wave, BAD, 1, now + 0.45, 1));
                     fx.busy = fx.busy.max(now + WAVE_IN);
@@ -1962,7 +1974,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         right(&format!("{} / {}", bar[1], foe.max_hp), ex + FOE.w, 236.0, 16.0, INK);
         life(Rect::new(ex, 244.0, FOE.w, 8.0), bar[1] as f32 / foe.max_hp as f32, ghost[1] / foe.max_hp as f32);
         rich(&conditions(foe), ex, 276.0, 15.0, INK);
-        let (what, signs, dmg) = match b.best_combo(1, &foe.stacks) {
+        // a felled enemy throws nothing more
+        let (what, signs, dmg) = match b.best_combo(1, &foe.stacks).filter(|_| bar[1] > 0) {
             Some(c) => (c.name, foe.cost(c), b.hit_damage(1, c)),
             None => ("nothing yet", vec![], 0),
         };
@@ -2336,7 +2349,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         }
         let bright = lit || !slotted.is_empty();
         if lvl > 1 {
-            lively(c.title(lvl), rx, y + 30.0, 24.0, fade(GOLD, if bright { 1.0 } else { 0.55 }), Motion::Wave);
+            lively(c.title(lvl), rx, y + 30.0, 24.0, fade(level_color(lvl), if bright { 1.0 } else { 0.55 }), Motion::Wave);
         } else {
             text(c.title(lvl), rx, y + 30.0, 24.0, if bright { INK } else { MUTED });
         }
@@ -2369,13 +2382,15 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 }
             }
         }
-        // a brand can make the line long: shrink it rather than run into the next panel
+        // a brand can make the line long: shrink it to fit beside the damage number, not under it
+        let hit = (lit && b.hits(0, c)).then(|| b.hit_steps(0, c));
+        let num = hit.as_ref().map(|(d, _)| format!("{d} dmg"));
+        let room = 350.0 - num.as_ref().map_or(0.0, |n| measure(n, 15.0).width + 12.0);
         let line = me.describe(c);
-        rich(&line, rx, y + rh - 12.0, if measure(&line, 14.0).width > 300.0 { 12.0 } else { 14.0 }, MUTED);
-        if lit && b.hits(0, c) {
+        rich(&line, rx, y + rh - 12.0, 14.0 * (room / measure(&line, 14.0).width).min(1.0), MUTED);
+        if let (Some((d, steps)), Some(num)) = (hit, num) {
             // hover the number to see how it adds up
-            let (d, steps) = b.hit_steps(0, c);
-            let (num, nx, ny) = (format!("{d} dmg"), rx + 350.0, y + rh - 12.0);
+            let (nx, ny) = (rx + 350.0, y + rh - 12.0);
             let w = measure(&num, 15.0).width;
             right(&num, nx, ny, 15.0, INK);
             draw_line(nx - w, ny + 4.0, nx, ny + 4.0, 1.0, FAINT);
@@ -2570,7 +2585,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         }
         let k = bounce(now - shown);
         // an ending's boss fell: the card says which ending was found
-        let found = run.ending().filter(|_| b.won() && is_boss(&b.f[1].name));
+        let found = run.ending_found(b);
         let extra = if found.is_some() { 76.0 } else { 0.0 };
         let r = scaled(Rect::new(440.0, 270.0 - extra / 2.0, 400.0, 180.0 + extra), k);
         plate(r, BG);
@@ -2677,12 +2692,12 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
             gem(e, vec2(x + 9.0 + j as f32 * 20.0, y + 9.0), 8.0);
         }
         if lvl > 1 {
-            lively(c.title(lvl), x + 9.0 + cost.len() as f32 * 20.0, y + 15.0, 16.0, GOLD, Motion::Wave);
+            lively(c.title(lvl), x + 9.0 + cost.len() as f32 * 20.0, y + 15.0, 16.0, level_color(lvl), Motion::Wave);
         } else {
             text(c.title(lvl), x + 9.0 + cost.len() as f32 * 20.0, y + 15.0, 16.0, INK);
         }
         if lvl > 1 {
-            right(&format!("Lv {lvl}"), side.right() - 22.0, y + 15.0, 15.0, GOLD_C);
+            right(&format!("Lv {lvl}"), side.right() - 22.0, y + 15.0, 15.0, if lvl >= MAX_LEVEL { MASTERED } else { GOLD_C });
         }
         y += 22.0;
     }
@@ -2817,7 +2832,7 @@ pub fn upgrade(run: &Run, ids: &[usize]) -> Option<usize> {
         let x = r.x + 20.0;
         text(&format!("LV {lvl}  >  LV {}", lvl + 1), x, r.y + 30.0, 16.0, ACCENT);
         text(c.title(lvl), x, r.y + 60.0, 18.0, MUTED);
-        text(c.title(lvl + 1), x, r.y + 98.0, 26.0, GOLD_C);
+        text(c.title(lvl + 1), x, r.y + 98.0, 26.0, if lvl + 1 >= MAX_LEVEL { MASTERED } else { GOLD_C });
         for (row, (label, l)) in [("NOW", lvl), ("UPGRADED", lvl + 1)].into_iter().enumerate() {
             let y = r.y + 136.0 + row as f32 * 62.0;
             text(label, x, y, 14.0, if row == 0 { MUTED } else { ACCENT });
@@ -3106,10 +3121,14 @@ fn summary(run: &Run, b: Option<&Battle>, won: bool, opened: Option<usize>) -> b
     let appear = |at: f32| ((t - at) / 0.25).clamp(0.0, 1.0);
     let r = scaled(Rect::new(330.0, 66.0, 620.0, 590.0), bounce(t0));
     plate(r, BG);
-    sprite(HEROES[run.hero].sprite, 604.0, r.y + 22.0, 72.0, if won { WHITE } else { fade(MUTED, 0.5) });
+    // past the last floor's boss the run counts as won, even if an ending's floor ends it
+    let past = run.floor >= FLOORS;
+    sprite(HEROES[run.hero].sprite, 604.0, r.y + 22.0, 72.0, if won || past { WHITE } else { fade(MUTED, 0.5) });
     let p = appear(0.15);
     if won {
         lively_centered("The last board is clear.", 640.0, r.y + 142.0, 40.0, fade(INK, p), Motion::Rainbow);
+    } else if past {
+        lively_centered("The depths turn you back.", 640.0, r.y + 142.0, 40.0, fade(INK, p), Motion::Wave);
     } else {
         lively_centered("Your run ends here.", 640.0, r.y + 142.0, 40.0, fade(BLOOD, p), Motion::Tremble);
     }
@@ -3149,7 +3168,7 @@ fn summary(run: &Run, b: Option<&Battle>, won: bool, opened: Option<usize>) -> b
     let mut last = pacts_at + 0.15 + n as f32 * 0.07;
     // secret endings whose boss fell, counting a last fight just won
     let mut found = run.found.clone();
-    if let (Some(e), true) = (run.ending(), b.is_some_and(|b| b.won())) {
+    if let Some(e) = b.and_then(|b| run.ending_found(b)) {
         if !found.contains(&e) {
             found.push(e);
         }

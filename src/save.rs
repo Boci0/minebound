@@ -14,7 +14,7 @@ pub struct Save {
     pub volume: (i32, i32),
     /// the rules sheet has been read once, over the first battle
     pub rules_seen: bool,
-    /// the last daily descent tried: (day, result like `best`); one try a day
+    /// the last day a daily descent was tried, and its best result that day (like `best`)
     pub daily: (u64, usize),
     /// secret endings found, one bit per index in `ENDINGS`
     pub endings: u32,
@@ -108,7 +108,10 @@ impl Save {
         match (run.debug, run.daily) {
             (true, _) => None,
             (_, Some(day)) => {
-                self.daily = (day, if won { CLEARED } else { reached });
+                let result = if won { CLEARED } else { reached };
+                // tries on the same day keep the best of them
+                let best = if self.daily.0 == day { self.daily.1.max(result) } else { result };
+                self.daily = (day, best);
                 None
             }
             _ => self.record(run.exp, run.hero, reached, won),
@@ -139,6 +142,15 @@ mod tests {
         run.floor = 1;
         assert_eq!(s.finish(&run, false), None);
         assert_eq!((s.daily, s.unlocked), ((20_000, 2), 2));
+        // another try the same day keeps the better result; a new day starts over
+        run.floor = 0;
+        s.finish(&run, false);
+        assert_eq!(s.daily, (20_000, 2));
+        let (mut next, _) = Run::new_daily(20_001);
+        next.floor = 0;
+        s.finish(&next, false);
+        assert_eq!(s.daily, (20_001, 1));
+        s.daily = (20_000, 2);
         assert_eq!(Save::parse(&s.text()), s);
         assert_eq!(s.best[0], vec![CLEARED, 2, CLEARED, 0]);
         // an ending's boss counts as found even when a later floor ends the run, and the run as won
