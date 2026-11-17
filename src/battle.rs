@@ -163,7 +163,8 @@ pub enum Event {
     Claim { side: usize, element: Element, tiles: Vec<usize> },
     Mine,
     /// `skill`: (index in `COMBOS`, level)
-    Cast { from: usize, name: &'static str, element: Element, miss: bool, skill: (usize, usize) },
+    /// `master`: a mastered rite whose mastery takes effect (Worldbreaker's only on a foe at half HP)
+    Cast { from: usize, name: &'static str, element: Element, miss: bool, skill: (usize, usize), master: bool },
     /// a passive of `side` just took effect; `hook` names the `Mods` field
     Proc { side: usize, hook: &'static str },
 }
@@ -435,6 +436,11 @@ impl Battle {
             self.deal(s);
             self.f[s].shield += self.f[s].mods.start_shield;
             self.f[s].duds = self.f[s].mods.duds;
+            // debug builds only: MINEBOUND_GEMS=N starts the hero's every wave with N gems of each element
+            if let Some(n) = std::env::var("MINEBOUND_GEMS").ok().filter(|_| cfg!(debug_assertions) && s == 0).and_then(|v| v.parse().ok()) {
+                let els = self.f[0].elements.clone();
+                self.f[0].stacks.extend(els.iter().flat_map(|&e| std::iter::repeat(e).take(n)));
+            }
             (self.f[s].hold, self.f[s].blind, self.f[s].simmer) = (false, 0, false);
             self.f[s].burn += self.f[s].mods.self_burn.max(0);
             let m = self.f[s].mods.clone();
@@ -734,7 +740,7 @@ impl Battle {
             // the whole skill whiffs: no damage, no effects, stacks still spent
             self.f[t].evades_left -= 1;
             self.proc(t, "evade");
-            self.events.push(Event::Cast { from: a, name, element, miss: true, skill });
+            self.events.push(Event::Cast { from: a, name, element, miss: true, skill, master: false });
             self.log.push(format!("{}: {name} misses", self.f[a].name));
             self.tidy(a);
             return;
@@ -760,6 +766,7 @@ impl Battle {
         let armored = hits && self.f[t].mods.armor > 0;
         self.procs(t, &[("armor", armored)]);
         let pct = 100 + self.f[a].mods.combo_pct;
+        let master = lvl >= MAX_LEVEL && !(self.f[a].has(c, Effect::Execute) && self.f[t].hp * 2 > self.f[t].max_hp);
         let (shield, mut leech) = (self.f[a].shield, self.f[a].mods.lifesteal_pct);
         for (e, lvl) in effects {
             let up = |v: i32| at_level(v, lvl);
@@ -795,8 +802,12 @@ impl Battle {
                 Effect::Hold => self.f[a].hold = true,
                 Effect::Steal(n) => {
                     let keep = self.f[t].stacks.len().saturating_sub(n);
-                    let taken = self.f[t].stacks.split_off(keep);
-                    self.f[a].stacks.extend(taken);
+                    // they arrive as the caster's own elements, or a hero would hold gems it can't spend
+                    for _ in self.f[t].stacks.split_off(keep) {
+                        let k = self.rng.below(self.f[a].elements.len());
+                        let e = self.f[a].elements[k];
+                        self.f[a].stacks.push(e);
+                    }
                 }
                 Effect::Blind(n) => self.f[t].blind += n,
                 Effect::Stoke(n) => self.f[a].power += n,
@@ -820,7 +831,7 @@ impl Battle {
             self.hurt(a, thorns);
             self.proc(t, "thorns");
         }
-        self.events.push(Event::Cast { from: a, name, element, miss: false, skill });
+        self.events.push(Event::Cast { from: a, name, element, miss: false, skill, master });
         let line = if hits { format!("{}: {name} for {dmg}", self.f[a].name) } else { format!("{}: {name}", self.f[a].name) };
         self.log.push(line);
         if !self.settle() {
@@ -1332,6 +1343,16 @@ mod tests {
         assert!(b.cast(bulwark));
         assert_eq!(b.f[0].shield, 24);
         assert!(b.f[0].hold, "Citadel's shield skips wearing off once");
+        b.end_turn();
+        b.end_turn();
+        assert_eq!(b.f[0].shield, 24, "the foe did nothing, and the shield did not wear off");
+        b.f[1].stacks = vec![Tide, Spark, Tide];
+        let siphon = combo("Conduction");
+        b.f[0].ups = vec![combo_id(siphon); 2];
+        b.f[0].stacks = siphon.cost(3);
+        assert!(b.cast(siphon));
+        assert_eq!(b.f[1].stacks.len(), 1, "Siphon Storm takes 2 foe stacks");
+        assert!(b.f[0].stacks.len() == 2 && b.f[0].stacks.iter().all(|e| b.f[0].elements.contains(e)), "as the caster's own elements");
         let mut b = duel();
         let boil = combo("Boilover");
         b.f[0].ups = vec![combo_id(boil); 2];

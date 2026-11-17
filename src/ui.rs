@@ -79,6 +79,8 @@ struct Shot {
     hits: bool,
     /// dodged: it flies past and fizzles, with no impact, shake or effects
     miss: bool,
+    /// mastered, and its mastery takes effect: it gets its own sign and shout
+    master: bool,
 }
 
 /// Shot timing, in units of `SHOT_TIME`: upgraded skills charge up first, then fire one bolt per level.
@@ -1529,7 +1531,7 @@ fn draw_shots(shots: &[Shot], now: f64) {
         }
         // level 3: the mastery's own sign, brightest as the first bolt hits
         let first_hit = lead + 1.0;
-        if lvl >= MAX_LEVEL && !sh.miss && p < first_hit + 1.4 {
+        if sh.master && p < first_hit + 1.4 {
             let alpha = if p < first_hit { p / first_hit } else { 1.0 - (p - first_hit) / 1.4 };
             mastery_fx(c.master, a, z, alpha, now as f32);
         }
@@ -1709,19 +1711,22 @@ fn mastery_fx(m: Option<Effect>, a: Vec2, z: Vec2, t: f32, now: f32) {
         Some(Effect::Scout(_)) => {
             for i in 0..5 {
                 let x = BOARD.x + ((now * 60.0 + i as f32 * 90.0) % 420.0) - 20.0;
-                draw_circle(x, BOARD.y + 50.0 + i as f32 * 60.0, 70.0, fade(INK, 0.06 * t));
+                draw_circle(x, BOARD.y + 50.0 + i as f32 * 60.0, 70.0, fade(INK, 0.14 * t));
             }
             if chance(0.5) {
                 rise(BOARD + vec2(gen_range(0.0, 380.0), gen_range(0.0, 380.0)), 1, 4.0, fade(k("reveal"), 0.8));
             }
         }
-        // a wall rises in front of the caster and stays standing
+        // a battlemented wall rises in front of the caster and stays standing
         Some(Effect::Hold) => {
+            let (x, w, h) = (a.x + 64.0, 44.0, 120.0 * t);
+            let top = ground(a).y - h;
+            draw_rectangle(x, top, w, h, fade(k("shield"), 0.45 * t));
+            draw_rectangle_lines(x, top, w, h, 2.0, fade(INK, t));
             for i in 0..3 {
-                let h = 110.0 * t.min(1.0) * (1.0 - i as f32 * 0.2);
-                let x = a.x + 70.0 + i as f32 * 20.0;
-                draw_rectangle(x, ground(a).y - h, 16.0, h, fade(k("shield"), 0.5 * t));
-                draw_rectangle_lines(x, ground(a).y - h, 16.0, h, 2.0, fade(INK, t));
+                let mx = x + i as f32 * (w - 10.0) / 2.0;
+                draw_rectangle(mx, top - 10.0, 10.0, 10.0, fade(k("shield"), 0.45 * t));
+                draw_rectangle_lines(mx, top - 10.0, 10.0, 10.0, 2.0, fade(INK, t));
             }
         }
         // the foe's gems are pulled across to the caster
@@ -1733,10 +1738,10 @@ fn mastery_fx(m: Option<Effect>, a: Vec2, z: Vec2, t: f32, now: f32) {
         }
         // sand whirls round the foe's eyes
         Some(Effect::Blind(_)) => {
-            for i in 0..24 {
-                let ang = now * 3.0 + i as f32 * TAU / 24.0;
-                let p = z + vec2(ang.cos() * 80.0, ang.sin() * 30.0 - 10.0 + (i % 3) as f32 * 14.0);
-                draw_rectangle(p.x, p.y, 4.0, 4.0, fade(k("weaken"), t));
+            for i in 0..40 {
+                let ang = now * 3.0 + i as f32 * TAU / 40.0;
+                let p = z + vec2(ang.cos() * (70.0 + (i % 4) as f32 * 12.0), ang.sin() * 30.0 - 20.0 + (i % 3) as f32 * 16.0);
+                draw_rectangle(p.x, p.y, 7.0, 7.0, fade(k("weaken"), t));
             }
         }
         // the sky cracks down onto the foe's crystals
@@ -1812,6 +1817,14 @@ fn mastery_fx(m: Option<Effect>, a: Vec2, z: Vec2, t: f32, now: f32) {
             }
         }
     }
+}
+
+/// True if a mastery acts on the foe, false if on the caster: its shout goes beside that one.
+fn mastery_on_foe(m: Option<Effect>) -> bool {
+    matches!(
+        m,
+        Some(Effect::Lifesteal(_) | Effect::Sure | Effect::Steal(_) | Effect::Blind(_) | Effect::PerShatter(_) | Effect::Execute | Effect::Unused | Effect::DrainAll | Effect::Simmer)
+    )
 }
 
 /// The short shout a mastered rite gives as it lands.
@@ -1913,23 +1926,24 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                     fx.busy = fx.busy.max(now + BOOM + 0.6);
                 });
             }
-            Event::Cast { from, name, element, miss, skill } => {
+            Event::Cast { from, name, element, miss, skill, master } => {
                 // in turn: the rite's card sweeps in and holds, the caster winds up, the bolt flies
                 let start = queued(now);
                 let lvl = skill.1;
                 fx(|fx| {
                     let t0 = start + card_lead(lvl) as f64;
-                    let shot = Shot { from, t0, skill, brand: b.f[from].brand(&COMBOS[skill.0]).map(|x| x.effect), hits: b.hits(from, &COMBOS[skill.0]), miss };
+                    let shot = Shot { from, t0, skill, brand: b.f[from].brand(&COMBOS[skill.0]).map(|x| x.effect), hits: b.hits(from, &COMBOS[skill.0]), miss, master };
                     fx.shots.push(shot);
                     fx.banner.push((name, el_color(element), from, start, lvl));
                     if miss {
                         fx.floats.push((STAND[1 - from] - vec2(0.0, 30.0), "MISS".into(), MUTED, lands_at(&shot), 40.0));
-                    } else if lvl >= MAX_LEVEL {
+                    } else if master {
                         let first = t0 + ((charge(lvl) + 1.0) * SHOT_TIME) as f64;
-                        // beside whoever it acts on, clear of their name
-                        let side = if shot.hits { 1 - from } else { from };
-                        let at = STAND[side] + if side == 1 { vec2(230.0, 40.0) } else { vec2(170.0, -70.0) };
-                        fx.floats.push((at, mastery_word(COMBOS[skill.0].master).into(), MASTERED, first, 30.0));
+                        // beside whoever it acts on, clear of their name and of the damage number
+                        let m = COMBOS[skill.0].master;
+                        let side = if mastery_on_foe(m) { 1 - from } else { from };
+                        let at = STAND[side] + if side == 1 { vec2(280.0, 70.0) } else { vec2(170.0, -70.0) };
+                        fx.floats.push((at, mastery_word(m).into(), MASTERED, first, 30.0));
                     }
                     fx.busy = lands_at(&shot) + SETTLE;
                     // its voice when it is thrown: by first element, and a charge-up once upgraded
@@ -2761,7 +2775,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             let d = FONT.with(|ft| measure_text(label, ft.borrow()[f.0].as_ref(), f.1, f.2));
             // a big number by a fighter near the edge would spill off the canvas: keep it inside
             let x = (at.x - d.width / 2.0).clamp(8.0, VIEW.x - 8.0 - d.width);
-            let y = (at.y - p * 40.0).max(d.offset_y + 8.0);
+            let y = (at.y - p * 40.0).max(d.offset_y + 30.0);
             text_in(f, label, x, y, fade(*c, 1.6 - p * 1.6));
         }
     });
