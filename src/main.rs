@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod battle;
+mod ctl;
 mod board;
 mod data;
 mod rng;
@@ -12,6 +13,8 @@ mod ui;
 
 use macroquad::audio::{load_sound, load_sound_from_bytes, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
+// named imports win over the prelude's glob: debug builds can be driven from a file
+use ctl::{is_key_down, is_key_pressed, is_mouse_button_pressed};
 use run::{Run, Stage, FLOORS};
 use save::Save;
 use ui::Go;
@@ -203,6 +206,7 @@ async fn main() {
     let mut ai_timer = 0.0;
     loop {
         clear_background(ui::BG);
+        ctl::begin_frame();
         ui::begin_frame();
         music.tick(mood(&screen)).await;
         let mut quit_run = false;
@@ -222,6 +226,11 @@ async fn main() {
                     // debug builds only: MINEBOUND_ENDINGS=1 starts every run as Ctrl+E does, for when keys can't be sent
                     if cfg!(debug_assertions) && std::env::var_os("MINEBOUND_ENDINGS").is_some() {
                         stage = run.debug_endings();
+                    }
+                    // debug builds only: MINEBOUND_MASTERED=1 starts with every rite at level 3, to see the masteries
+                    if cfg!(debug_assertions) && std::env::var_os("MINEBOUND_MASTERED").is_some() {
+                        run.ups = run.rites().into_iter().flat_map(|id| [id, id]).collect();
+                        run.debug = true;
                     }
                     to = Some(Screen::Run(run, stage, None));
                 }
@@ -348,6 +357,7 @@ async fn main() {
             save.store();
         }
         ui::end_frame();
+        ctl::end_frame();
         next_frame().await;
     }
 }

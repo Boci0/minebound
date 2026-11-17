@@ -152,28 +152,28 @@ game reminds you to right click first.
 
 Each hero can cast four rites: the three made from two of their elements, and the one made from all
 three. Beating a boss lets you **upgrade** a rite, up to level 3. Each level renames the rite, raises
-its numbers by about half, and adds one more gem to its cost. A level 3 rite is **mastered**: its
-damage, shield and healing are 50% stronger on top.
+its numbers by about half, and adds one more gem to its cost. A level 3 rite is **mastered**: it
+gains a trick of its own (last column), with its own look when cast.
 
-| Rite | Gems | Effect at level 1 |
-| --- | --- | --- |
-| Steam Burst | Ember, Tide | +4 damage, +1 reveal |
-| Raze | Ember, Gale | +2 damage, +2 damage per quarter of your HP lost |
-| Magma | Ember, Stone | Shatter foe's shield, +3 damage |
-| Plasma | Ember, Spark | +3 damage, +1 damage per surge |
-| Mistveil | Tide, Gale | Heal 8, +2 reveals (no damage) |
-| Bulwark | Tide, Stone | Gain 12 shield (no damage) |
-| Conduction | Tide, Spark | +3 damage, then +2 surge |
-| Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, +2 foe mines (no damage) |
-| Thunderclap | Gale, Spark | Break 1 foe crystal, +2 damage |
-| Lodestone | Stone, Spark | Double your shield (adding at most 12, 24 at level 2, no cap at level 3; no damage) |
-| Upheaval | Ember, Gale, Stone | You lose 4 HP, +11 damage |
-| Tempest | Tide, Gale, Spark | +1 damage per reveal used this turn |
-| Geode Surge | Tide, Stone, Spark | +6 damage, and your shield becomes 150% damage, then it's gone |
-| Forgefire | Ember, Stone, Spark | +8 damage |
-| Maelstrom | Tide, Gale, Stone | Gain 6 shield, heal 4 |
-| Short Circuit | Ember, Gale, Spark | +6 damage, foe loses 1 stack |
-| Boilover | Ember, Tide, Spark | Burn 3 on foe, +1 damage per burn on the foe |
+| Rite | Gems | Effect at level 1 | Mastered (level 3) |
+| --- | --- | --- | --- |
+| Steam Burst | Ember, Tide | +4 damage, +1 reveal | Your next 3 mines are duds |
+| Raze | Ember, Gale | +2 damage, +2 damage per quarter of your HP lost | Heal 50% of its damage |
+| Magma | Ember, Stone | Shatter foe's shield, +3 damage | Can't miss, ignores armour |
+| Plasma | Ember, Spark | +3 damage, +1 damage per surge | Spends no surge |
+| Mistveil | Tide, Gale | Heal 8, +2 reveals (no damage) | Flag 3 mines on each of your boards |
+| Bulwark | Tide, Stone | Gain 12 shield (no damage) | Your shield won't wear off next turn |
+| Conduction | Tide, Spark | +3 damage, then +2 surge | Steal 2 foe stacks |
+| Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, +2 foe mines (no damage) | Foe gets 2 fewer reveals next turn |
+| Thunderclap | Gale, Spark | Break 1 foe crystal, +2 damage | +8 damage per crystal broken |
+| Lodestone | Stone, Spark | Double your shield (adding at most 12, 24 at level 2; no damage) | No limit on the doubling |
+| Upheaval | Ember, Gale, Stone | You lose 4 HP, +11 damage | Double damage if the foe is at half HP or below |
+| Tempest | Tide, Gale, Spark | +1 damage per reveal used this turn | Unused reveals count too |
+| Geode Surge | Tide, Stone, Spark | +6 damage, and your shield becomes 150% damage, then it's gone | Keep half your shield |
+| Forgefire | Ember, Stone, Spark | +8 damage | +2 power for the rest of the battle |
+| Maelstrom | Tide, Gale, Stone | Gain 6 shield, heal 4 | Clear your burn and weaken |
+| Short Circuit | Ember, Gale, Spark | +6 damage, foe loses 1 stack | Foe loses all its stacks |
+| Boilover | Ember, Tide, Spark | Burn 3 on foe, +1 damage per burn on the foe | The foe's burn stops fading |
 
 **Burn** stacks. At the start of its turn, the burning side loses 1 HP per burn, straight through
 shield, and then the burn halves. **Detonate** (the Fuse brand) sets off all the burn at once.

@@ -54,6 +54,12 @@ pub struct Fighter {
     pub duds: i32,
     /// mines it will still sense (and flag) this turn
     pub sense_left: i32,
+    /// its shield skips wearing off at its next turn (Citadel)
+    pub hold: bool,
+    /// reveals it loses at its next turn (Desert Wrath)
+    pub blind: i32,
+    /// its burn no longer halves (Hellbroth)
+    pub simmer: bool,
     /// AI only: it has decided to empty its stacks this turn
     firing: bool,
     pub mods: Mods,
@@ -88,11 +94,17 @@ impl Fighter {
     /// with it, a brand's stay at 1.
     pub fn effects<'a>(&'a self, c: &'a Combo) -> impl Iterator<Item = (Effect, usize)> + 'a {
         let lvl = self.level(c);
-        c.effects.iter().map(move |&e| (e, lvl)).chain(self.brand(c).map(|b| (b.effect, 1)))
+        let master = c.master.filter(|_| lvl >= MAX_LEVEL);
+        c.effects.iter().copied().chain(master).map(move |e| (e, lvl)).chain(self.brand(c).map(|b| (b.effect, 1)))
     }
 
     pub fn describe(&self, c: &Combo) -> String {
         rite_text(c, self.level(c), self.brand(c))
+    }
+
+    /// True if `c` carries effect `e` for this fighter (a mastery, say).
+    pub fn has(&self, c: &Combo, e: Effect) -> bool {
+        self.effects(c).any(|(x, _)| x == e)
     }
 
     /// The gems `c` would take out of `stacks`: its cost, plus the toll paid in whatever element is most
@@ -251,7 +263,7 @@ impl Battle {
     pub fn hit_steps(&self, s: usize, c: &Combo) -> (i32, Vec<(String, String)>) {
         let mut steps = vec![];
         let full = self.dmg_steps(s, c, self.f[s].cast_n, self.f[s].surge, self.f[s].shield, &mut steps);
-        let d = match (self.f[1 - s].evades_left > 0 && self.hits(s, c), self.f[1 - s].mods.graze > 0) {
+        let d = match (self.f[1 - s].evades_left > 0 && self.hits(s, c) && !self.f[s].has(c, Effect::Sure), self.f[1 - s].mods.graze > 0) {
             (true, true) => full / 2, // it will graze
             (true, false) => 0,       // it will miss
             _ => full,
@@ -299,7 +311,16 @@ impl Battle {
                 Effect::Damage(v) => (c.title(lvl).to_string(), at_level(v, l)),
                 Effect::PerSurge(v) => (format!("{surge} surge"), at_level(v, l) * surge),
                 Effect::Detonate => (format!("detonate {} burn", foe.burn), foe.burn.max(0) * (3 + f.mods.burn_bonus)),
-                Effect::PerReveal(v) => (format!("{} reveals used", f.used), at_level(v, l) * f.used),
+                Effect::PerReveal(v) => {
+                    let n = f.used + if f.has(c, Effect::Unused) { f.reveals_left.max(0) } else { 0 };
+                    (format!("{n} reveals"), at_level(v, l) * n)
+                }
+                Effect::PerShatter(v) => {
+                    let breaks = f.effects(c).find_map(|(e, l)| if let Effect::Shatter(n) = e { Some(at_level(n as i32, l) as usize) } else { None }).unwrap_or(0);
+                    let board = foe.board();
+                    let n = (0..N).filter(|&i| board.live(i)).count().min(breaks) as i32;
+                    (format!("{n} crystals broken"), v * n)
+                }
                 Effect::PerBurn(v) => (format!("{} burn on foe", foe.burn), at_level(v, l) * foe.burn.max(0)),
                 Effect::PerQuarterLost(v) => {
                     let q = ((f.max_hp - f.hp) * 4 / f.max_hp.max(1)).clamp(0, 3);
@@ -328,16 +349,16 @@ impl Battle {
         }
         // thrown shield is not boosted by surge
         plus(steps, &mut d, "your shield, thrown".into(), blast);
-        if lvl >= MAX_LEVEL {
-            d = mastered(d, lvl);
-            steps.push((format!("mastered +{MASTERED_PCT}%"), format!("= {d}")));
+        if f.has(c, Effect::Execute) && foe.hp * 2 <= foe.max_hp {
+            d *= 2;
+            steps.push(("foe at half HP: x2".into(), format!("= {d}")));
         }
         plus(steps, &mut d, "overpressure".into(), self.pressure());
         if f.weak > 0 {
             d = (d + 1) / 2;
             steps.push(("weakened: half".into(), format!("= {d}")));
         }
-        let armor = self.f[1 - s].mods.armor;
+        let armor = if f.has(c, Effect::Sure) { 0 } else { self.f[1 - s].mods.armor };
         if armor != 0 {
             steps.push(("foe armor".into(), format!("{:+}", -armor)));
         }
@@ -414,6 +435,7 @@ impl Battle {
             self.deal(s);
             self.f[s].shield += self.f[s].mods.start_shield;
             self.f[s].duds = self.f[s].mods.duds;
+            (self.f[s].hold, self.f[s].blind, self.f[s].simmer) = (false, 0, false);
             self.f[s].burn += self.f[s].mods.self_burn.max(0);
             let m = self.f[s].mods.clone();
             self.procs(s, &[("start_shield", m.start_shield > 0), ("scouts", m.scouts > 0), ("fewer_mines", m.fewer_mines > 0), ("foe_mines", m.foe_mines > 0)]);
@@ -475,12 +497,14 @@ impl Battle {
         let f = &mut self.f[a];
         f.used = 0;
         // penalties stack, but the player always keeps enough reveals to play a board
-        f.reveals_left = (REVEALS + f.mods.reveals).max(if a == 0 { MIN_REVEALS } else { 1 });
+        f.reveals_left = (REVEALS + f.mods.reveals - f.blind).max(if a == 0 { MIN_REVEALS } else { 1 });
+        f.blind = 0;
         f.sense_left = f.mods.sense;
-        if turn > 1 {
+        if turn > 1 && !f.hold {
             // shield wears off: half of it is gone by the start of its owner's next turn
             f.shield /= 2;
         }
+        f.hold = false;
         f.surge = (if f.mods.keep_surge > 0 { f.surge } else { 0 }).max(f.mods.surge_start).min(jam);
         f.cast_n = 0;
         f.firing = false;
@@ -493,7 +517,9 @@ impl Battle {
             // burn goes straight through shield, then halves, the way shield wears off
             let d = f.burn + bonus;
             f.hp -= d;
-            f.burn /= 2;
+            if !f.simmer {
+                f.burn /= 2;
+            }
             let msg = format!("{} burns: -{d}", f.name);
             self.log.push(msg);
             self.settle();
@@ -693,10 +719,12 @@ impl Battle {
         // a setup rite that deals none (Bulwark, Mistveil) spends nothing
         if hits {
             self.f[a].cast_n += 1;
-            self.f[a].surge = (self.f[a].surge - 1).max(0);
+            if !self.f[a].has(c, Effect::KeepSurge) {
+                self.f[a].surge = (self.f[a].surge - 1).max(0);
+            }
         }
         // a rite that does not hit is not aimed at the foe's body, so it cannot be evaded
-        if !hits {
+        if !hits || self.f[a].has(c, Effect::Sure) {
         } else if self.f[t].evades_left > 0 && self.f[t].mods.graze > 0 {
             // a graze: half damage (already in `dmg`), every effect still lands
             self.f[t].evades_left -= 1;
@@ -732,13 +760,14 @@ impl Battle {
         let armored = hits && self.f[t].mods.armor > 0;
         self.procs(t, &[("armor", armored)]);
         let pct = 100 + self.f[a].mods.combo_pct;
+        let (shield, mut leech) = (self.f[a].shield, self.f[a].mods.lifesteal_pct);
         for (e, lvl) in effects {
             let up = |v: i32| at_level(v, lvl);
             match e {
                 Effect::Damage(_) => {} // already in hit_damage
                 Effect::Burn(n) => self.f[t].burn += up(n),
-                Effect::Shield(v) => self.f[a].shield += mastered(up(v) * pct / 100, lvl),
-                Effect::Heal(v) => self.f[a].hp = (self.f[a].hp + mastered(up(v) * pct / 100, lvl)).min(self.f[a].max_hp),
+                Effect::Shield(v) => self.f[a].shield += up(v) * pct / 100,
+                Effect::Heal(v) => self.f[a].hp = (self.f[a].hp + up(v) * pct / 100).min(self.f[a].max_hp),
                 Effect::Weaken(n) => self.f[t].weak = self.f[t].weak.max(up(n)),
                 Effect::Drain(n) => {
                     let keep = self.f[t].stacks.len().saturating_sub(up(n as i32) as usize);
@@ -750,7 +779,7 @@ impl Battle {
                 Effect::Surge(v) => self.f[a].surge = (self.f[a].surge + up(v)).min(self.surge_cap(a)),
                 // capped until mastered, or casting it again and again would grow shield without end
                 Effect::DoubleShield(cap) => self.f[a].shield += self.f[a].shield.clamp(0, double_cap(cap, lvl).unwrap_or(i32::MAX)),
-                Effect::ShieldBlast(_) => self.f[a].shield = 0,
+                Effect::ShieldBlast(_) => self.f[a].shield = if self.f[a].has(c, Effect::KeepHalf) { shield / 2 } else { 0 },
                 Effect::SelfDamage(v) => self.f[a].hp = (self.f[a].hp - up(v)).max(1),
                 Effect::Reveal(n) => self.f[a].reveals_left += up(n),
                 Effect::Shatter(n) => self.shatter(t, up(n as i32) as usize),
@@ -758,6 +787,22 @@ impl Battle {
                     let cur = self.f[t].cur;
                     self.f[t].boards[cur].bury(up(n as i32) as usize, &mut self.rng);
                 }
+                // masteries; the ones that change the hit itself are in hit_damage
+                Effect::Sure | Effect::KeepSurge | Effect::PerShatter(_) | Effect::Execute | Effect::Unused | Effect::KeepHalf => {}
+                Effect::Duds(n) => self.f[a].duds += n,
+                Effect::Lifesteal(p) => leech += p,
+                Effect::Scout(n) => self.f[a].boards.iter_mut().for_each(|b| b.flag_mines(n)),
+                Effect::Hold => self.f[a].hold = true,
+                Effect::Steal(n) => {
+                    let keep = self.f[t].stacks.len().saturating_sub(n);
+                    let taken = self.f[t].stacks.split_off(keep);
+                    self.f[a].stacks.extend(taken);
+                }
+                Effect::Blind(n) => self.f[t].blind += n,
+                Effect::Stoke(n) => self.f[a].power += n,
+                Effect::Cleanse => (self.f[a].burn, self.f[a].weak) = (0, 0),
+                Effect::DrainAll => self.f[t].stacks.clear(),
+                Effect::Simmer => self.f[t].simmer = true,
             }
         }
         if a == 0 && hits {
@@ -767,7 +812,7 @@ impl Battle {
             }
         }
         let dealt = self.hurt(t, dmg);
-        let steal = dealt * self.f[a].mods.lifesteal_pct / 100;
+        let steal = dealt * leech / 100;
         self.f[a].hp = (self.f[a].hp + steal).min(self.f[a].max_hp);
         self.procs(a, &[("lifesteal_pct", steal > 0)]);
         let thorns = self.f[t].mods.thorns;
@@ -971,7 +1016,7 @@ mod tests {
         assert_eq!((b.f[1].hp, b.f[0].stacks.len()), (85, 0));
         assert_eq!(b.f[0].reveals_left, reveals + 2, "steam clears the view: +2 reveals at Lv 2");
         assert!(b.events.iter().any(|e| matches!(e, Event::Cast { name: "Scald Geyser", .. })));
-        assert_eq!(rite_text(steam, 3, None), "+8 damage, +3 reveals, mastered: +50% damage, shield and healing");
+        assert_eq!(rite_text(steam, 3, None), "+8 damage, +3 reveals, your next 3 mines are duds");
     }
 
     #[test]
@@ -1274,19 +1319,32 @@ mod tests {
         assert!(b.cast(combo("Sandstorm")));
         assert_eq!((b.f[0].surge, b.f[0].cast_n), (3, 0));
 
-        // mastered: a level 3 rite is half again as strong, shield and heal included
+        // mastered: each level 3 rite gains its own trick, not a flat boost
         let mut b = duel();
         let magma = combo("Magma");
-        let base = b.hit_damage(0, magma);
         b.f[0].ups = vec![combo_id(magma); 2];
-        let (d, steps) = b.hit_steps(0, magma);
-        assert_eq!(d, (4 * 3 + 6) * 3 / 2, "4 gems x 3 power, +6, then mastered");
-        assert!(d > base && steps.iter().any(|s| s.0.starts_with("mastered")));
+        b.f[1].mods.armor = 3;
+        b.f[1].evades_left = 1;
+        assert_eq!(b.hit_damage(0, magma), 4 * 3 + 6, "Molten Core can't miss and ignores armor");
         let bulwark = combo("Bulwark");
         b.f[0].ups = vec![combo_id(bulwark); 2];
         b.f[0].stacks = bulwark.cost(3);
         assert!(b.cast(bulwark));
-        assert_eq!(b.f[0].shield, 24 * 3 / 2);
+        assert_eq!(b.f[0].shield, 24);
+        assert!(b.f[0].hold, "Citadel's shield skips wearing off once");
+        let mut b = duel();
+        let boil = combo("Boilover");
+        b.f[0].ups = vec![combo_id(boil); 2];
+        b.f[0].stacks = boil.cost(3);
+        assert!(b.cast(boil));
+        b.end_turn();
+        assert_eq!(b.f[1].burn, 6, "Hellbroth: the foe's burn no longer halves");
+        let mut b = duel();
+        let tempest = combo("Tempest");
+        b.f[0].elements = vec![Tide, Gale, Spark];
+        b.f[0].ups = vec![combo_id(tempest); 2];
+        let reveals = b.f[0].reveals_left;
+        assert!(b.hit_steps(0, tempest).1.iter().any(|s| s.0 == format!("{reveals} reveals")), "Eye of the Storm counts unused reveals");
 
         // echoed Geode Surge throws the shield once: the second cast finds it gone
         let mut b = duel();

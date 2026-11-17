@@ -11,6 +11,8 @@ use crate::{
 use macroquad::audio::{play_sound, PlaySoundParams, Sound};
 use macroquad::rand::gen_range;
 use macroquad::prelude::*;
+// named imports win over the prelude's glob: debug builds can be driven from a file
+use crate::ctl::{is_key_pressed, is_mouse_button_down, is_mouse_button_pressed};
 
 const fn rgb(hex: u32) -> Color {
     Color::new(((hex >> 16) & 255) as f32 / 255.0, ((hex >> 8) & 255) as f32 / 255.0, (hex & 255) as f32 / 255.0, 1.0)
@@ -520,6 +522,9 @@ pub fn begin_frame() {
 }
 
 fn mouse() -> Vec2 {
+    if let Some(p) = crate::ctl::mouse() {
+        return p;
+    }
     let window = vec2(screen_width(), screen_height());
     (Vec2::from(mouse_position()) - window / 2.0) / scale() + VIEW / 2.0
 }
@@ -599,6 +604,15 @@ fn stamped(s: &str, cx: f32, y: f32, size: f32, c: Color) {
 
 fn right(s: &str, x: f32, y: f32, size: f32, c: Color) {
     text(s, x - measure(s, size).width, y, size, c);
+}
+
+/// `wrapped`, at the biggest size up to `size` whose lines fit in height `h`.
+fn wrapped_fit(s: &str, x: f32, y: f32, w: f32, size: f32, h: f32, c: Color) -> f32 {
+    let mut sz = size;
+    while sz > 12.0 && wrap(s, w, sz).len() as f32 * sz * 1.25 > h {
+        sz -= 1.0;
+    }
+    wrapped(s, x, y, w, sz, c)
 }
 
 /// Word-wraps into width `w`; returns the y of the line after the last one.
@@ -1513,14 +1527,11 @@ fn draw_shots(shots: &[Shot], now: f64) {
                 stream(a + Vec2::from_angle(gen_range(0.0, 2.0 * PI)) * 90.0, a, 1, mix(c1, INK, 0.3));
             }
         }
-        // level 3: a pillar of light comes down on the target, brightest as the first bolt hits
+        // level 3: the mastery's own sign, brightest as the first bolt hits
         let first_hit = lead + 1.0;
-        if lvl >= 3 && p < first_hit + 1.2 {
-            let alpha = if p < first_hit { p / first_hit } else { 1.0 - (p - first_hit) / 1.2 };
-            let w = 18.0 + 40.0 * alpha;
-            let at = if sh.hits { z } else { a };
-            draw_rectangle(at.x - w / 2.0, -60.0, w, at.y + 110.0, fade(mix(c1, INK, 0.3), alpha * 0.55));
-            draw_rectangle(at.x - w / 6.0, -60.0, w / 3.0, at.y + 110.0, fade(INK, alpha * 0.8));
+        if lvl >= MAX_LEVEL && !sh.miss && p < first_hit + 1.4 {
+            let alpha = if p < first_hit { p / first_hit } else { 1.0 - (p - first_hit) / 1.4 };
+            mastery_fx(c.master, a, z, alpha, now as f32);
         }
         let arc = match e1 {
             Element::Ember => 26.0,
@@ -1650,6 +1661,182 @@ fn draw_shots(shots: &[Shot], now: f64) {
     }
 }
 
+/// A mastered rite's own sign, `t` strong (0..=1): what its mastery does, drawn over the arena.
+fn mastery_fx(m: Option<Effect>, a: Vec2, z: Vec2, t: f32, now: f32) {
+    use std::f32::consts::TAU;
+    let k = |w: &str| keyword(w).map_or(INK, |x| x.0);
+    let chance = |p: f32| gen_range(0.0, 1.0) < p * t;
+    // `n` diamonds circling `at`
+    let orbit = |at: Vec2, n: usize, r: f32, size: f32, spin: f32, c: Color| {
+        for i in 0..n {
+            let p = at + Vec2::from_angle(spin + i as f32 * TAU / n as f32) * r;
+            draw_poly(p.x, p.y, 4, size, spin.to_degrees() * 2.0, c);
+        }
+    };
+    let ground = |at: Vec2| at + vec2(0.0, 50.0);
+    match m {
+        // steam vents hiss up round the caster: the mines ahead go off as duds
+        Some(Effect::Duds(_)) => {
+            for i in 0..4 {
+                let x = a.x - 66.0 + i as f32 * 44.0;
+                let h = 70.0 + 60.0 * ((now * 9.0 + i as f32 * 1.7).sin() * 0.5 + 0.5);
+                draw_rectangle(x - 5.0, ground(a).y - h, 10.0, h, fade(INK, 0.3 * t));
+            }
+            if chance(0.9) {
+                rise(ground(a) + vec2(gen_range(-70.0, 70.0), 0.0), 1, 6.0, fade(INK, 0.7));
+            }
+        }
+        // blood drawn out of the foe and into the caster
+        Some(Effect::Lifesteal(_)) => {
+            if chance(1.0) {
+                stream(z + vec2(gen_range(-30.0, 30.0), gen_range(-30.0, 30.0)), a, 2, k("damage"));
+            }
+            draw_circle_lines(a.x, a.y, 58.0 + 8.0 * (now * 12.0).sin(), 4.0, fade(k("damage"), 0.7 * t));
+        }
+        // a sight closing on the target: nothing turns this aside
+        Some(Effect::Sure) => {
+            let r = 30.0 + 120.0 * (1.0 - t);
+            draw_circle_lines(z.x, z.y, r, 3.0, fade(k("damage"), t));
+            draw_circle_lines(z.x, z.y, r * 0.55, 2.0, fade(INK, t));
+            draw_circle(z.x, z.y, 6.0 * t, fade(INK, t));
+        }
+        // the surge stays: sparks circle the caster and do not fly
+        Some(Effect::KeepSurge) => {
+            orbit(a, 6, 62.0, 7.0, now * 5.0, fade(k("surge"), t));
+            orbit(a, 6, 44.0, 4.0, -now * 7.0, fade(INK, t));
+        }
+        // mist rolls over your boards and the mines show through
+        Some(Effect::Scout(_)) => {
+            for i in 0..5 {
+                let x = BOARD.x + ((now * 60.0 + i as f32 * 90.0) % 420.0) - 20.0;
+                draw_circle(x, BOARD.y + 50.0 + i as f32 * 60.0, 70.0, fade(INK, 0.06 * t));
+            }
+            if chance(0.5) {
+                rise(BOARD + vec2(gen_range(0.0, 380.0), gen_range(0.0, 380.0)), 1, 4.0, fade(k("reveal"), 0.8));
+            }
+        }
+        // a wall rises in front of the caster and stays standing
+        Some(Effect::Hold) => {
+            for i in 0..3 {
+                let h = 110.0 * t.min(1.0) * (1.0 - i as f32 * 0.2);
+                let x = a.x + 70.0 + i as f32 * 20.0;
+                draw_rectangle(x, ground(a).y - h, 16.0, h, fade(k("shield"), 0.5 * t));
+                draw_rectangle_lines(x, ground(a).y - h, 16.0, h, 2.0, fade(INK, t));
+            }
+        }
+        // the foe's gems are pulled across to the caster
+        Some(Effect::Steal(_)) => {
+            if chance(0.8) {
+                stream(z, a, 1, k("surge"));
+            }
+            orbit(z, 4, 50.0 + 30.0 * (1.0 - t), 6.0, now * 4.0, fade(INK, t));
+        }
+        // sand whirls round the foe's eyes
+        Some(Effect::Blind(_)) => {
+            for i in 0..24 {
+                let ang = now * 3.0 + i as f32 * TAU / 24.0;
+                let p = z + vec2(ang.cos() * 80.0, ang.sin() * 30.0 - 10.0 + (i % 3) as f32 * 14.0);
+                draw_rectangle(p.x, p.y, 4.0, 4.0, fade(k("weaken"), t));
+            }
+        }
+        // the sky cracks down onto the foe's crystals
+        Some(Effect::PerShatter(_)) => {
+            if chance(0.6) {
+                for _ in 0..2 {
+                    lightning(vec2(z.x + gen_range(-200.0, 200.0), -60.0), z + vec2(gen_range(-40.0, 40.0), 0.0), 4.0, fade(INK, t));
+                }
+            }
+        }
+        // the ground splits under a foe that is already falling
+        Some(Effect::Execute) => {
+            let g = ground(z);
+            let mut prev = g - vec2(160.0 * t, 0.0);
+            for i in 1..=8 {
+                let next = g + vec2(-160.0 * t + i as f32 * 40.0 * t, if i % 2 == 0 { -6.0 } else { 6.0 });
+                draw_line(prev.x, prev.y, next.x, next.y, 5.0, fade(k("damage"), t));
+                prev = next;
+            }
+            if chance(0.7) {
+                burst(g + vec2(gen_range(-120.0, 120.0), 0.0), 2, 200.0, 6.0, INK);
+            }
+        }
+        // a storm wall turns round the foe with a calm eye in the middle
+        Some(Effect::Unused) => {
+            for i in 0..3 {
+                let r = 60.0 + i as f32 * 26.0;
+                draw_poly_lines(z.x, z.y, 7, r, now * (200.0 - i as f32 * 60.0), 3.0, fade(k("reveal"), t * (1.0 - i as f32 * 0.25)));
+            }
+            draw_circle(z.x, z.y, 14.0, fade(INK, 0.4 * t));
+        }
+        // crystal shards circle the caster: half the shield stays
+        Some(Effect::KeepHalf) => {
+            orbit(a, 5, 66.0, 12.0, now * 2.0, fade(k("shield"), 0.8 * t));
+            orbit(a, 5, 66.0, 6.0, now * 2.0, fade(INK, t));
+        }
+        // a sun over the caster pours heat into it
+        Some(Effect::Stoke(_)) => {
+            let sun = a - vec2(0.0, 120.0);
+            draw_circle(sun.x, sun.y, 26.0 * t, fade(k("burn"), t));
+            draw_poly_lines(sun.x, sun.y, 12, 40.0 * t, now * 60.0, 3.0, fade(INK, t));
+            if chance(0.8) {
+                stream(sun, a, 1, k("burn"));
+            }
+        }
+        // a wave washes over the caster and leaves it clean
+        Some(Effect::Cleanse) => {
+            let x = a.x - 120.0 + 240.0 * (1.0 - t);
+            draw_rectangle(x, a.y - 70.0, 18.0, 140.0, fade(k("tide"), 0.5 * t));
+            if chance(0.8) {
+                rise(a + vec2(gen_range(-50.0, 50.0), 40.0), 1, 8.0, fade(k("heal"), 0.8));
+            }
+        }
+        // the lights go out round the foe
+        Some(Effect::DrainAll) => {
+            draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.5 * t));
+            if chance(0.8) {
+                burst(z, 3, 260.0, 6.0, INK);
+            }
+        }
+        // the foe stands in a pot that keeps on boiling
+        Some(Effect::Simmer) => {
+            draw_ellipse_lines(ground(z).x, ground(z).y, 90.0, 22.0, 0.0, 4.0, fade(k("burn"), t));
+            if chance(1.0) {
+                rise(ground(z) + vec2(gen_range(-80.0, 80.0), 0.0), 1, 4.0, k("burn"));
+            }
+        }
+        // field lines: shield is drawn in from every side, with no limit
+        _ => {
+            for i in 0..4 {
+                let w = 50.0 + i as f32 * 22.0;
+                draw_ellipse_lines(a.x, a.y, w, w * 0.45, now * 40.0 + i as f32 * 45.0, 2.0, fade(k("shield"), t));
+            }
+        }
+    }
+}
+
+/// The short shout a mastered rite gives as it lands.
+fn mastery_word(m: Option<Effect>) -> &'static str {
+    match m {
+        Some(Effect::Duds(_)) => "DUDS",
+        Some(Effect::Lifesteal(_)) => "BLOOD DRINK",
+        Some(Effect::Sure) => "TRUE STRIKE",
+        Some(Effect::KeepSurge) => "SURGE HELD",
+        Some(Effect::Scout(_)) => "MINES FOUND",
+        Some(Effect::Hold) => "HOLD FAST",
+        Some(Effect::Steal(_)) => "STOLEN",
+        Some(Effect::Blind(_)) => "BLINDED",
+        Some(Effect::PerShatter(_)) => "SKY SPLIT",
+        Some(Effect::Execute) => "EXECUTE",
+        Some(Effect::Unused) => "STILL EYE",
+        Some(Effect::KeepHalf) => "SHIELD KEPT",
+        Some(Effect::Stoke(_)) => "STOKED",
+        Some(Effect::Cleanse) => "CLEANSED",
+        Some(Effect::DrainAll) => "BLACKOUT",
+        Some(Effect::Simmer) => "SIMMERING",
+        _ => "UNBOUND",
+    }
+}
+
 /// The visuals of a rite's effects (and its brand's), as its first bolt lands.
 fn rite_effects(sh: &Shot, c: &Combo, a: Vec2, z: Vec2, c2: Color) {
     for e in c.effects.iter().chain(&sh.brand) {
@@ -1737,6 +1924,12 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                     fx.banner.push((name, el_color(element), from, start, lvl));
                     if miss {
                         fx.floats.push((STAND[1 - from] - vec2(0.0, 30.0), "MISS".into(), MUTED, lands_at(&shot), 40.0));
+                    } else if lvl >= MAX_LEVEL {
+                        let first = t0 + ((charge(lvl) + 1.0) * SHOT_TIME) as f64;
+                        // beside whoever it acts on, clear of their name
+                        let side = if shot.hits { 1 - from } else { from };
+                        let at = STAND[side] + if side == 1 { vec2(230.0, 40.0) } else { vec2(170.0, -70.0) };
+                        fx.floats.push((at, mastery_word(COMBOS[skill.0].master).into(), MASTERED, first, 30.0));
                     }
                     fx.busy = lands_at(&shot) + SETTLE;
                     // its voice when it is thrown: by first element, and a charge-up once upgraded
@@ -2327,7 +2520,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         aim = Some(aim.map_or(0, |i| (i + 1) % list.len()));
         play(Sfx::Click);
     }
-    let rh = (300.0 / list.len().max(1) as f32).min(66.0);
+    // tall enough for a rite's text to wrap to two lines under its name; four rows still clear End turn
+    let rh = (300.0 / list.len().max(1) as f32).min(75.0);
     let mut y = 326.0;
     // where a dragged gem may land: (row, rite, its cost)
     let mut targets: Vec<(Rect, &'static Combo, Vec<Element>)> = vec![];
@@ -2387,7 +2581,14 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         let num = hit.as_ref().map(|(d, _)| format!("{d} dmg"));
         let room = 350.0 - num.as_ref().map_or(0.0, |n| measure(n, 15.0).width + 12.0);
         let line = me.describe(c);
-        rich(&line, rx, y + rh - 12.0, 14.0 * (room / measure(&line, 14.0).width).min(1.0), MUTED);
+        let fit = 14.0 * (room / measure(&line, 14.0).width).min(1.0);
+        if fit >= 12.5 {
+            rich(&line, rx, y + rh - 12.0, fit, MUTED);
+        } else {
+            for (k, l) in wrap(&line, room, 13.0).iter().take(2).enumerate() {
+                rich(l, rx, y + rh - 26.0 + k as f32 * 15.0, 13.0, MUTED);
+            }
+        }
         if let (Some((d, steps)), Some(num)) = (hit, num) {
             // hover the number to see how it adds up
             let (nx, ny) = (rx + 350.0, y + rh - 12.0);
@@ -2557,8 +2758,11 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             let kick = if el < 0.14 { 1.0 + 0.9 * (1.0 - el / 0.14) } else { 1.0 };
             // one font all the way: growing and shrinking must not cross into the other face
             let f = face_in(if *size >= DISPLAY_FROM { 0 } else { 1 }, (size + 12.0 * (1.0 - p)) * kick);
-            let w = FONT.with(|ft| measure_text(label, ft.borrow()[f.0].as_ref(), f.1, f.2)).width;
-            text_in(f, label, at.x - w / 2.0, at.y - p * 40.0, fade(*c, 1.6 - p * 1.6));
+            let d = FONT.with(|ft| measure_text(label, ft.borrow()[f.0].as_ref(), f.1, f.2));
+            // a big number by a fighter near the edge would spill off the canvas: keep it inside
+            let x = (at.x - d.width / 2.0).clamp(8.0, VIEW.x - 8.0 - d.width);
+            let y = (at.y - p * 40.0).max(d.offset_y + 8.0);
+            text_in(f, label, x, y, fade(*c, 1.6 - p * 1.6));
         }
     });
     // below a quarter HP the screen edge throbs red with a heartbeat
@@ -2733,22 +2937,9 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     if let Some((desc, name)) = &key_tip {
         (tip, tip_label) = (desc, name);
     }
-    let rows = 22.0f32.min((576.0 - top) / run.charms.len().max(1) as f32);
     let n = run.charms.len();
-    if rows >= 22.0 {
-        for (k, &id) in run.charms.iter().enumerate() {
-            let r = Rect::new(x - 8.0, top + k as f32 * rows, 298.0, rows);
-            let hot = r.contains(mouse());
-            if hot {
-                (tip, tip_label) = (CHARMS[id].desc, "PACT");
-                block(r, CARD_HI);
-            }
-            let c = &CHARMS[id];
-            sprite(c.icon.0, x, r.y + (rows - 18.0) / 2.0, 18.0, rgb(c.icon.1));
-            pact_name(id, x + 26.0, r.y + rows / 2.0 + 6.0, 16.0, if hot { INK } else { rarity_color(c.rarity) });
-        }
-    } else {
-        // too many to list by name: icons, row by row, and a "+N" for any that still do not fit
+    {
+        // icons, row by row (hover one for its name and text), and a "+N" for any that do not fit
         let (s, cols) = (32.0, 9);
         let cap = cols * ((576.0 - top) / s).floor().max(1.0) as usize;
         let shown = if n > cap { cap - 1 } else { n };
@@ -2846,9 +3037,9 @@ pub fn upgrade(run: &Run, ids: &[usize]) -> Option<usize> {
                 gem(e, p, 11.0);
             }
         }
-        let y = wrapped(&rite_text(c, lvl, run.brand_of(id)), x, r.y + 280.0, w - 40.0, 16.0, MUTED);
+        let y = wrapped_fit(&rite_text(c, lvl, run.brand_of(id)), x, r.y + 280.0, w - 40.0, 16.0, 44.0, MUTED);
         text("becomes", x, y + 6.0, 14.0, ACCENT);
-        wrapped(&rite_text(c, lvl + 1, run.brand_of(id)), x, y + 30.0, w - 40.0, 18.0, GOLD_C);
+        wrapped_fit(&rite_text(c, lvl + 1, run.brand_of(id)), x, y + 30.0, w - 40.0, 18.0, r.bottom() - y - 30.0, GOLD_C);
     }
     particles();
     chosen
@@ -2895,9 +3086,9 @@ pub fn brand(run: &Run, offers: &[usize]) -> Option<(usize, usize)> {
             gem(e, vec2(x + 12.0 + j as f32 * 30.0, r.y + 76.0), 11.0);
         }
         let old = run.brand_of(id);
-        let y = wrapped(&rite_text(c, lvl, old), x, r.y + 120.0, w - 40.0, 16.0, MUTED);
+        let y = wrapped_fit(&rite_text(c, lvl, old), x, r.y + 120.0, w - 40.0, 16.0, 80.0, MUTED);
         text(&old.map_or("becomes".into(), |o| format!("{} is replaced", o.name)), x, y + 6.0, 14.0, ACCENT);
-        wrapped(&rite_text(c, lvl, Some(b)), x, y + 30.0, w - 40.0, 18.0, GOLD_C);
+        wrapped_fit(&rite_text(c, lvl, Some(b)), x, y + 30.0, w - 40.0, 18.0, r.bottom() - y - 30.0, GOLD_C);
     }
     if button(Rect::new(565.0, 576.0, 150.0, 40.0), "Back", !modal(), false) {
         BRANDING.with(|b| b.set(None));

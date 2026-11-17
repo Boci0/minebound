@@ -113,6 +113,39 @@ pub enum Effect {
     PerQuarterLost(i32),
     /// the caster pays HP, never below 1
     SelfDamage(i32),
+    // masteries: what a rite gains at level 3, one of its own each
+    /// the caster's next this many mines are duds
+    Duds(i32),
+    /// the caster heals this percent of the damage it deals
+    Lifesteal(i32),
+    /// cannot miss and ignores armor
+    Sure,
+    /// spends no surge step
+    KeepSurge,
+    /// flags this many mines on each of the caster's boards
+    Scout(usize),
+    /// the caster's shield does not wear off at its next turn
+    Hold,
+    /// takes this many of the foe's stacks for the caster
+    Steal(usize),
+    /// the foe has this many fewer reveals next turn
+    Blind(i32),
+    /// more damage for each foe crystal the rite breaks
+    PerShatter(i32),
+    /// double damage on a foe at half HP or below
+    Execute,
+    /// reveals left unused this turn count for `PerReveal` too
+    Unused,
+    /// the shield thrown by `ShieldBlast` is only half spent
+    KeepHalf,
+    /// the caster gains this much power for the rest of the battle
+    Stoke(i32),
+    /// clears the caster's burn and weaken
+    Cleanse,
+    /// the foe loses every stack
+    DrainAll,
+    /// the foe's burn stops halving for the rest of the battle
+    Simmer,
 }
 use Effect::*;
 
@@ -122,21 +155,15 @@ pub struct Combo {
     pub up: [&'static str; 2],
     pub needs: &'static [Element],
     pub effects: &'static [Effect],
+    /// what it gains once mastered (level 3), on top of its grown effects
+    pub master: Option<Effect>,
 }
 
 /// Highest level a skill can reach.
 pub const MAX_LEVEL: usize = 3;
-/// A rite at `MAX_LEVEL` is mastered: its damage, shield and healing are this much stronger.
-pub const MASTERED_PCT: i32 = 50;
-
 /// How much shield doubling may add at `lvl`: the cap, twice it at level 2, and no cap once mastered.
 pub fn double_cap(cap: i32, lvl: usize) -> Option<i32> {
     (lvl < MAX_LEVEL).then_some(cap * lvl as i32)
-}
-
-/// `v`, made stronger if the rite is mastered.
-pub fn mastered(v: i32, lvl: usize) -> i32 {
-    if lvl >= MAX_LEVEL { v * (100 + MASTERED_PCT) / 100 } else { v }
 }
 
 /// An effect's number at skill level `lvl`: +50% per level, and always at least +1 per level
@@ -159,10 +186,8 @@ impl Combo {
 
 /// What a rite does at `lvl`, with the brand burnt onto it, if any. A brand stays at level 1.
 pub fn rite_text(c: &Combo, lvl: usize, brand: Option<&Brand>) -> String {
-    let mut parts: Vec<String> = c.effects.iter().map(|&e| e.text(lvl)).chain(brand.map(|b| b.effect.text(1))).collect();
-    if lvl >= MAX_LEVEL {
-        parts.push(format!("mastered: +{MASTERED_PCT}% damage, shield and healing"));
-    }
+    let master = c.master.filter(|_| lvl >= MAX_LEVEL);
+    let parts: Vec<String> = c.effects.iter().map(|&e| e.text(lvl)).chain(master.map(|e| e.text(lvl))).chain(brand.map(|b| b.effect.text(1))).collect();
     let s = parts.join(", ");
     s[..1].to_uppercase() + &s[1..]
 }
@@ -206,7 +231,7 @@ impl Effect {
             PerReveal(v) => format!("+{} damage per reveal used", at_level(v, lvl)),
             DoubleShield(cap) => match double_cap(cap, lvl) {
                 Some(c) => format!("double your shield (up to +{c})"),
-                None => "double your shield".into(),
+                None => "double your shield, no limit".into(),
             },
             ShieldBlast(p) => match at_level(p, lvl) {
                 100 => "all your shield becomes damage".into(),
@@ -215,6 +240,22 @@ impl Effect {
             PerBurn(v) => format!("+{} damage per burn on foe", at_level(v, lvl)),
             PerQuarterLost(v) => format!("+{} damage per quarter of HP lost", at_level(v, lvl)),
             SelfDamage(v) => format!("you lose {} HP", at_level(v, lvl)),
+            Duds(n) => format!("your next {n} mines are duds"),
+            Lifesteal(p) => format!("heal {p}% of its damage"),
+            Sure => "can't miss, ignores armor".into(),
+            KeepSurge => "spends no surge".into(),
+            Scout(n) => format!("flag {n} mines on each board"),
+            Hold => "shield won't wear off next turn".into(),
+            Steal(n) => format!("steal {n} foe stacks"),
+            Blind(n) => format!("foe gets {n} fewer reveals"),
+            PerShatter(v) => format!("+{v} damage per crystal broken"),
+            Execute => "x2 damage if foe is at half HP".into(),
+            Unused => "unused reveals count too".into(),
+            KeepHalf => "keep half your shield".into(),
+            Stoke(n) => format!("+{n} power this battle"),
+            Cleanse => "clear your burn and weaken".into(),
+            DrainAll => "foe loses all its stacks".into(),
+            Simmer => "foe's burn stops fading".into(),
         }
     }
 }
@@ -269,28 +310,28 @@ pub static BRANDS: &[Brand] = &[
     brand("Snare", Bury(1)),
 ];
 
-const fn combo(name: &'static str, up: [&'static str; 2], needs: &'static [Element], effects: &'static [Effect]) -> Combo {
-    Combo { name, up, needs, effects }
+const fn combo(name: &'static str, up: [&'static str; 2], needs: &'static [Element], effects: &'static [Effect], master: Option<Effect>) -> Combo {
+    Combo { name, up, needs, effects, master }
 }
 
 pub static COMBOS: &[Combo] = &[
-    combo("Steam Burst", ["Scald Geyser", "Steamquake"], &[Ember, Tide], &[Damage(4), Reveal(1)]),
-    combo("Raze", ["Bloodrush", "Rampage"], &[Ember, Gale], &[Damage(2), PerQuarterLost(2)]),
-    combo("Magma", ["Lava Lance", "Molten Core"], &[Ember, Stone], &[Pierce, Damage(3)]),
-    combo("Plasma", ["Plasma Lance", "Plasma Nova"], &[Ember, Spark], &[Damage(3), PerSurge(1)]),
-    combo("Mistveil", ["Mist Shroud", "Veil of Mists"], &[Tide, Gale], &[Heal(8), Reveal(2)]),
-    combo("Bulwark", ["Rampart", "Citadel"], &[Tide, Stone], &[Shield(12)]),
-    combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Damage(3), Surge(2)]),
-    combo("Sandstorm", ["Dust Devil", "Desert Wrath"], &[Gale, Stone], &[Weaken(2), Bury(2)]),
-    combo("Thunderclap", ["Thunderstrike", "Skybreaker"], &[Gale, Spark], &[Shatter(1), Damage(2)]),
-    combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[DoubleShield(12)]),
-    combo("Upheaval", ["Cataclysm", "Worldbreaker"], &[Ember, Gale, Stone], &[SelfDamage(4), Damage(11)]),
-    combo("Tempest", ["Hurricane", "Eye of the Storm"], &[Tide, Gale, Spark], &[PerReveal(1)]),
-    combo("Geode Surge", ["Crystal Tide", "Geode Titan"], &[Tide, Stone, Spark], &[Damage(6), ShieldBlast(150)]),
-    combo("Forgefire", ["Starforge", "Sunforge"], &[Ember, Stone, Spark], &[Damage(8)]),
-    combo("Maelstrom", ["Abyssal Gyre", "Leviathan"], &[Tide, Gale, Stone], &[Shield(6), Heal(4)]),
-    combo("Short Circuit", ["Arc Flash", "Blackout"], &[Ember, Gale, Spark], &[Damage(6), Drain(1)]),
-    combo("Boilover", ["Scalding Flood", "Hellbroth"], &[Ember, Tide, Spark], &[Burn(3), PerBurn(1)]),
+    combo("Steam Burst", ["Scald Geyser", "Steamquake"], &[Ember, Tide], &[Damage(4), Reveal(1)], Some(Duds(3))),
+    combo("Raze", ["Bloodrush", "Rampage"], &[Ember, Gale], &[Damage(2), PerQuarterLost(2)], Some(Lifesteal(50))),
+    combo("Magma", ["Lava Lance", "Molten Core"], &[Ember, Stone], &[Pierce, Damage(3)], Some(Sure)),
+    combo("Plasma", ["Plasma Lance", "Plasma Nova"], &[Ember, Spark], &[Damage(3), PerSurge(1)], Some(KeepSurge)),
+    combo("Mistveil", ["Mist Shroud", "Veil of Mists"], &[Tide, Gale], &[Heal(8), Reveal(2)], Some(Scout(3))),
+    combo("Bulwark", ["Rampart", "Citadel"], &[Tide, Stone], &[Shield(12)], Some(Hold)),
+    combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Damage(3), Surge(2)], Some(Steal(2))),
+    combo("Sandstorm", ["Dust Devil", "Desert Wrath"], &[Gale, Stone], &[Weaken(2), Bury(2)], Some(Blind(2))),
+    combo("Thunderclap", ["Thunderstrike", "Skybreaker"], &[Gale, Spark], &[Shatter(1), Damage(2)], Some(PerShatter(8))),
+    combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[DoubleShield(12)], None),
+    combo("Upheaval", ["Cataclysm", "Worldbreaker"], &[Ember, Gale, Stone], &[SelfDamage(4), Damage(11)], Some(Execute)),
+    combo("Tempest", ["Hurricane", "Eye of the Storm"], &[Tide, Gale, Spark], &[PerReveal(1)], Some(Unused)),
+    combo("Geode Surge", ["Crystal Tide", "Geode Titan"], &[Tide, Stone, Spark], &[Damage(6), ShieldBlast(150)], Some(KeepHalf)),
+    combo("Forgefire", ["Starforge", "Sunforge"], &[Ember, Stone, Spark], &[Damage(8)], Some(Stoke(2))),
+    combo("Maelstrom", ["Abyssal Gyre", "Leviathan"], &[Tide, Gale, Stone], &[Shield(6), Heal(4)], Some(Cleanse)),
+    combo("Short Circuit", ["Arc Flash", "Blackout"], &[Ember, Gale, Spark], &[Damage(6), Drain(1)], Some(DrainAll)),
+    combo("Boilover", ["Scalding Flood", "Hellbroth"], &[Ember, Tide, Spark], &[Burn(3), PerBurn(1)], Some(Simmer)),
 ];
 
 /// Position of `c` in `COMBOS`.
