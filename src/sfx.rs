@@ -38,8 +38,9 @@ pub static SOUNDS: [(f32, &[&[u8]]); 17] = [
     takes!(0.35, "impactMining_000", "impactMining_001", "impactMining_002", "impactMining_003"),
     takes!(0.5, "impactGlass_light_000", "impactGlass_light_001", "impactGlass_light_002"),
     takes!(0.55, "horror-mine-1", "horror-mine-2"),
-    // the knife slices pitched down and softened: the Strike plays often, so it should not cut
-    takes!(0.7, "strike-1", "strike-2"),
+    // made with ffmpeg: a deep pop, a tone falling fast from ~500 Hz to ~70 Hz, three pitches; quieter,
+    // since the Strike plays on every bolt and its tone cuts through the mix
+    takes!(0.35, "strike-pop-1", "strike-pop-2", "strike-pop-3"),
     takes!(0.7, "impactGlass_heavy_000", "impactGlass_heavy_001"),
     takes!(0.5, "cloth1"),
     takes!(0.7, "impactPunch_medium_000", "impactPunch_medium_001", "impactPunch_medium_002"),

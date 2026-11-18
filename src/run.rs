@@ -98,6 +98,8 @@ pub struct Run {
     pub twist: usize,
     pub map: Vec<Vec<Node>>,
     pub pos: Option<(usize, usize)>,
+    /// the rooms entered on this floor, in order
+    pub trail: Vec<(usize, usize)>,
     pub note: String,
     /// for the end screen: fights won, rite damage dealt, and the biggest single rite (damage, name)
     pub wins: usize,
@@ -140,6 +142,7 @@ impl Run {
             twist: 0,
             map: vec![],
             pos: None,
+            trail: vec![],
             note: String::new(),
             wins: 0,
             dealt: 0,
@@ -393,6 +396,7 @@ impl Run {
 
     pub fn enter(&mut self, col: usize, row: usize) -> Stage {
         self.pos = Some((col, row));
+        self.trail.push((col, row));
         self.note.clear();
         let kind = self.map[col][row].kind;
         match kind {
@@ -513,6 +517,7 @@ impl Run {
         if matches!(self.pos, Some((c, _)) if c == self.cols()) {
             self.floor += 1;
             self.pos = None;
+            self.trail.clear();
             self.gen_map();
             self.note = match self.ending() {
                 Some(e) => format!("{}, past the last boss.", ENDINGS[e].name),

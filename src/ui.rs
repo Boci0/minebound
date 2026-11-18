@@ -1176,25 +1176,23 @@ fn noise(c: usize, r: usize) -> f32 {
     (s - s.floor()) as f32
 }
 
-/// What each tile of The Below is: 0 open air, 1 unexplored land, 2 land explored around an open place.
-/// The land is a few soft blobs round the places, minus three chasms, its edge roughened per tile.
-fn land(unlocked: usize) -> Vec<Vec<u8>> {
-    let mut blobs: Vec<(f32, f32, f32)> = PLACES.iter().map(|p| (p.x, p.y, 62.0)).collect();
-    // the daily descent's island, apart from the rest
-    blobs.push((DAILY_AT.x, DAILY_AT.y, 50.0));
-    blobs.extend([(250.0, 500.0, 55.0), (430.0, 470.0, 58.0), (470.0, 330.0, 48.0), (700.0, 330.0, 52.0), (690.0, 520.0, 44.0), (690.0, 200.0, 46.0), (100.0, 470.0, 40.0), (880.0, 300.0, 40.0), (250.0, 300.0, 36.0), (560.0, 640.0, 34.0)]);
-    let chasms = [(560.0, 400.0, 58.0), (230.0, 640.0, 40.0), (880.0, 560.0, 46.0)];
-    let (x0, y0, cell, cols, rows) = LAND;
+/// A grid of land tiles: (left, top), tile pitch, columns, rows.
+type Grid = (f32, f32, f32, usize, usize);
+
+/// What each tile of a grid is: 0 open air, 1 unexplored land, 2 land explored (where `explored` says so).
+/// The land is soft blobs `(x, y, radius)` minus chasms, its edge roughened per tile.
+fn terrain(grid: Grid, blobs: &[(f32, f32, f32)], chasms: &[(f32, f32, f32)], explored: impl Fn(Vec2) -> bool) -> Vec<Vec<u8>> {
+    let (x0, y0, cell, cols, rows) = grid;
     let pull = |set: &[(f32, f32, f32)], p: Vec2| set.iter().map(|&(x, y, r)| r * r / ((p.x - x).powi(2) + (p.y - y).powi(2) + 1.0)).sum::<f32>();
     (0..rows)
         .map(|r| {
             (0..cols)
                 .map(|c| {
                     let p = vec2(x0 + c as f32 * cell + cell / 2.0, y0 + r as f32 * cell + cell / 2.0);
-                    let field = pull(&blobs, p) - pull(&chasms, p) + (noise(c, r) - 0.5) * 0.5;
+                    let field = pull(blobs, p) - pull(chasms, p) + (noise(c, r) - 0.5) * 0.5;
                     if field <= 0.9 {
                         0
-                    } else if PLACES[..unlocked].iter().any(|q| q.distance(p) < 105.0) || DAILY_AT.distance(p) < 40.0 {
+                    } else if explored(p) {
                         2
                     } else {
                         1
@@ -1203,6 +1201,59 @@ fn land(unlocked: usize) -> Vec<Vec<u8>> {
                 .collect()
         })
         .collect()
+}
+
+/// What each tile of The Below is. The land is a few soft blobs round the places, minus three chasms;
+/// it lies explored round each open place.
+fn land(unlocked: usize) -> Vec<Vec<u8>> {
+    let mut blobs: Vec<(f32, f32, f32)> = PLACES.iter().map(|p| (p.x, p.y, 62.0)).collect();
+    // the daily descent's island, apart from the rest
+    blobs.push((DAILY_AT.x, DAILY_AT.y, 50.0));
+    blobs.extend([(250.0, 500.0, 55.0), (430.0, 470.0, 58.0), (470.0, 330.0, 48.0), (700.0, 330.0, 52.0), (690.0, 520.0, 44.0), (690.0, 200.0, 46.0), (100.0, 470.0, 40.0), (880.0, 300.0, 40.0), (250.0, 300.0, 36.0), (560.0, 640.0, 34.0)]);
+    let chasms = [(560.0, 400.0, 58.0), (230.0, 640.0, 40.0), (880.0, 560.0, 46.0)];
+    terrain(LAND, &blobs, &chasms, |p| PLACES[..unlocked].iter().any(|q| q.distance(p) < 105.0) || DAILY_AT.distance(p) < 40.0)
+}
+
+/// Draws land from `terrain`: unexplored tiles raised grey, explored ones turned over with their edge
+/// numbered like a half-solved board (about one hidden tile in five counts as a mine). `seed` picks
+/// which tiles are mines and their shades, so each map has its own.
+fn draw_land(kind: &[Vec<u8>], grid: Grid, seed: usize) {
+    let (x0, y0, cell, cols, rows) = grid;
+    let at = |c: usize, r: usize| kind.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0);
+    let mine = |c: usize, r: usize| at(c, r) == 1 && noise(c + 50 + seed, r + 50) < 0.22;
+    // all the tiles first, then all the numbers: each switch between shapes and text is a new GPU
+    // draw call with buffers of its own, and hundreds of them made the driver take ~650 MB
+    let mut numbers = vec![];
+    for r in 0..rows {
+        for c in 0..cols {
+            let t = Rect::new(x0 + c as f32 * cell, y0 + r as f32 * cell, cell - 3.0, cell - 3.0);
+            match at(c, r) {
+                1 => block(t, if noise(c + 9 + seed, r + 3) < 0.5 { rgb(0x3a3a3a) } else { rgb(0x333333) }),
+                2 => {
+                    draw_rectangle_lines(t.x, t.y, t.w, t.h, 1.0, rgb(0x262626));
+                    let n = (0..9).filter(|k| mine((c + k % 3).wrapping_sub(1), (r + k / 3).wrapping_sub(1))).count();
+                    if n > 0 {
+                        numbers.push((n, t));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // sized with the tiles: 14 on The Below's 22 px tiles
+    let size = (14.0 * cell / 22.0).round();
+    for (n, t) in numbers {
+        centered(&n.to_string(), t.center().x, t.y + cell * 15.0 / 22.0, size, if n > 1 { INK } else { MUTED });
+    }
+}
+
+/// A dotted line, like the route on The Below.
+fn dotted(a: Vec2, b: Vec2, gap: f32, r: f32, c: Color) {
+    let n = (a.distance(b) / gap) as usize;
+    for k in 0..n {
+        let p = a.lerp(b, k as f32 / n as f32);
+        draw_circle(p.x, p.y, r, c);
+    }
 }
 
 /// The world map, The Below: pick an open descent and a bearer, then descend.
@@ -1228,39 +1279,10 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
         }
         l.1.clone()
     });
-    let (x0, y0, cell, cols, rows) = LAND;
-    let at = |c: usize, r: usize| kind.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0);
-    let mine = |c: usize, r: usize| at(c, r) == 1 && noise(c + 50, r + 50) < 0.22;
-    // all the tiles first, then all the numbers: each switch between shapes and text is a new GPU
-    // draw call with buffers of its own, and hundreds of them made the driver take ~650 MB
-    let mut numbers = vec![];
-    for r in 0..rows {
-        for c in 0..cols {
-            let t = Rect::new(x0 + c as f32 * cell, y0 + r as f32 * cell, cell - 3.0, cell - 3.0);
-            match at(c, r) {
-                1 => block(t, if noise(c + 9, r + 3) < 0.5 { rgb(0x3a3a3a) } else { rgb(0x333333) }),
-                2 => {
-                    draw_rectangle_lines(t.x, t.y, t.w, t.h, 1.0, rgb(0x262626));
-                    let n = (0..9).filter(|k| mine((c + k % 3).wrapping_sub(1), (r + k / 3).wrapping_sub(1))).count();
-                    if n > 0 {
-                        numbers.push((n, t));
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    for (n, t) in numbers {
-        centered(&n.to_string(), t.center().x, t.y + 15.0, 14.0, if n > 1 { INK } else { MUTED });
-    }
+    draw_land(&kind, LAND, 0);
     // the route between places, dotted
     for w in PLACES.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        let n = (a.distance(b) / 9.0) as usize;
-        for k in 0..n {
-            let p = a.lerp(b, k as f32 / n as f32);
-            draw_circle(p.x, p.y, 1.0, INK);
-        }
+        dotted(w[0], w[1], 9.0, 1.0, INK);
     }
 
     let mut shown = pick.0;
@@ -2830,26 +2852,105 @@ fn node_look(k: NodeKind) -> usize {
     }
 }
 
+/// A fixed number in 0..1 for (a, b): splitmix64, so nearby inputs give unrelated outputs.
+fn hash01(a: u64, b: u64) -> f32 {
+    let mut z = a.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ b.wrapping_add(0x632b_e59b_d9b4_e019);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// Where room (c, r) sits. Each floor scatters its rooms: columns spread and shift unevenly and every
+/// room is nudged, but never so far that a room passes its neighbour or a tunnel crosses another.
 fn node_at(run: &Run, c: usize, r: usize) -> Vec2 {
     let n = run.map[c].len() as f32;
+    let floor = run.seed ^ (run.floor as u64 + 1) * 0x5851;
+    let h = |k: u64| hash01(floor, (c * 16 + r) as u64 * 8 + k) - 0.5;
+    let col = |k: u64| hash01(floor, c as u64 * 8 + 1000 + k) - 0.5;
     // a shorter map (an ending's floor) sits in the middle of the space a full one takes
-    let inset = (COLS + 1 - run.map.len()) as f32 * 75.0;
-    vec2(110.0 + inset + c as f32 * 150.0, 390.0 + (r as f32 - (n - 1.0) / 2.0) * 150.0)
+    let inset = (COLS + 1 - run.map.len()) as f32 * 70.0;
+    let last = c + 1 == run.map.len();
+    let spread = 150.0 + col(0) * 60.0;
+    let x = 100.0 + inset + c as f32 * 140.0 + if last { 0.0 } else { h(0) * 60.0 };
+    let y = 390.0 + col(1) * 80.0 + (r as f32 - (n - 1.0) / 2.0) * spread + if last { 0.0 } else { h(1) * 36.0 };
+    vec2(x, y)
+}
+
+/// The floor map's land: The Below seen closer, its tiles larger.
+const FLOOR_LAND: Grid = (24.0, 100.0, 28.0, 32, 21);
+
+/// The floor's land: blobs round its rooms and along its tunnels, and a few stray ones, so it lies like a
+/// patch of The Below. It is explored round the rooms you have been in and those you may enter next.
+fn floor_land(run: &Run) -> Vec<Vec<u8>> {
+    let mut blobs = vec![];
+    let mut walked = vec![];
+    for (c, col) in run.map.iter().enumerate() {
+        for (r, node) in col.iter().enumerate() {
+            let p = node_at(run, c, r);
+            blobs.push((p.x, p.y, 46.0));
+            for &j in &node.next {
+                let q = node_at(run, c + 1, j);
+                for k in 1..3 {
+                    let m = p.lerp(q, k as f32 / 3.0);
+                    blobs.push((m.x, m.y, 24.0));
+                }
+                if run.trail.windows(2).any(|w| w[0] == (c, r) && w[1] == (c + 1, j)) {
+                    walked.push((p, q));
+                }
+            }
+        }
+    }
+    let floor = run.seed ^ (run.floor as u64 + 1) * 0x5851;
+    let rooms: Vec<Vec2> = blobs.iter().map(|&(x, y, _)| vec2(x, y)).collect();
+    for k in 0..5 {
+        let p = vec2(80.0 + hash01(floor, 500 + k) * 760.0, 140.0 + hash01(floor, 600 + k) * 520.0);
+        blobs.push((p.x, p.y, 20.0 + hash01(floor, 700 + k) * 16.0));
+    }
+    // chasms in the gaps, never under a room or a tunnel
+    let chasms: Vec<(f32, f32, f32)> = (0..24)
+        .map(|k| vec2(80.0 + hash01(floor, 800 + k) * 760.0, 140.0 + hash01(floor, 900 + k) * 520.0))
+        .filter(|p| rooms.iter().all(|q| q.distance(*p) > 75.0))
+        .take(6)
+        .map(|p| (p.x, p.y, 44.0))
+        .collect();
+    let seen: Vec<Vec2> = run.trail.iter().chain(run.choices().iter()).map(|&(c, r)| node_at(run, c, r)).collect();
+    let near_line = |p: Vec2, a: Vec2, b: Vec2| {
+        let t = ((p - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
+        p.distance(a.lerp(b, t)) < 42.0
+    };
+    terrain(FLOOR_LAND, &blobs, &chasms, |p| seen.iter().any(|q| q.distance(p) < 84.0) || walked.iter().any(|&(a, b)| near_line(p, a, b)))
+}
+
+/// A label on a dark strip, so it reads over the land, as on The Below.
+fn strip_label(s: &str, x: f32, y: f32, size: f32, c: Color) {
+    let w = measure(s, size).width;
+    block(Rect::new(x - w / 2.0 - 6.0, y - size - 1.0, w + 12.0, size + 7.0), BG);
+    centered(s, x, y, size, c);
 }
 
 /// Returns the node the player clicked, if it is one they may enter.
+/// The floor is drawn as a closer look at The Below: land round its rooms, turned over where you have
+/// been and where you may go next, the rooms as diamonds on a dotted route.
 pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     status(run);
     text(&run.note, 48.0, 92.0, 18.0, GOLD_C);
     let open = run.choices();
     let mut chosen = None;
+    draw_land(&floor_land(run), FLOOR_LAND, run.floor * 7 + run.seed as usize % 97);
+    let walked = |a: (usize, usize), b: (usize, usize)| run.trail.windows(2).any(|w| w[0] == a && w[1] == b);
+    // the route: the way you came bold, the ways on from here plain, the rest faint
     for (c, col) in run.map.iter().enumerate() {
         for (r, node) in col.iter().enumerate() {
             let p = node_at(run, c, r);
             for &j in &node.next {
                 let q = node_at(run, c + 1, j);
-                let live = run.pos == Some((c, r));
-                draw_line(p.x, p.y, q.x, q.y, 2.0, if live { INK } else { FAINT });
+                if walked((c, r), (c + 1, j)) {
+                    dotted(p, q, 7.0, 2.0, INK);
+                } else if run.pos == Some((c, r)) {
+                    dotted(p, q, 9.0, 1.4, INK);
+                } else {
+                    dotted(p, q, 9.0, 1.0, fade(MUTED, 0.6));
+                }
             }
         }
     }
@@ -2858,23 +2959,29 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
             let p = node_at(run, c, r);
             let can = open.contains(&(c, r));
             let here = run.pos == Some((c, r));
-            let hot = can && (mouse() - p).abs().max_element() < 36.0;
-            let mut icon = node_look(node.kind);
+            let done = !here && run.trail.contains(&(c, r));
             let boss = node.kind == NodeKind::Boss;
+            let size = if boss { 44.0 } else { 32.0 };
+            let hot = can && (mouse() - p).length() < size;
+            let rad = if hot { size + 3.0 } else { size };
+            draw_poly(p.x, p.y, 4, rad, 0.0, if here { INK } else if hot { CARD_HI } else { BG });
+            let edge = if boss { BLOOD } else if can || here { INK } else if done { MUTED } else { fade(MUTED, 0.6) };
+            draw_poly_lines(p.x, p.y, 4, rad, 0.0, if boss || can || here { 2.0 } else { 1.5 }, edge);
+            let icon = if boss { run.boss_def().sprite } else { node_look(node.kind) };
+            let k = if boss { 24.0 } else { 17.0 };
+            let tint = if here { BLACK } else if can || boss { WHITE } else if done { fade(WHITE, 0.3) } else { fade(WHITE, 0.5) };
+            sprite(icon, p.x - k, p.y - k, k * 2.0, tint);
+            let y = p.y + rad + 20.0;
             if boss {
-                icon = run.boss_def().sprite;
-            }
-            let half = if hot { 35.0 } else { 32.0 };
-            let plate_r = Rect::new(p.x - half, p.y - half, half * 2.0, half * 2.0);
-            // where you stand is solid white; the places you may go next are outlined
-            block(plate_r, if here { INK } else if hot { CARD_HI } else { BG });
-            outline(plate_r, if can || here { INK } else { FAINT });
-            sprite(icon, p.x - 24.0, p.y - 24.0, 48.0, if here { BLACK } else if can { WHITE } else { fade(WHITE, 0.35) });
-            let label = if here { "You are here" } else if boss { run.boss_def().name } else { node.kind.name() };
-            if boss && !here {
-                lively_centered(label, p.x, p.y + 66.0, 16.0, BLOOD, Motion::Tremble);
+                let w = measure(run.boss_def().name, 20.0).width;
+                block(Rect::new(p.x - w / 2.0 - 6.0, y - 21.0, w + 12.0, 28.0), BG);
+                lively_centered(run.boss_def().name, p.x, y, 20.0, BLOOD, Motion::Tremble);
+            } else if here {
+                strip_label("You are here", p.x, y, 14.0, INK);
+            } else if done {
+                strip_label("cleared", p.x, y, 14.0, MUTED);
             } else {
-                centered(label, p.x, p.y + 66.0, 16.0, if can || here { INK } else { MUTED });
+                strip_label(node.kind.name(), p.x, y, 14.0, if can { INK } else { MUTED });
             }
             if hot && clicked() {
                 play(Sfx::Click);
@@ -3532,6 +3639,38 @@ pub fn settings() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scattered_rooms_keep_apart_and_their_tunnels_never_cross() {
+        let cross = |a: Vec2, b: Vec2, c: Vec2, d: Vec2| {
+            let s = |p: Vec2, q: Vec2, r: Vec2| (q - p).perp_dot(r - p);
+            s(a, b, c) * s(a, b, d) < 0.0 && s(c, d, a) * s(c, d, b) < 0.0
+        };
+        for seed in 0..400 {
+            let (mut run, _) = Run::new(seed, 0, 0);
+            for floor in 0..6 {
+                run.floor = floor;
+                let links: Vec<(Vec2, Vec2)> = (0..run.map.len())
+                    .flat_map(|c| (0..run.map[c].len()).map(move |r| (c, r)))
+                    .flat_map(|(c, r)| run.map[c][r].next.iter().map(move |&j| (c, r, j)).collect::<Vec<_>>())
+                    .map(|(c, r, j)| (node_at(&run, c, r), node_at(&run, c + 1, j)))
+                    .collect();
+                for (i, &(a, b)) in links.iter().enumerate() {
+                    for &(c, d) in &links[i + 1..] {
+                        assert!(!cross(a, b, c, d), "seed {seed} floor {floor}");
+                    }
+                }
+                for c in 0..run.map.len() {
+                    for r in 1..run.map[c].len() {
+                        let (p, q) = (node_at(&run, c, r - 1), node_at(&run, c, r));
+                        assert!(q.y - p.y > 80.0, "seed {seed} floor {floor}: rooms too close");
+                        // labels and eyes stay on the map, clear of the status bar and the side panel
+                        assert!(p.y > 150.0 && q.y < 640.0 && q.x < 830.0, "seed {seed} floor {floor}: {p} {q}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn display_text_shares_a_few_glyph_sizes_and_body_text_stays_exact() {

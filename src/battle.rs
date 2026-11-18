@@ -477,6 +477,7 @@ impl Battle {
         self.log.push(format!("{} falls. {} steps in.", self.f[1].name, next.name));
         self.fallen = Some(std::mem::replace(&mut self.f[1], next));
         self.wave += 1;
+        debug_assert!(self.wave <= self.waves, "wave {} of {}", self.wave, self.waves);
         let h = self.f[0].mods.heal_after;
         if h > 0 {
             self.f[0].hp = (self.f[0].hp + h).min(self.f[0].max_hp);
