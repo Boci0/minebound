@@ -201,10 +201,11 @@ shards and a choice of one pact from three. A run is **three floors**, each endi
 the third boss to clear the expedition, which opens the next descent and records your best floor
 for that hero.
 
-![A floor map: the path splits across battles, a shrine, a shop, treasure, an encounter and an elite, then rest sites before the boss](docs/screenshots/map.png)
+![A floor map: a patch of The Below with rooms as diamonds on a dotted route, the ground turned over round the rooms already visited, and the boss at the far end](docs/screenshots/map.png)
 
-Each floor is a map of paths. Pick a node in the next column to move on. The first column is always
-a battle. The side panel shows your rites, your
+Each floor is a map of paths, drawn as a closer look at The Below. Pick a room the dotted route
+leads to from where you stand. The ground lies turned over round the rooms you have been in and the
+ones you may enter next. The first rooms are always battles. The side panel shows your rites, your
 blessing and your pacts, plus the floor's **twist**: one random rule for the whole floor that may
 help or hurt.
 
