@@ -11,7 +11,7 @@ mod save;
 mod sfx;
 mod ui;
 
-use macroquad::audio::{load_sound, load_sound_from_bytes, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
+use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
 // named imports win over the prelude's glob: debug builds can be driven from a file
 use ctl::{is_key_down, is_key_pressed, is_mouse_button_pressed};
@@ -65,17 +65,45 @@ struct Music {
     until: f64,
     /// when the current track began fading out, if it is
     fading: Option<f64>,
+    /// the next track's file, being read off the game thread (a read froze the game for ~30 ms)
+    loading: Option<std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>>,
 }
 
 impl Music {
     fn new() -> Music {
-        Music { playing: None, track: usize::MAX, until: 0.0, fading: None }
+        Music { playing: None, track: usize::MAX, until: 0.0, fading: None, loading: None }
     }
 
     /// Plays tracks of `mood`: the next one when the current one ends or N is pressed, and a fade
     /// to a new one when the mood changes. One track is held in memory at a time: a decoded track
     /// is tens of megabytes.
     async fn tick(&mut self, mood: u8) {
+        if let Some(rx) = &self.loading {
+            let read = match rx.try_recv() {
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                r => r.ok(),
+            };
+            self.loading = None;
+            let name = TRACKS[self.track].0;
+            let sound = match read {
+                Some(Ok(bytes)) => load_sound_from_bytes(&bytes).await.map_err(|e| e.to_string()),
+                Some(Err(e)) => Err(e.to_string()),
+                None => Err("reader thread died".into()),
+            };
+            match sound {
+                Ok(s) => {
+                    play_sound(&s, PlaySoundParams { looped: false, volume: ui::music_volume() * MUSIC_VOLUME });
+                    self.playing = Some(s);
+                    self.until = get_time() + TRACKS[self.track].1 + 1.5;
+                }
+                // no music folder next to the exe: stay silent, look again in a while
+                Err(e) => {
+                    eprintln!("music not loaded ({name}): {e}");
+                    self.until = get_time() + 60.0;
+                }
+            }
+            return;
+        }
         let wrong = self.track < TRACKS.len() && TRACKS[self.track].2 != mood;
         if self.playing.is_some() && wrong && self.fading.is_none() {
             self.fading = Some(get_time());
@@ -96,19 +124,9 @@ impl Music {
         let fresh: Vec<usize> = pool.iter().copied().filter(|&i| i != self.track).collect();
         let from = if fresh.is_empty() { &pool } else { &fresh };
         self.track = from[rand::gen_range(0, from.len())];
-        let (name, secs, _) = TRACKS[self.track];
-        match load_sound(&music_path(name)).await {
-            Ok(s) => {
-                play_sound(&s, PlaySoundParams { looped: false, volume: ui::music_volume() * MUSIC_VOLUME });
-                self.playing = Some(s);
-                self.until = get_time() + secs + 1.5;
-            }
-            // no music folder next to the exe: stay silent, look again in a while
-            Err(e) => {
-                eprintln!("music not loaded ({name}): {e}");
-                self.until = get_time() + 60.0;
-            }
-        }
+        let (path, (tx, rx)) = (music_path(TRACKS[self.track].0), std::sync::mpsc::channel());
+        std::thread::spawn(move || tx.send(std::fs::read(path)));
+        self.loading = Some(rx);
     }
 }
 

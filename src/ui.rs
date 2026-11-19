@@ -1641,7 +1641,7 @@ fn draw_shots(shots: &[Shot], now: f64) {
                 quake(if e1 == Element::Stone { 22.0 } else { 12.0 + 4.0 * lvl as f32 });
                 flash(c1);
                 play(Sfx::Strike);
-                hitstop(if k + 1 == lvl { 0.08 + 0.03 * lvl as f64 } else { 0.05 });
+                hitstop(if k + 1 == lvl { 0.04 + 0.02 * lvl as f64 } else { 0.02 });
                 punch();
                 if k == 0 {
                     rite_effects(sh, c, a, z, c2);
@@ -2032,7 +2032,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         play(Sfx::Boom);
         quake(20.0);
         flash(BAD);
-        hitstop(0.09);
+        hitstop(0.05);
         punch();
     }
 
@@ -2143,8 +2143,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         Some(1) => {
             // the enemy bursts apart in slow motion, the sound going dull around it
             play(Sfx::Kill);
-            slowmo(if over { 1.8 } else { 1.2 });
-            hitstop(0.14);
+            slowmo(if over { 1.0 } else { 0.7 });
+            hitstop(0.08);
             punch();
             quake(26.0);
             flash(INK);
@@ -2171,8 +2171,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         Some(_) => {
             // you fall: the same slow, dull moment, in red
             play(Sfx::Lose);
-            slowmo(1.6);
-            hitstop(0.12);
+            slowmo(1.0);
+            hitstop(0.08);
             quake(22.0);
             flash(BAD);
             burst(STAND[0], 110, 480.0, 12.0, BAD);
@@ -2817,7 +2817,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     }
 
     // the result waits until the final blow has played out in slow motion, then pops in
-    let shown = get_time() - fx(|fx| fx.ended_at) - 1.6;
+    let shown = get_time() - fx(|fx| fx.ended_at) - 1.0;
     if over && shown > 0.0 {
         draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, (shown as f32 * 2.0).min(if ending.is_some() { 0.7 } else { 0.45 })));
         if let Some(opened) = ending {
