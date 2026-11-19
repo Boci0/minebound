@@ -139,7 +139,7 @@ game reminds you to right click first.
   damage number to see each step that makes it.
 - A rite deals damage only if its text says so. Bulwark, Lodestone, Mistveil and Sandstorm deal
   none; they only do what they say.
-- **Surge**: each safe flip in a row this turn adds a step, worth +20%, up to 5 steps (+100%).
+- **Surge**: each safe flip in a row this turn adds a step, worth +10%, up to 10 steps (+100%).
   Every rite that deals damage spends one step, so casting early makes later rites weaker. Rites
   that deal no damage spend nothing. A mine wipes all your surge.
 - Casting does not end your turn. Cast, flip some more, and cast again.
@@ -163,10 +163,10 @@ gains a trick of its own (last column), with its own look when cast.
 | Plasma | Ember, Spark | +3 damage, +1 damage per surge | Spends no surge |
 | Mistveil | Tide, Gale | Heal 8, +2 reveals (no damage) | Flag 3 mines on each of your boards |
 | Bulwark | Tide, Stone | Gain 12 shield (no damage) | Your shield won't wear off next turn |
-| Conduction | Tide, Spark | +3 damage, then +2 surge | Steal 2 foe stacks |
+| Conduction | Tide, Spark | +3 damage, then +4 surge | Steal 2 foe stacks |
 | Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, +2 foe mines (no damage) | Foe gets 2 fewer reveals next turn |
 | Thunderclap | Gale, Spark | Break 1 foe crystal, +2 damage | +8 damage per crystal broken |
-| Lodestone | Stone, Spark | Double your shield (adding at most 12, 24 at level 2; no damage) | No limit on the doubling |
+| Lodestone | Stone, Spark | Double your shield (adding at most 12, 24 at level 2; no damage), and it turns brittle: the next rite that hits you is blocked, then all of the shield shatters onto the attacker as damage | No limit on the doubling |
 | Upheaval | Ember, Gale, Stone | You lose 4 HP, +11 damage | Double damage if the foe is at half HP or below |
 | Tempest | Tide, Gale, Spark | +1 damage per reveal used this turn | Unused reveals count too |
 | Geode Surge | Tide, Stone, Spark | +6 damage, and your shield becomes 150% damage, then it's gone | Keep half your shield |
@@ -263,8 +263,8 @@ when you hover it.
 | Resonator | Rare | Each rite's listed damage, shield and healing are 75% stronger |
 | Leech Fang | Rare | Heal for 30% of the damage your rites deal |
 | Ambush Wire | Rare | Deal 10 damage at the start of each wave |
-| Running Start | Rare | Begin each turn with 3 surge |
-| Overcharger | Rare | Each surge step is worth +35% instead of +20% |
+| Running Start | Rare | Begin each turn with 6 surge |
+| Overcharger | Rare | Each surge step is worth +17% instead of +10% |
 | Steady Hands | Rare | Surge carries over between your turns; mines still wipe it |
 | Opening Gambit | Rare | Your first rite each turn deals +100% |
 | Resonant Shards | Rare | Each crystal you claim zaps the enemy for 3 |
@@ -325,7 +325,7 @@ blessing at a time**; taking a new one lets the old one go. Each lifts a single 
 | Leech | Heal for 30% of the damage your rites deal |
 | Vigor | +30 max HP |
 | Sight | +1 reveal each turn |
-| Surge | Begin each turn with 2 surge |
+| Surge | Begin each turn with 4 surge |
 
 ### Enemies
 
@@ -339,17 +339,17 @@ details.
 | Gust Wisp | Normal | The first rite each turn only grazes it, for half damage |
 | Pebble Golem | Normal | Every hit deals 2 less |
 | Brine Leech | Normal | Heals for half the damage it deals |
-| Static Moth | Normal | Jams your surge at 2 |
+| Static Moth | Normal | Jams your surge at 4 |
 | Thorn Creeper | Normal | Every rite that hits it deals 2 back |
-| Ash Rat | Normal | Snatches one of your stacks as its turn starts |
+| Ash Rat | Normal, from floor 2 | Snatches one of your stacks as its turn starts |
 | The Quarrymaster | Elite | Starts with 8 shield; every hit deals 1 less |
 | Gale Duchess | Elite | One extra reveal; the first rite each turn only grazes her |
 | Kiln Tyrant | Elite | Its rites set you burning, and +1 power every turn |
 | Minelayer Queen | Boss, floor 1 | 1 extra mine in your boards; gains a stack when you hit one |
-| The Sapper King | Boss, floor 1 | Starts with 6 shield; snatches one of your stacks each turn |
-| The Undertow | Boss, floor 2 | Heals 2 and gains 2 shield each turn |
+| The Undertow | Boss, floor 1 | Heals 2 and gains 2 shield each turn |
+| The Sapper King | Boss, floor 2 | Starts with 12 shield; snatches one of your stacks each turn |
 | The Tidecaller | Boss, floor 2 | The first rite each turn only grazes her; heals for 30% of damage dealt |
-| Null Cartographer | Boss, floor 3 | One extra reveal, 3 mines pre-flagged; jams your surge at 3 |
+| Null Cartographer | Boss, floor 3 | One extra reveal, 3 mines pre-flagged; jams your surge at 6 |
 | The Deep Engine | Boss, floor 3 | Every hit deals 2 less; +1 power every turn |
 
 Each floor's boss is one of its two, at random; the map shows which one waits for you.
@@ -376,7 +376,7 @@ cut by a bar. Any element fills it.
 | Twist | Effect |
 | --- | --- |
 | Shallow Seams | 1 fewer mine on each of your boards |
-| Tailwind | Begin each turn with 1 surge |
+| Tailwind | Begin each turn with 2 surge |
 | Second Wind | Heal 6 whenever a new wave steps in |
 | Gold Dust | +50% shards from battles |
 | Fault Lines | Mines deal 1 more damage to you (curse) |

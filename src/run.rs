@@ -373,7 +373,7 @@ impl Run {
         let floor = self.floor as i32;
         // bosses grow only past the first ending's floor, so a later ending's boss keeps up with its floor
         let deeper = self.floor.saturating_sub(FLOORS) as i32;
-        let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100, d.power + floor) } else { (d.hp * (220 + 40 * deeper) / 100, d.power + deeper) };
+        let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100 * 125 / 100, d.power + floor + 2) } else { (d.hp * (220 + 40 * deeper) / 100, d.power + deeper) };
         let x = &EXPEDITIONS[self.exp];
         let hp = self.keys.iter().fold(hp * x.hp_pct / 100, |hp, &k| hp * ENDINGS[k].hp_pct / 100);
         let mut m = Mods::default();
@@ -390,7 +390,14 @@ impl Run {
 
     fn random_normal(&mut self) -> Fighter {
         let pool = self.ending().map_or(NORMALS, |e| ENDINGS[e].normals);
-        let d = &pool[self.rng.below(pool.len())];
+        // stack snatchers wait past the first floor
+        let snatches = |d: &EnemyDef| {
+            let mut m = Mods::default();
+            (d.mods)(&mut m);
+            m.pilfer > 0
+        };
+        let pool: Vec<&EnemyDef> = pool.iter().filter(|d| self.floor > 0 || !snatches(d)).collect();
+        let d = pool[self.rng.below(pool.len())];
         self.enemy(d, true, 3)
     }
 
@@ -652,6 +659,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stack_snatchers_wait_past_the_first_floor() {
+        let (mut run, _) = Run::new(1, 0, 0);
+        let rats = |run: &mut Run| (0..200).filter(|_| run.random_normal().mods.pilfer > 0).count();
+        assert_eq!(rats(&mut run), 0);
+        run.floor = 1;
+        assert!(rats(&mut run) > 0);
+    }
+
+    #[test]
     fn a_daily_descent_is_the_same_all_day_and_cursed() {
         let (a, b) = (Run::new_daily(20_000).0, Run::new_daily(20_000).0);
         assert_eq!((a.seed, a.hero, a.exp, a.twist), (b.seed, b.hero, b.exp, b.twist));
@@ -785,8 +801,8 @@ mod tests {
                     run.after_node()
                 }
                 Stage::End(won) => {
-                    // the end screen's totals: a fight won means rite damage dealt, and the best hit is part of it
-                    assert!(run.wins == 0 || (run.dealt > 0 && run.best.0 > 0 && run.best.0 <= run.dealt));
+                    // the end screen's totals: the best hit is part of the rite damage dealt (a fight can be won on a brittle shield alone)
+                    assert!((run.dealt > 0) == (run.best.0 > 0) && run.best.0 <= run.dealt);
                     // every ending's boss that fell is one whose floor was played, in order
                     assert!(run.found.iter().enumerate().all(|(i, &e)| run.keys.get(i) == Some(&e)));
                     return (run, won);

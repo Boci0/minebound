@@ -107,6 +107,8 @@ pub enum Effect {
     DoubleShield(i32),
     /// the caster's shield joins the hit at this percent (no surge), then is gone
     ShieldBlast(i32),
+    /// the caster's shield turns brittle: the next rite that hits it is blocked, then all of it shatters onto the attacker
+    Brittle,
     /// more damage for each burn on the foe as the rite lands
     PerBurn(i32),
     /// more damage for each quarter of its HP the caster has lost (up to 3)
@@ -237,6 +239,7 @@ impl Effect {
                 100 => "all your shield becomes damage".into(),
                 q => format!("your shield becomes {q}% damage"),
             },
+            Brittle => "it turns brittle".into(),
             PerBurn(v) => format!("+{} damage per burn on foe", at_level(v, lvl)),
             PerQuarterLost(v) => format!("+{} damage per quarter of HP lost", at_level(v, lvl)),
             SelfDamage(v) => format!("you lose {} HP", at_level(v, lvl)),
@@ -282,7 +285,7 @@ pub static BLESSINGS: &[Blessing] = &[
     blessing("Leech", "Heal for 30% of the damage your rites deal.", |m| m.lifesteal_pct += 30),
     blessing("Vigor", "+30 max HP.", |m| m.max_hp += 30),
     blessing("Sight", "+1 reveal each turn.", |m| m.reveals += 1),
-    blessing("Surge", "Begin each turn with 2 surge.", |m| m.surge_start += 2),
+    blessing("Surge", "Begin each turn with 4 surge.", |m| m.surge_start += 4),
 ];
 
 /// Burnt onto a rite, a brand adds its effect. It costs no extra gem and does not grow with the rite.
@@ -321,10 +324,10 @@ pub static COMBOS: &[Combo] = &[
     combo("Plasma", ["Plasma Lance", "Plasma Nova"], &[Ember, Spark], &[Damage(3), PerSurge(1)], Some(KeepSurge)),
     combo("Mistveil", ["Mist Shroud", "Veil of Mists"], &[Tide, Gale], &[Heal(8), Reveal(2)], Some(Scout(3))),
     combo("Bulwark", ["Rampart", "Citadel"], &[Tide, Stone], &[Shield(12)], Some(Hold)),
-    combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Damage(3), Surge(2)], Some(Steal(2))),
+    combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Damage(3), Surge(4)], Some(Steal(2))),
     combo("Sandstorm", ["Dust Devil", "Desert Wrath"], &[Gale, Stone], &[Weaken(2), Bury(2)], Some(Blind(2))),
     combo("Thunderclap", ["Thunderstrike", "Skybreaker"], &[Gale, Spark], &[Shatter(1), Damage(2)], Some(PerShatter(8))),
-    combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[DoubleShield(12)], None),
+    combo("Lodestone", ["Ironheart", "Magnetar"], &[Stone, Spark], &[DoubleShield(12), Brittle], None),
     combo("Upheaval", ["Cataclysm", "Worldbreaker"], &[Ember, Gale, Stone], &[SelfDamage(4), Damage(11)], Some(Execute)),
     combo("Tempest", ["Hurricane", "Eye of the Storm"], &[Tide, Gale, Spark], &[PerReveal(1)], Some(Unused)),
     combo("Geode Surge", ["Crystal Tide", "Geode Titan"], &[Tide, Stone, Spark], &[Damage(6), ShieldBlast(150)], Some(KeepHalf)),
@@ -466,8 +469,8 @@ pub static CHARMS: &[Charm] = &[
     charm("Resonator", Rare, (HD + 46, PLAIN), "combo_pct", "Each rite's listed damage, shield and healing are 75% stronger.", |m| m.combo_pct += 75),
     charm("Leech Fang", Rare, (HD + 47, PLAIN), "lifesteal_pct", "Heal for 30% of the damage your rites deal.", |m| m.lifesteal_pct += 30),
     charm("Ambush Wire", Rare, (HD + 48, PLAIN), "opening", "Deal 10 damage at the start of each wave.", |m| m.opening += 10),
-    charm("Running Start", Rare, (HD + 49, PLAIN), "surge_start", "Begin each turn with 3 surge.", |m| m.surge_start += 3),
-    charm("Overcharger", Rare, (HD + 50, PLAIN), "surge_pct", "Each surge step is worth +35% instead of +20%.", |m| m.surge_pct += 15),
+    charm("Running Start", Rare, (HD + 49, PLAIN), "surge_start", "Begin each turn with 6 surge.", |m| m.surge_start += 6),
+    charm("Overcharger", Rare, (HD + 50, PLAIN), "surge_pct", "Each surge step is worth +17% instead of +10%.", |m| m.surge_pct += 7),
     charm("Steady Hands", Rare, (HD + 51, PLAIN), "keep_surge", "Surge carries over between your turns. Mines still wipe it.", |m| m.keep_surge += 1),
     charm("Opening Gambit", Rare, (HD + 52, PLAIN), "first_pct", "Your first rite each turn deals +100%.", |m| m.first_pct += 100),
     charm("Resonant Shards", Rare, (HD + 53, PLAIN), "claim_zap", "Each crystal you claim zaps the enemy for 3.", |m| m.claim_zap += 3),
@@ -523,7 +526,7 @@ pub static NORMALS: &[EnemyDef] = &[
     }),
     foe("Pebble Golem", HD + 6, "Stone hide: every hit deals 2 less.", 20, 1, &[Stone, Ember], 3, |m| m.armor = 2),
     foe("Brine Leech", HD + 7, "Heals for half the damage it deals.", 16, 1, &[Tide, Gale], 2, |m| m.lifesteal_pct = 50),
-    foe("Static Moth", HD + 8, "Jams your surge at 2.", 12, 2, &[Spark, Tide], 3, |m| m.foe_surge_cap = 2),
+    foe("Static Moth", HD + 8, "Jams your surge at 4.", 12, 2, &[Spark, Tide], 3, |m| m.foe_surge_cap = 4),
     foe("Thorn Creeper", HD + 9, "Every rite that hits it deals 2 back.", 18, 1, &[Stone, Gale], 3, |m| m.thorns = 2),
     foe("Ash Rat", HD + 10, "Snatches one of your stacks as its turn starts.", 10, 2, &[Ember, Gale], 2, |m| m.pilfer = 1),
 ];
@@ -552,15 +555,16 @@ pub static BOSSES: &[[EnemyDef; 2]] = &[
             m.foe_mines = 1;
             m.foe_mine_gift = 1
         }),
-        foe("The Sapper King", HD + 15, "Starts with 6 shield. Snatches one of your stacks each turn.", 46, 2, &[Ember, Gale, Spark], 4, |m| {
-            m.start_shield = 6;
-            m.pilfer = 1
+        // stack snatchers wait past the first floor: they made it a chore
+        foe("The Undertow", HD + 16, "Each turn: heals 2 and gains 2 shield.", 46, 2, &[Tide, Gale, Stone], 4, |m| {
+            m.regen = 2;
+            m.shield_turn = 2
         }),
     ],
     [
-        foe("The Undertow", HD + 16, "Each turn: heals 2 and gains 2 shield.", 105, 3, &[Tide, Gale, Stone], 4, |m| {
-            m.regen = 2;
-            m.shield_turn = 2
+        foe("The Sapper King", HD + 15, "Starts with 12 shield. Snatches one of your stacks each turn.", 105, 3, &[Ember, Gale, Spark], 4, |m| {
+            m.start_shield = 12;
+            m.pilfer = 1
         }),
         foe("The Tidecaller", HD + 17, "The first rite each turn only grazes her, for half damage. Heals for 30% of damage dealt.", 96, 3, &[Tide, Spark, Gale], 4, |m| {
             m.evade = 1;
@@ -569,10 +573,10 @@ pub static BOSSES: &[[EnemyDef; 2]] = &[
         }),
     ],
     [
-        foe("Null Cartographer", HD + 18, "One extra reveal, 3 mines pre-flagged. Jams your surge at 3.", 135, 4, &[Spark, Gale, Ember], 5, |m| {
+        foe("Null Cartographer", HD + 18, "One extra reveal, 3 mines pre-flagged. Jams your surge at 6.", 135, 4, &[Spark, Gale, Ember], 5, |m| {
             m.reveals = 1;
             m.scouts = 3;
-            m.foe_surge_cap = 3
+            m.foe_surge_cap = 6
         }),
         foe("The Deep Engine", HD + 19, "Iron plating: every hit deals 2 less. +1 power every turn.", 125, 3, &[Stone, Ember, Tide], 5, |m| {
             m.armor = 2;
@@ -623,9 +627,9 @@ pub static ENDINGS: &[Ending] = &[
                 m.pilfer = 1;
                 m.lifesteal_pct = 50
             }),
-            foe("Ink Jelly", HD + 68, "Every rite that hits it deals 3 back. Jams your surge at 3.", 16, 2, &[Tide, Spark], 3, |m| {
+            foe("Ink Jelly", HD + 68, "Every rite that hits it deals 3 back. Jams your surge at 6.", 16, 2, &[Tide, Spark], 3, |m| {
                 m.thorns = 3;
-                m.foe_surge_cap = 3
+                m.foe_surge_cap = 6
             }),
             foe("Deepkin", HD + 69, "Heals 3 each turn. Every hit deals 1 less.", 22, 2, &[Tide, Stone], 3, |m| {
                 m.regen = 3;
@@ -711,12 +715,12 @@ pub static ENDINGS: &[Ending] = &[
                 m.armor = 3
             }),
         ],
-        elite: foe("The Foreman", HD + 80, "Jams your surge at 2. Every hit deals 2 less.", 52, 3, &[Stone, Spark, Ember], 4, |m| {
-            m.foe_surge_cap = 2;
+        elite: foe("The Foreman", HD + 80, "Jams your surge at 4. Every hit deals 2 less.", 52, 3, &[Stone, Spark, Ember], 4, |m| {
+            m.foe_surge_cap = 4;
             m.armor = 2
         }),
-        boss: foe("The Silent Engine", HD + 81, "Jams your surge at 2 and plants 2 more mines in your boards. Every hit deals 1 less.", 200, 5, &[Spark, Stone, Tide], 5, |m| {
-            m.foe_surge_cap = 2;
+        boss: foe("The Silent Engine", HD + 81, "Jams your surge at 4 and plants 2 more mines in your boards. Every hit deals 1 less.", 200, 5, &[Spark, Stone, Tide], 5, |m| {
+            m.foe_surge_cap = 4;
             m.foe_mines = 2;
             m.armor = 1
         }),
@@ -832,7 +836,7 @@ const NOTHING: Tweak = |_| {};
 
 pub static TWISTS: &[Twist] = &[
     twist("Shallow Seams", 1, "1 fewer mine on each of your boards.", |m| m.fewer_mines += 1, NOTHING),
-    twist("Tailwind", 1, "Begin each turn with 1 surge.", |m| m.surge_start += 1, NOTHING),
+    twist("Tailwind", 1, "Begin each turn with 2 surge.", |m| m.surge_start += 2, NOTHING),
     twist("Second Wind", 1, "Heal 6 whenever a new wave steps in.", |m| m.heal_after += 6, NOTHING),
     twist("Gold Dust", 1, "+50% shards from battles.", |m| m.shard_pct += 50, NOTHING),
     twist("Fault Lines", -1, "Mines deal 1 more damage to you.", |m| m.mine_guard -= 1, NOTHING),

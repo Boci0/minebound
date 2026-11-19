@@ -655,6 +655,14 @@ fn keyword(word: &str) -> Option<(Color, Option<Motion>)> {
         "shard" | "shards" => still(GOLD),
         "surge" | "spark" => still(rgb(0xffe066)),
         "reveal" | "reveals" | "flag" | "flagged" | "gale" => still(rgb(0x5fe0c8)),
+        "ignite" => Some((rgb(0xff8a4c), Some(Motion::Wave))),
+        "douse" => Some((rgb(0x6fb6ff), Some(Motion::Wave))),
+        "gust" => Some((rgb(0x5fe0c8), Some(Motion::Wave))),
+        "crush" | "stone" => still(rgb(0xc9a77c)),
+        "arc" => Some((rgb(0xffe066), Some(Motion::Tremble))),
+        "break" | "broken" => Some((BLOOD, Some(Motion::Tremble))),
+        "brittle" => Some((rgb(0x6fb6ff), Some(Motion::Tremble))),
+        "marked" => Some((INK, Some(Motion::Wave))),
         _ => None,
     }
 }
@@ -671,7 +679,7 @@ fn glossary(word: &str) -> Option<(&'static str, &'static str)> {
         "armor" => ("Armor", "Every hit on it deals this much less, down to 1."),
         "evade" => ("Evade", "The first rite cast at it each turn misses: no damage, no effects, and the gems are still spent."),
         "grazes" | "graze" => ("Graze", "The first rite cast at it each turn deals half damage. Everything else the rite does still lands."),
-        "surge" => ("Surge", "Each safe flip in a row adds a step, +20% rite damage, up to 5. Every rite you cast spends a step, and a mine wipes them all."),
+        "surge" => ("Surge", "Each safe flip in a row adds a step, +10% rite damage, up to 10. Every rite you cast spends a step, and a mine wipes them all."),
         "overpressure" => ("Overpressure", "From turn 13 on, every rite deals 2 more each turn, so no fight can stall forever."),
         "power" => ("Power", "Damage for each gem a rite spends, before its bonus and surge."),
         "duds" => ("Duds", "Mines that will be found harmlessly this wave instead of going off."),
@@ -679,11 +687,21 @@ fn glossary(word: &str) -> Option<(&'static str, &'static str)> {
         "crystal" | "crystals" => ("Crystal", "Clear every safe tile around it to claim a gem of its board's element. A mine beside it breaks it. The corner number counts the mines touching it."),
         "rare" => ("Rare", "Changes how a turn plays. Offered less often than Common pacts; 45 shards in a shop."),
         "legendary" => ("Legendary", "Bends a core rule. Offered rarely; 65 shards in a shop."),
+        "mark" => ("Mark", "The elements of the last rite that hit a fighter. A rite bringing any other element reacts."),
+        "ignite" => ("Ignite", "Ember reacts: +3 burn on the target."),
+        "douse" => ("Douse", "Tide reacts: +4 shield for the caster."),
+        "gust" => ("Gust", "Gale reacts: +1 reveal for the caster."),
+        "crush" => ("Crush", "Stone reacts: +4 damage, before surge."),
+        "arc" => ("Arc", "Spark reacts: +2 surge for the caster."),
+        "brittle" => ("Brittle", "The next rite that hits this shield is blocked, then all of the shield shatters and the attacker takes that much damage."),
+        "break" | "broken" => ("Break", "The enemy loads its rites at the end of its turn and fires them as its next turn starts. Deal this much rite damage in your turn and they shatter."),
         _ => return None,
     })
 }
 
 thread_local!(static TIP: std::cell::Cell<Option<(&'static str, &'static str)>> = const { std::cell::Cell::new(None) });
+
+thread_local!(static MARK_TIP: std::cell::RefCell<Option<Vec<Element>>> = const { std::cell::RefCell::new(None) });
 
 thread_local!(static STEPS: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(vec![]) });
 
@@ -737,7 +755,27 @@ fn draw_tip() {
             right(v, r.x + r.w - 14.0, y, 15.0, c);
         }
     }
-    let Some((head, body)) = TIP.with(|c| c.take()) else { return };
+    let tip = TIP.with(|c| c.take());
+    if let Some(mark) = MARK_TIP.with(|c| c.borrow_mut().take()) {
+        // every element by its sign: the ones in the mark set off nothing, the rest react
+        let all = [Element::Ember, Element::Tide, Element::Gale, Element::Stone, Element::Spark];
+        let h = 84.0 + all.len() as f32 * 26.0;
+        let m = mouse();
+        let r = Rect::new((m.x + 16.0).min(VIEW.x - 370.0), if m.y + 20.0 + h > VIEW.y { m.y - 12.0 - h } else { m.y + 20.0 }, 358.0, h);
+        plate(r, CARD);
+        text("Marked", r.x + 14.0, r.y + 24.0, 16.0, INK);
+        text("Hit last by these. A rite with any other reacts:", r.x + 14.0, r.y + 48.0, 15.0, MUTED);
+        for (k, &e) in all.iter().enumerate() {
+            let y = r.y + 80.0 + k as f32 * 26.0;
+            let marked = mark.contains(&e);
+            sign(e, vec2(r.x + 24.0, y - 5.0), 8.0, if marked { FAINT } else { INK });
+            text(element_tip(e).0, r.x + 44.0, y, 15.0, if marked { FAINT } else { INK });
+            let what = if marked { "in the mark: nothing" } else { reaction_text(e) };
+            text(what, r.x + 108.0, y, 15.0, if marked { FAINT } else { MUTED });
+        }
+        return;
+    }
+    let Some((head, body)) = tip else { return };
     let lines = wrap(body, 290.0, 15.0);
     let h = 44.0 + lines.len() as f32 * 19.0;
     let m = mouse();
@@ -1464,12 +1502,70 @@ fn life(r: Rect, frac: f32, ghost: f32) {
 fn conditions(f: &Fighter) -> String {
     let mut st = format!("Power {}", f.power);
     let dodge = if f.mods.graze > 0 { "Graze" } else { "Evade" };
-    for (label, v) in [("Shield", f.shield), ("Armor", f.mods.armor), (dodge, f.evades_left), ("Burn", f.burn), ("Weak", f.weak), ("Duds", f.duds)] {
+    let shield = if f.brittle { "Brittle shield" } else { "Shield" };
+    for (label, v) in [(shield, f.shield), ("Armor", f.mods.armor), (dodge, f.evades_left), ("Burn", f.burn), ("Weak", f.weak), ("Duds", f.duds)] {
         if v > 0 {
             st += &format!(" · {label} {v}");
         }
     }
+    if !f.mark.is_empty() {
+        st += " · Marked";
+    }
     st
+}
+
+/// A fighter's conditions, then its mark in the gem signs rites use. Hovering the mark shows what reacts.
+fn status_line(f: &Fighter, x: f32, y: f32) {
+    let s = conditions(f);
+    rich(&s, x, y, 15.0, INK);
+    let end = x + measure(&s, 15.0).width;
+    let mut gx = end + 14.0;
+    for &e in &f.mark {
+        gem(e, vec2(gx, y - 5.0), 7.0);
+        gx += 20.0;
+    }
+    let from = end - measure("Marked", 15.0).width;
+    if !f.mark.is_empty() && !modal() && Rect::new(from, y - 15.0, gx - from, 20.0).contains(mouse()) {
+        MARK_TIP.with(|c| *c.borrow_mut() = Some(f.mark.clone()));
+    }
+}
+
+/// What a rite bringing `e` to a target whose mark lacks it sets off.
+fn reaction_text(e: Element) -> &'static str {
+    match e {
+        Element::Ember => "ignite: +3 burn on it",
+        Element::Tide => "douse: +4 shield for you",
+        Element::Gale => "gust: +1 reveal for you",
+        Element::Stone => "crush: +4 damage",
+        Element::Spark => "arc: +2 surge for you",
+    }
+}
+
+/// An element's name and the reaction it sets off, for its gem sign.
+fn element_tip(e: Element) -> (&'static str, &'static str) {
+    match e {
+        Element::Ember => ("Ember", "Reacts as ignite: an Ember rite on a target whose mark lacks Ember puts 3 more burn on it."),
+        Element::Tide => ("Tide", "Reacts as douse: a Tide rite on a target whose mark lacks Tide gives you 4 shield."),
+        Element::Gale => ("Gale", "Reacts as gust: a Gale rite on a target whose mark lacks Gale gives you 1 more reveal."),
+        Element::Stone => ("Stone", "Reacts as crush: a Stone rite on a target whose mark lacks Stone deals 4 more damage."),
+        Element::Spark => ("Spark", "Reacts as arc: a Spark rite on a target whose mark lacks Spark gives you 2 surge."),
+    }
+}
+
+/// The word a rite bringing `e` to a marked target sets off.
+fn react_word(e: Element) -> &'static str {
+    match e {
+        Element::Ember => "ignite",
+        Element::Tide => "douse",
+        Element::Gale => "gust",
+        Element::Stone => "crush",
+        Element::Spark => "arc",
+    }
+}
+
+/// A rite's name at the level `f` holds it.
+fn foe_title(f: &Fighter, c: &Combo) -> String {
+    c.title(f.level(c)).to_string()
 }
 
 /// Held gems counted by element: the fighter's own elements first (even at 0), then any taken from others.
@@ -1994,6 +2090,34 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 }
             }
             Event::Proc { .. } => {}
+            Event::Load => {
+                play(Sfx::Charge);
+                let at = queued(now);
+                fx(|fx| fx.floats.push((STAND[1] + vec2(280.0, 70.0), "LOADED".into(), BLOOD, at, 26.0)));
+            }
+            Event::Break => {
+                play(Sfx::Boom);
+                quake(14.0);
+                let at = fx(|fx| fx.shots.last().map_or(now, lands_at));
+                fx(|fx| fx.floats.push((STAND[1] + vec2(280.0, 40.0), "BROKEN".into(), BLOOD, at, 40.0)));
+            }
+            Event::Brittle { side } => {
+                play(Sfx::Boom);
+                quake(10.0);
+                let at = fx(|fx| fx.shots.last().map_or(now, lands_at));
+                let pos = STAND[side] + if side == 1 { vec2(-300.0, 10.0) } else { vec2(170.0, -50.0) };
+                fx(|fx| fx.floats.push((pos, "SHATTERED".into(), rgb(0x6fb6ff), at, 30.0)));
+            }
+            Event::React { from, element } => {
+                let word = react_word(element);
+                let col = keyword(word).map_or(INK, |k| k.0);
+                // beside the target, as the bolt that set it off lands; several stack downward
+                let at = fx(|fx| fx.shots.last().map_or(now, lands_at));
+                let n = fx(|fx| fx.floats.iter().filter(|f| f.3 == at).count()) as f32;
+                let side = 1 - from;
+                let pos = STAND[side] + if side == 1 { vec2(-300.0, 40.0 + 30.0 * n) } else { vec2(170.0, -20.0 + 30.0 * n) };
+                fx(|fx| fx.floats.push((pos, word.to_uppercase(), col, at, 26.0)));
+            }
         }
     }
     // a banner as each turn starts, once the last turn's actions have played out; the new side
@@ -2202,24 +2326,33 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         label("HP", ex, 236.0);
         right(&format!("{} / {}", bar[1], foe.max_hp), ex + FOE.w, 236.0, 16.0, INK);
         life(Rect::new(ex, 244.0, FOE.w, 8.0), bar[1] as f32 / foe.max_hp as f32, ghost[1] / foe.max_hp as f32);
-        rich(&conditions(foe), ex, 276.0, 15.0, INK);
-        // a felled enemy throws nothing more
-        let (what, signs, dmg) = match b.best_combo(1, &foe.stacks).filter(|_| bar[1] > 0) {
-            Some(c) => (c.name, foe.cost(c), b.hit_damage(1, c)),
-            None => ("nothing yet", vec![], 0),
+        status_line(foe, ex, 276.0);
+        // what it has loaded fires as its next turn starts; a felled enemy throws nothing more
+        let loaded: Vec<&'static Combo> = if bar[1] > 0 && fallen.is_none() { foe.loaded.clone() } else { vec![] };
+        let what = match loaded.as_slice() {
+            [] => "nothing loaded".to_string(),
+            [c] => foe_title(foe, c),
+            [c, rest @ ..] => format!("{} +{}", foe_title(foe, c), rest.len()),
         };
         let mut x = ex + FOE.w;
-        if dmg > 0 {
-            let s = format!("{dmg} dmg");
-            right(&s, x, 294.0, 16.0, INK);
+        if !loaded.is_empty() {
+            let s = format!("{} dmg", b.loaded_damage());
+            right(&s, x, 294.0, 16.0, BLOOD);
             x -= measure(&s, 16.0).width + 12.0;
+            for &e in foe.cost(loaded[0]).iter().rev() {
+                gem(e, vec2(x - 8.0, 289.0), 8.0);
+                x -= 20.0;
+            }
+            // the break: how much of it your rites have dealt this turn
+            let (took, need) = (foe.took.min(foe.break_at), foe.break_at);
+            rich(&format!("break {took}/{need}"), ex, 294.0, 15.0, INK);
+            let w = 90.0;
+            let bx = ex + measure(&format!("break {took}/{need}"), 15.0).width + 10.0;
+            draw_rectangle(bx, 288.0, w, 4.0, FAINT);
+            draw_rectangle(bx, 288.0, w * took as f32 / need.max(1) as f32, 4.0, BLOOD);
         }
-        for &e in signs.iter().rev() {
-            gem(e, vec2(x - 8.0, 289.0), 8.0);
-            x -= 20.0;
-        }
-        right(what, x - 4.0, 294.0, 16.0, INK);
-        right("NEXT", x - 16.0 - measure(what, 16.0).width, 294.0, 15.0, MUTED);
+        right(&what, x - 4.0, 294.0, 16.0, if loaded.is_empty() { MUTED } else { INK });
+        right("NEXT", x - 16.0 - measure(&what, 16.0).width, 294.0, 15.0, MUTED);
 
         // its board, shrunk to a preview, and its stacks
         let fb = foe.board();
@@ -2280,7 +2413,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     label("HP", hx, 506.0);
     right(&format!("{} / {}", bar[0], me.max_hp), hx + 330.0, 506.0, 16.0, INK);
     life(Rect::new(hx, 514.0, 330.0, 8.0), bar[0] as f32 / me.max_hp as f32, ghost[0] / me.max_hp as f32);
-    rich(&conditions(me), hx, 546.0, 15.0, INK);
+    status_line(me, hx, 546.0);
     let held = by_element(&me.elements, free.iter().map(|&k| me.stacks[k]));
     let chip_step = 78.0f32.min(330.0 / held.len().max(1) as f32);
     let chip = |j: usize| Rect::new(hx + j as f32 * chip_step, 596.0, chip_step - 10.0, 40.0);
@@ -2312,8 +2445,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     right(&times, x, 316.0, 15.0, if surge > 0 { INK } else { MUTED });
     x -= measure(&times, 15.0).width + 14.0;
     for k in (0..cap).rev() {
-        pip(vec2(x - 6.0, 311.0), 6.0, k < surge);
-        x -= 17.0;
+        pip(vec2(x - 5.0, 311.0), 5.0, k < surge);
+        x -= 13.0;
     }
     right("SURGE", x - 2.0, 316.0, 15.0, MUTED);
     // a board dealt anew (fewer tiles turned than a moment ago) or another one put up drops in, tile by tile
@@ -2464,6 +2597,9 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         let t = free.iter().filter(|&&k| me.stacks[k] == e).map(|&k| stack_t[0][k.min(15)]).fold(0.0, f64::max);
         sign(e, vec2(r.x + 20.0, r.center().y), 10.0 * if n > 0 { bounce(t) } else { 1.0 }, if n > 0 { el_color(e) } else { FAINT });
         text(&n.to_string(), r.x + 38.0, r.center().y + 7.0, 20.0, if n > 0 { INK } else { MUTED });
+        if drag.is_none() && r.contains(mouse()) {
+            tip(element_tip(e));
+        }
         if hot && clicked() {
             drag = free.iter().rev().find(|&&k| me.stacks[k] == e).copied();
             fx(|fx| fx.drag_from = mouse());
@@ -2583,8 +2719,14 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         } else {
             text(c.title(lvl), rx, y + 30.0, 24.0, if bright { INK } else { MUTED });
         }
+        let mut after = rx + measure(c.title(lvl), 24.0).width + 10.0;
         if let Some(br) = me.brand(c) {
-            text(br.name, rx + measure(c.title(lvl), 24.0).width + 10.0, y + 30.0, 14.0, ACCENT);
+            text(br.name, after, y + 30.0, 14.0, ACCENT);
+            after += measure(br.name, 14.0).width + 10.0;
+        }
+        let reacts: Vec<&str> = b.reactions(0, c).into_iter().map(react_word).collect();
+        if !reacts.is_empty() {
+            rich(&reacts.join(" "), after, y + 30.0, 14.0, INK);
         }
         // one socket per gem the rite takes, right-aligned, then the toll sockets any gem fills
         let mut unslot = None;
@@ -3570,18 +3712,19 @@ pub fn hold_for_rules(on: bool) {
 pub fn rules() -> bool {
     let press = is_mouse_button_pressed(MouseButton::Left) && !SETTINGS.with(|s| s.get());
     draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.7));
-    let panel = Rect::new(300.0, 96.0, 680.0, 528.0);
+    let panel = Rect::new(280.0, 40.0, 720.0, 640.0);
     plate(panel, CARD);
-    stamped("How to play", 640.0, 150.0, 38.0, INK);
-    let mut y = 196.0;
+    stamped("How to play", 640.0, 94.0, 38.0, INK);
+    let mut y = 136.0;
     for line in [
         "Each board holds crystals of one element. Clear every safe tile around a crystal to claim a gem of that element.",
         "Numbers count the mines touching a tile. A crystal shows its count in the corner. Right-click a tile to flag it.",
         "A mine costs HP, wipes your surge, breaks the crystals beside it and ends your turn.",
-        "Safe flips in a row build surge: +20% rite damage per step. Every rite you cast spends a step, so think about when to fire.",
+        "Safe flips in a row build surge: +10% rite damage per step, up to 10. Every rite you cast spends a step, so think about when to fire.",
         "Drag gems into a rite's sockets to cast it. Gems no rite can use wait in your stacks.",
         "Swap boards with the tabs under yours; it is free. Some rites reach into the enemy's board.",
-        "Words that float can be hovered for what they mean.",
+        "The enemy loads its rites at the end of its turn and fires them when its next turn starts. Deal the break damage first and they shatter.",
+        "A rite marks its target with its elements. The next rite bringing a new element reacts. Words that float can be hovered.",
     ] {
         y = wrapped(line, panel.x + 40.0, y, panel.w - 80.0, 17.0, INK) + 12.0;
     }
