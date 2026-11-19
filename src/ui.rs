@@ -3122,7 +3122,7 @@ pub fn pick(options: &[usize]) -> Option<usize> {
 /// A boss fell: the player picks one skill to upgrade. Returns its index in `COMBOS`.
 pub fn upgrade(run: &Run, ids: &[usize]) -> Option<usize> {
     lively_centered("The boss falls", 640.0, 128.0, 44.0, GOLD, Motion::Wave);
-    centered("Upgrade one rite. It hits harder, takes a new name and look, and needs one more gem.", 640.0, 164.0, 18.0, MUTED);
+    centered("Claim its strength. One rite grows fiercer, and hungrier.", 640.0, 164.0, 18.0, MUTED);
     let n = ids.len() as f32;
     let (w, gap) = (280.0, 20.0);
     let x0 = 640.0 - (n * w + (n - 1.0) * gap) / 2.0;
@@ -3172,7 +3172,7 @@ thread_local!(static BRANDING: std::cell::Cell<Option<usize>> = const { std::cel
 pub fn brand(run: &Run, offers: &[usize]) -> Option<(usize, usize)> {
     let Some(chosen) = BRANDING.with(|b| b.get()) else {
         lively_centered("The elite falls", 640.0, 200.0, 44.0, GOLD, Motion::Wave);
-        centered("Take a brand. Burnt onto a rite, it adds its effect for no extra gem. A rite holds one.", 640.0, 236.0, 18.0, MUTED);
+        centered("Claim its mark. Burnt into a rite, it asks no gem in return.", 640.0, 236.0, 18.0, MUTED);
         let x0 = 640.0 - (offers.len() as f32 * 300.0 - 20.0) / 2.0;
         for (k, &id) in offers.iter().enumerate() {
             let r = Rect::new(x0 + k as f32 * 300.0, 280.0, 280.0, 180.0);
@@ -3187,7 +3187,7 @@ pub fn brand(run: &Run, offers: &[usize]) -> Option<(usize, usize)> {
     };
     let b = &BRANDS[chosen];
     lively_centered(&format!("Burn {} onto a rite", b.name), 640.0, 128.0, 40.0, GOLD, Motion::Wave);
-    centered("A rite holds one brand: a new one replaces the old.", 640.0, 164.0, 18.0, MUTED);
+    centered("A rite bears one brand. A new burn sears the old away.", 640.0, 164.0, 18.0, MUTED);
     let ids = run.rites();
     let n = ids.len() as f32;
     let (w, gap) = (280.0, 20.0);
