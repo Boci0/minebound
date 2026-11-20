@@ -986,18 +986,21 @@ impl Battle {
 
     /// The AI's best pick on `f`'s board `k`: (tile, true to mine it or false to vent it, worth).
     /// A crystal is worth its gem less what mining it would bring down; a vent is worth the tiles it
-    /// eases, most of all those one crack from caving in.
-    fn ai_pick(f: &Fighter, k: usize) -> Option<(usize, bool, f32)> {
+    /// eases, most of all those one crack from caving in. A `bold` fighter (the hero bot) weighs a
+    /// cave-in against the HP it has left, as a player would: 6 damage at full HP is cheap for a gem.
+    fn ai_pick(f: &Fighter, k: usize, bold: bool) -> Option<(usize, bool, f32)> {
         let b = &f.boards[k];
         let hurt = (CAVE_DMG - f.mods.mine_guard).max(0) as f32;
+        let cave = if bold { 0.2 + 3.0 * hurt / f.hp.max(1) as f32 } else { 0.5 + hurt / 8.0 };
         let mine = (0..N).filter(|&i| b.live(i)).map(|i| {
             let fell = b.would_cave(i);
             let lost = fell.iter().filter(|&&j| b.live(j)).count() as f32;
-            (i, true, 1.0 - fell.len() as f32 * (0.5 + hurt / 8.0) - lost * 0.7)
+            (i, true, 1.0 - fell.len() as f32 * cave - lost * 0.7)
         });
         let vent = (0..N).map(|i| {
             let eased = b.vent_eases(i);
-            let worth = eased.iter().map(|&j| if b.tiles[j].crack + 1 == CAVE { 0.3 } else { 0.06 }).sum::<f32>();
+            // a vent only pays off as safer mining later, so it is worth as much as cave-ins are feared
+            let worth = eased.iter().map(|&j| if b.tiles[j].crack + 1 == CAVE { 0.3 } else { 0.06 }).sum::<f32>() * cave / 1.25;
             (i, false, if eased.is_empty() { f32::MIN } else { worth.min(0.9) })
         });
         mine.chain(vent).max_by(|x, y| x.2.total_cmp(&y.2))
@@ -1023,11 +1026,10 @@ impl Battle {
         let lethal = armed && self.attack_damage(a) >= self.f[1 - a].hp + self.f[1 - a].shield;
         let can_reveal = f.reveals_left > 0;
         if can_reveal && !lethal {
-            // the best pick on any board, leaning toward the element it holds least of; it takes one
-            // cave-in for a gem, never more
+            // the best pick on any board, leaning toward the element it holds least of
             let held = |k: usize| f.stacks.iter().filter(|&&e| e == f.boards[k].element).count() as f32;
             let pick = (0..f.boards.len())
-                .filter_map(|k| Self::ai_pick(f, k).map(|(i, mine, worth)| (k, i, mine, worth - 0.05 * held(k))))
+                .filter_map(|k| Self::ai_pick(f, k, a == 0).map(|(i, mine, worth)| (k, i, mine, worth - 0.05 * held(k))))
                 .max_by(|x, y| x.3.total_cmp(&y.3))
                 .filter(|p| p.3 > -0.4);
             if let Some((k, i, mine, _)) = pick {

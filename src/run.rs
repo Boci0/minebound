@@ -368,13 +368,15 @@ impl Run {
     }
 
     /// `slow`: how many fewer tiles it flips per turn than a hero. Lesser foes sweep slower.
-    fn enemy(&self, d: &EnemyDef, scale: bool, slow: i32) -> Fighter {
+    /// `hp_pct`: its kind's share of HP on top of the floor's scaling.
+    fn enemy(&self, d: &EnemyDef, scale: bool, slow: i32, hp_pct: i32) -> Fighter {
         // an ending's floor scales on from the last one: each ending past the first is deeper still
         let floor = self.floor as i32;
         // bosses grow only past the first ending's floor, so a later ending's boss keeps up with its floor;
         // +1 power since bosses load every turn instead of saving up for one big blow (smaller loads break easier)
         let deeper = self.floor.saturating_sub(FLOORS) as i32;
         let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100 * 125 / 100, d.power + floor + 2) } else { (d.hp * (220 + 40 * deeper) / 100, d.power + deeper + 1) };
+        let hp = hp * hp_pct / 100;
         let x = &EXPEDITIONS[self.exp];
         let hp = self.keys.iter().fold(hp * x.hp_pct / 100, |hp, &k| hp * ENDINGS[k].hp_pct / 100);
         let mut m = Mods::default();
@@ -400,7 +402,7 @@ impl Run {
         };
         let pool: Vec<&EnemyDef> = pool.iter().filter(|d| self.floor > 0 || !snatches(d)).collect();
         let d = pool[self.rng.below(pool.len())];
-        self.enemy(d, true, 2)
+        self.enemy(d, true, 2, 130)
     }
 
     pub fn enter(&mut self, col: usize, row: usize) -> Stage {
@@ -424,9 +426,9 @@ impl Run {
                             Some(e) => &ENDINGS[e].elite,
                             None => &ELITES[self.rng.below(ELITES.len())],
                         };
-                        vec![self.random_normal(), self.enemy(elite, true, 2)]
+                        vec![self.random_normal(), self.enemy(elite, true, 2, 100)]
                     }
-                    _ => vec![self.enemy(self.boss_def(), false, 1)],
+                    _ => vec![self.enemy(self.boss_def(), false, 1, 190)],
                 };
                 let h = &HEROES[self.hero];
                 let mut me = Fighter::new(h.name, h.sprite, h.passive_desc, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
