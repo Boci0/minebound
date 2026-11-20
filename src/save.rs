@@ -27,6 +27,9 @@ impl Default for Save {
 }
 
 pub const CLEARED: usize = FLOORS + 1;
+/// The rules sheet's edition. A save that read an older one (the minesweeper board was 1) is shown
+/// the sheet again.
+const RULES: usize = 2;
 
 fn path() -> Option<std::path::PathBuf> {
     Some(std::path::Path::new(&std::env::var_os("APPDATA")?).join("Minebound").join("save.txt"))
@@ -47,7 +50,7 @@ impl Save {
             match (key, nums.as_slice()) {
                 (Some("unlocked"), &[n]) => save.unlocked = n.clamp(1, EXPEDITIONS.len()),
                 (Some("volume"), &[m, s]) => save.volume = (m.min(10) as i32, s.min(10) as i32),
-                (Some("rules"), &[n]) => save.rules_seen = n > 0,
+                (Some("rules"), &[n]) => save.rules_seen = n >= RULES,
                 (Some("daily"), &[day, r]) => save.daily = (day as u64, r.min(CLEARED)),
                 (Some("endings"), &[bits]) => save.endings = bits as u32 & ((1 << ENDINGS.len()) - 1),
                 (Some("best"), &[x, ref heroes @ ..]) if x < EXPEDITIONS.len() => {
@@ -62,7 +65,7 @@ impl Save {
     }
 
     fn text(&self) -> String {
-        let mut s = format!("unlocked {}\nvolume {} {}\nrules {}\ndaily {} {}\nendings {}\n", self.unlocked, self.volume.0, self.volume.1, self.rules_seen as u8, self.daily.0, self.daily.1, self.endings);
+        let mut s = format!("unlocked {}\nvolume {} {}\nrules {}\ndaily {} {}\nendings {}\n", self.unlocked, self.volume.0, self.volume.1, if self.rules_seen { RULES } else { 0 }, self.daily.0, self.daily.1, self.endings);
         for (x, heroes) in self.best.iter().enumerate() {
             let list: Vec<String> = heroes.iter().map(|b| b.to_string()).collect();
             s += &format!("best {x} {}\n", list.join(" "));
@@ -137,6 +140,7 @@ mod tests {
         assert_eq!(s.record(0, 0, 3, true), None);
         s.volume = (3, 10);
         s.rules_seen = true;
+        assert!(!Save::parse("rules 1\n").rules_seen, "a save that read the old rules sees the new ones");
         // a daily run keeps its day's result and touches neither bests nor unlocks
         let (mut run, _) = Run::new_daily(20_000);
         run.floor = 1;

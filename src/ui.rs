@@ -3731,12 +3731,12 @@ pub fn rules() -> bool {
     stamped("How to play", 640.0, 94.0, 38.0, INK);
     let mut y = 136.0;
     for line in [
-        "Each board holds crystals of one element, all in view. Click a crystal to mine it: a gem of that element, for a pick.",
-        "Mining cracks every tile around the crystal. A tile with 3 cracks caves in: 6 damage, and a crystal there is lost.",
-        "Click a tile without a crystal to dig a vent, for a pick: it and every tile around it lose a crack.",
+        "Each board holds crystals of one element, all in view. You get 4 picks a turn: spend one on a crystal to mine it for a gem of that element.",
+        "Mining cracks every tile touching the crystal. The redder a tile, the more cracks it holds: at 3 it caves in, for 6 damage, and a crystal there is lost.",
+        "Spend a pick on a vent to ease the pressure: click a tile without a crystal, and it and every tile touching it lose a crack. Hover any tile to see what it would do.",
         "Every crystal mined builds surge: +10% rite damage per step, up to 10. Every rite you cast spends a step, so think about when to fire.",
-        "Drag gems into a rite's sockets to cast it. Gems no rite can use wait in your stacks.",
-        "Swap boards with the tabs under yours; it is free. Some rites reach into the enemy's board.",
+        "Drag gems into a rite's sockets to cast it, or right-click to pick a rite and click gems in. Unused gems wait in your stacks.",
+        "Swap boards with the tabs under yours or keys 1 to 3; it is free. Some rites reach into the enemy's board.",
         "The enemy loads its rites at the end of its turn and fires them when its next turn starts. Deal the break damage first and they shatter.",
         "A rite marks its target with its elements. The next rite bringing a new element reacts. Words that float can be hovered.",
     ] {

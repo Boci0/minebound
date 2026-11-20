@@ -35,7 +35,10 @@ full view.
 ## Features
 
 - **Four heroes**, each with their own elements, rites and play style.
+- **A board of cracking ground**: mine crystals in plain view, but every one you take cracks the
+  tiles around it, and a tile cracked three times caves in on you.
 - **Five elements** and 17 rites that need the right mix of gems, each upgradable to level 3.
+- **Element reactions**: hit a marked foe with a new element to ignite, douse, gust, crush or arc.
 - **Branching runs** across three floors: battles, elites, encounters, shops, shrines, treasure
   and a boss at the end of each floor.
 - **38 pacts** in three rarities (common, rare, legendary) that bend the rules of a turn.
@@ -148,8 +151,23 @@ game reminds you to right click first.
   turn. Burn goes straight through it.
 - **Overpressure**: after turn 12, every rite deals 2 more damage each turn, so no fight can stall
   forever.
-- The enemy's next rite is shown under its HP (NEXT), and every rite shows the damage it would deal
-  right now, already counting armour, dodges and surge.
+- **Loaded rites**: the enemy loads its rites at the end of its turn and fires them as its next
+  turn starts. NEXT, under its HP, shows what is loaded, how hard it would hit, and its **break**:
+  deal that much rite damage to it in your turn and everything loaded shatters unfired.
+- Every rite shows the damage it would deal right now, already counting armour, dodges and surge.
+
+**Reactions.** A rite marks its target with its elements. The next rite that hits it bringing an
+element not in the mark reacts, once per new element:
+
+| Element | Reaction |
+| --- | --- |
+| Ember | Ignite: +3 burn on the target |
+| Tide | Douse: +4 shield for the caster |
+| Gale | Gust: +1 pick for the caster |
+| Stone | Crush: +4 damage, before surge |
+| Spark | Arc: +2 surge for the caster |
+
+Hover **Marked** in a fighter's stats to see which elements would react.
 
 Each hero can cast four rites: the three made from two of their elements, and the one made from all
 three. Beating a boss lets you **upgrade** a rite, up to level 3. Each level renames the rite, raises
