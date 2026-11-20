@@ -1,6 +1,6 @@
 # Minebound
 
-**A roguelike duel played on minesweeper boards.**
+**A roguelike duel played on boards of cracking ground.**
 
 [![Latest release](https://img.shields.io/github/v/release/Boci0/minebound?label=release)](https://github.com/Boci0/minebound/releases/latest)
 [![Release build](https://github.com/Boci0/minebound/actions/workflows/release.yml/badge.svg)](https://github.com/Boci0/minebound/actions/workflows/release.yml)
@@ -8,12 +8,13 @@
 ![Built with Rust](https://img.shields.io/badge/built%20with-Rust-B7410E)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-You and your enemy each sweep your own boards, one board per element. Crystals are always visible;
-mines are not. Clear every safe tile around a crystal to claim a stack of that board's element, then
-spend your stacks on rites that need the right mix of elements. Some rites reach into the enemy's
-board, breaking its crystals or burying more mines. Every safe flip in a row builds surge, up to
-double damage, and every rite you cast spends a step of it, so each turn asks the same question:
-fire now, or flip one more? The enemy plays by exactly the same rules, in full view.
+You and your enemy each mine your own boards, one board per element, every tile in view. Mine a
+crystal for a gem of that board's element, but every tile around it takes a crack, and a tile with
+three cracks caves in on you. Spend your gems on rites that need the right mix of elements. Some
+rites reach into the enemy's board, breaking its crystals or cracking its ground. Every crystal you
+mine builds surge, up to double damage, and every rite you cast spends a step of it, so each turn
+asks the same question: fire now, or mine one more? The enemy plays by exactly the same rules, in
+full view.
 
 ![Minebound's title screen](docs/screenshots/title.png)
 
@@ -70,23 +71,24 @@ place.
 
 ### The idea in one minute
 
-You and the enemy each sweep your own minesweeper boards, one board per element. Every board holds
-a few **crystals**. Reveal every safe tile around a crystal and it pays you a **gem** of that
-board's element. Gems pay for **rites**: spells that need a set mix of elements, such as one Ember
-and one Gale. Fill a rite's sockets and it fires at once.
+You and the enemy each work your own boards, one board per element. Every board holds
+**crystals** in plain view. Mine one and it pays you a **gem** of that board's element, but every
+tile around it cracks. A tile with three cracks **caves in**: it hurts whoever's board it is on, and
+a crystal there is lost. Gems pay for **rites**: spells that need a set mix of elements, such as one
+Ember and one Gale. Fill a rite's sockets and it fires at once.
 
-Safe flips in a row build **surge**, which multiplies rite damage, and every rite you cast spends a
-step of it. A mine ends your turn and wipes your surge. So each turn comes down to one question:
-cast now, or risk one more flip? The enemy plays by exactly the same rules, and you can watch its
-board the whole time.
+Each crystal you mine builds **surge**, which multiplies rite damage, and every rite you cast spends
+a step of it. You get only a few picks a turn, and digging a **vent** to ease the pressure costs one
+too. So each turn comes down to one question: mine, vent or cast? The enemy plays by exactly the
+same rules, and you can watch its board the whole time.
 
 ### Controls
 
 | Action | Input |
 | --- | --- |
-| Reveal a tile | Left click on the board |
-| Flag a suspected mine | Right click on the board |
-| Switch board | Click a board tab under the board (free, any time in your turn) |
+| Mine a crystal | Left click a crystal |
+| Dig a vent | Left click a tile without a crystal |
+| Switch board | Click a board tab under the board, or press 1 to 3 (free, any time in your turn) |
 | Socket a gem by dragging | Drag a gem from your stacks onto a rite; it fills the matching socket |
 | Socket a gem by clicking | Right click anywhere off the board to pick a rite, then left click a gem (see below) |
 | Take a gem back | Click the filled socket |
@@ -102,32 +104,31 @@ board the whole time.
 
 You don't have to drag gems:
 
-1. **Right click** anywhere off the minefield. The first rite in your list is picked: it gets a
+1. **Right click** anywhere off the board. The first rite in your list is picked: it gets a
    frame and a pointer at its left edge.
 2. Each further right click moves the pick one rite down, and wraps back to the top after the
    last.
 3. **Left click a gem** in your stacks. It goes into the picked rite's matching socket. Keep
    clicking gems until the rite is full and fires.
 
-Right clicks on the board still flag mines. Dragging still works, and dropping a gem on a rite
-always sends it there, whichever rite is picked. If you click a gem before picking a rite, the
+Dragging still works, and dropping a gem on a rite always sends it there, whichever rite is picked. If you click a gem before picking a rite, the
 game reminds you to right click first.
 
-![A battle: your board in the middle, the rites on the right with Eruption picked by right click, the enemy's board top right](docs/screenshots/battle.png)
+![A battle: your board of crystals and cracked ground in the middle, the rites on the right, the enemy's board top right](docs/screenshots/battle.png)
 
 ### Your boards
 
-- Each board is 6 × 6. It holds about 5 mines, 4 to 6 crystals and up to 6 tiles of solid rock
-  (hatched), which never flip and need no clearing.
-- A number on a tile is how many mines touch it. A safe tile that touches no mines opens its
-  neighbours too.
-- Your first flip on a fresh board is never a mine.
-- A crystal shows two numbers: the big one is how many hidden tiles still surround it, the small one
-  in its corner is how many of those are mines. It pays out once every safe tile around it is
-  revealed.
-- You get **6 reveals a turn**. Penalties can take some away, but you always keep at least 5.
-  Flags are free.
-- A mine costs 2 HP, ends your turn, wipes your surge and breaks the crystals next to it.
+- Each board is 6 × 6. It holds 8 to 11 crystals and up to 4 tiles of solid rock (hatched), which
+  never crack. Every tile is in view.
+- A tile's colour shows its cracks: the redder it is, the closer it is to caving in. A third of the
+  ground starts with one crack, and 8 **faults** start one crack from going.
+- **Mining** a crystal costs a pick, pays a gem and cracks every tile touching it (up, down, left
+  and right). Hover a crystal to see what mining it would bring down.
+- A tile with 3 cracks **caves in**: 6 damage to you, and a crystal there is lost. It takes nothing
+  else down with it.
+- A **vent** costs a pick: click any tile without a crystal, and it and every tile touching it lose
+  a crack. A tile can be vented again as long as there is a crack to ease.
+- You get **4 picks a turn**. Penalties can take some away, but you always keep at least 3.
 - You have one board per element, and switching boards is free. A board keeps its state while you
   are on another one. A board with no crystal left to claim is dealt again, and every board is
   dealt fresh at the start of each wave.
@@ -139,10 +140,10 @@ game reminds you to right click first.
   damage number to see each step that makes it.
 - A rite deals damage only if its text says so. Bulwark, Lodestone, Mistveil and Sandstorm deal
   none; they only do what they say.
-- **Surge**: each safe flip in a row this turn adds a step, worth +10%, up to 10 steps (+100%).
+- **Surge**: each crystal you mine this turn adds a step, worth +10%, up to 10 steps (+100%).
   Every rite that deals damage spends one step, so casting early makes later rites weaker. Rites
-  that deal no damage spend nothing. A mine wipes all your surge.
-- Casting does not end your turn. Cast, flip some more, and cast again.
+  that deal no damage spend nothing.
+- Casting does not end your turn. Cast, mine some more, and cast again.
 - **Shield** soaks damage before HP does. Half of it wears off at the start of its owner's next
   turn. Burn goes straight through it.
 - **Overpressure**: after turn 12, every rite deals 2 more damage each turn, so no fight can stall
@@ -157,18 +158,18 @@ gains a trick of its own (last column), with its own look when cast.
 
 | Rite | Gems | Effect at level 1 | Mastered (level 3) |
 | --- | --- | --- | --- |
-| Steam Burst | Ember, Tide | +4 damage, +1 reveal | Your next 3 mines are duds |
+| Steam Burst | Ember, Tide | +4 damage, +1 pick | Your next 3 cave-ins do no harm |
 | Raze | Ember, Gale | +2 damage, +2 damage per quarter of your HP lost | Heal 50% of its damage |
 | Magma | Ember, Stone | Shatter foe's shield, +3 damage | Can't miss, ignores armour |
 | Plasma | Ember, Spark | +3 damage, +1 damage per surge | Spends no surge |
-| Mistveil | Tide, Gale | Heal 8, +2 reveals (no damage) | Flag 3 mines on each of your boards |
+| Mistveil | Tide, Gale | Heal 8, +2 picks (no damage) | Prop up 3 tiles on each of your boards |
 | Bulwark | Tide, Stone | Gain 12 shield (no damage) | Your shield won't wear off next turn |
 | Conduction | Tide, Spark | +3 damage, then +4 surge | Steal 2 foe stacks |
-| Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, +2 foe mines (no damage) | Foe gets 2 fewer reveals next turn |
+| Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, crack 2 foe tiles (no damage) | Foe gets 2 fewer picks next turn |
 | Thunderclap | Gale, Spark | Break 1 foe crystal, +2 damage | +8 damage per crystal broken |
 | Lodestone | Stone, Spark | Double your shield (adding at most 12, 24 at level 2; no damage), and it turns brittle: the next rite that hits you is blocked, then all of the shield shatters onto the attacker as damage | No limit on the doubling |
 | Upheaval | Ember, Gale, Stone | You lose 4 HP, +11 damage | Double damage if the foe is at half HP or below |
-| Tempest | Tide, Gale, Spark | +1 damage per reveal used this turn | Unused reveals count too |
+| Tempest | Tide, Gale, Spark | +1 damage per pick used this turn | Unused picks count too |
 | Geode Surge | Tide, Stone, Spark | +6 damage, and your shield becomes 150% damage, then it's gone | Keep half your shield |
 | Forgefire | Ember, Stone, Spark | +8 damage | +2 power for the rest of the battle |
 | Maelstrom | Tide, Gale, Stone | Gain 6 shield, heal 4 | Clear your burn and weaken |
@@ -184,12 +185,12 @@ All four play by the same rules. Each brings three elements and a trait that kee
 
 | Hero | HP | Power | Elements | Rites | Trait |
 | --- | --- | --- | --- | --- | --- |
-| Ashwarden | 100 | 7 | Ember, Gale, Stone | Raze, Magma, Sandstorm, Upheaval | Mines deal 1 less damage, and every hit on you 3 less |
-| Stormreader | 94 | 7 | Tide, Gale, Spark | Mistveil, Conduction, Thunderclap, Tempest | +1 reveal each turn; each reveal left unused becomes 3 shield |
-| Deepforger | 96 | 6 | Tide, Stone, Spark | Bulwark, Conduction, Lodestone, Geode Surge | Each point of shield you hold stops 2 damage |
+| Ashwarden | 100 | 7 | Ember, Gale, Stone | Raze, Magma, Sandstorm, Upheaval | Cave-ins deal 1 less damage, and every hit on you 3 less |
+| Stormreader | 94 | 7 | Tide, Gale, Spark | Mistveil, Conduction, Thunderclap, Tempest | +1 pick each turn; each pick left unused becomes 3 shield |
+| Deepforger | 96 | 6 | Tide, Stone, Spark | Bulwark, Conduction, Lodestone, Geode Surge | Shield never wears off, and each point stops 2 damage |
 | Scaldwright | 96 | 6 | Ember, Tide, Spark | Steam Burst, Plasma, Conduction, Boilover | Every rite adds 1 burn on the foe and heals you for 15% of its damage |
 
-Ashwarden is a berserker who hits harder as he gets hurt. Stormreader turns reveals into damage or
+Ashwarden is a berserker who hits harder as he gets hurt. Stormreader turns picks into damage or
 shield. Deepforger builds a wall of shield and throws it. Scaldwright stacks burn and cashes it in.
 
 ### A run
@@ -242,42 +243,42 @@ when you hover it.
 
 | Pact | Rarity | Effect |
 | --- | --- | --- |
-| Lucky Coin | Common | The first mine you hit each wave is a dud |
-| Dowsing Rod | Common | 3 mines start flagged on each of your boards |
+| Lucky Coin | Common | The first cave-in on your boards each wave does no harm |
+| Dowsing Rod | Common | Every board you are dealt has 3 cracks propped up |
 | Ward Stone | Common | Gain 10 shield at the start of each wave |
 | Field Rations | Common | Heal 10 whenever a new wave steps in |
 | Magpie Purse | Common | +50% shards from battles |
 | Head Start | Common | Begin each battle with 3 random stacks |
 | Bramble Coat | Common | Enemy rites that hit you cost them 4 HP |
-| Saboteur Kit | Common | +2 mines on every enemy board |
-| Sweeper's Map | Common | 1 fewer mine on each of your boards |
+| Saboteur Kit | Common | +2 faults on every enemy board |
+| Sweeper's Map | Common | 1 fewer fault on each of your boards |
 | Shell Fragment | Common | Gain 4 shield at the start of your turn |
 | Whetted Shard | Common | Your rites deal +5 damage |
 | Kindling | Common | Your rites set the enemy burning for 3 turns |
 | Slow Fuse | Common | Your burns deal +2 damage per turn |
-| Sap Tap | Common | Each crystal you claim heals you for 2 |
-| Crystal Skin | Common | Each crystal you claim gives 3 shield |
+| Sap Tap | Common | Each crystal you mine heals you for 2 |
+| Crystal Skin | Common | Each crystal you mine gives 3 shield |
 | Plate Scraps | Common | Every hit on you deals 2 less |
 | Heart Root | Common | +20 max HP |
-| Quick Fingers | Rare | +1 reveal each turn |
+| Quick Fingers | Rare | +1 pick each turn |
 | Resonator | Rare | Each rite's listed damage, shield and healing are 75% stronger |
 | Leech Fang | Rare | Heal for 30% of the damage your rites deal |
 | Ambush Wire | Rare | Deal 10 damage at the start of each wave |
 | Running Start | Rare | Begin each turn with 6 surge |
 | Overcharger | Rare | Each surge step is worth +17% instead of +10% |
-| Steady Hands | Rare | Surge carries over between your turns; mines still wipe it |
+| Steady Hands | Rare | Surge carries over between your turns |
 | Opening Gambit | Rare | Your first rite each turn deals +100% |
-| Resonant Shards | Rare | Each crystal you claim zaps the enemy for 3 |
-| Salvager | Rare | Crystals you break with a mine still pay out |
-| Spite Fuse | Rare | Mines you hit also deal 6 damage to the enemy |
-| Hourglass | Rare | Each reveal left unused at turn end becomes 3 shield |
+| Resonant Shards | Rare | Each crystal you mine zaps the enemy for 3 |
+| Salvager | Rare | Each cave-in on your boards gives a stack of its element |
+| Spite Fuse | Rare | Each cave-in on your boards also deals 6 damage to the enemy |
+| Hourglass | Rare | Each pick left unused at turn end becomes 3 shield |
 | Hoarder's Sack | Rare | End your turn holding 3+ stacks: gain 6 shield |
 | Chain Lightning | Rare | Each rite after your first in a turn deals +5 more than the one before |
-| Powder Keg | Rare | Mines no longer end your turn; they still hurt and wipe surge |
-| Twin Vein | Legendary | Crystals give 2 stacks, but your boards hold 2 more mines |
-| Glass Blade | Legendary | +2 power, but mines deal 2 more damage to you |
+| Powder Keg | Rare | Each cave-in on your boards gives 3 surge |
+| Twin Vein | Legendary | Crystals give 2 stacks, but your boards hold 2 more faults |
+| Glass Blade | Legendary | +2 power, but cave-ins deal 2 more damage to you |
 | Smoke Bomb | Legendary | The first enemy rite each turn misses you |
-| Sixth Sense | Legendary | The first mine you flip each turn is flagged instead of going off |
+| Sixth Sense | Legendary | The first cave-in on your boards each turn does no harm |
 | Echo Chamber | Legendary | Your three-element rites fire twice |
 | Berserker's Axe | Legendary | Below half HP, +4 power |
 
@@ -303,9 +304,9 @@ its own.
 | Breach | Shatter foe's shield |
 | Tempo | +1 damage per surge |
 | Fuse | Detonate foe's burn |
-| Insight | +1 reveal |
+| Insight | +1 pick |
 | Fracture | Break 1 foe crystal |
-| Snare | +1 foe mine |
+| Snare | Crack 1 foe tile |
 
 ### Blessings
 
@@ -324,7 +325,7 @@ blessing at a time**; taking a new one lets the old one go. Each lifts a single 
 | Cinders | Your burns deal +3 damage each turn |
 | Leech | Heal for 30% of the damage your rites deal |
 | Vigor | +30 max HP |
-| Sight | +1 reveal each turn |
+| Sight | +1 pick each turn |
 | Surge | Begin each turn with 4 surge |
 
 ### Enemies
@@ -335,7 +336,7 @@ details.
 | Enemy | Kind | Rule |
 | --- | --- | --- |
 | Mire Hound | Normal | +1 power every turn |
-| Cinder Imp | Normal | Gains a stack whenever you hit a mine |
+| Cinder Imp | Normal | Gains a stack whenever your ground caves in |
 | Gust Wisp | Normal | The first rite each turn only grazes it, for half damage |
 | Pebble Golem | Normal | Every hit deals 2 less |
 | Brine Leech | Normal | Heals for half the damage it deals |
@@ -343,13 +344,13 @@ details.
 | Thorn Creeper | Normal | Every rite that hits it deals 2 back |
 | Ash Rat | Normal, from floor 2 | Snatches one of your stacks as its turn starts |
 | The Quarrymaster | Elite | Starts with 8 shield; every hit deals 1 less |
-| Gale Duchess | Elite | One extra reveal; the first rite each turn only grazes her |
+| Gale Duchess | Elite | One extra pick; the first rite each turn only grazes her |
 | Kiln Tyrant | Elite | Its rites set you burning, and +1 power every turn |
-| Minelayer Queen | Boss, floor 1 | 1 extra mine in your boards; gains a stack when you hit one |
+| Minelayer Queen | Boss, floor 1 | 1 more fault in your boards; gains a stack whenever your ground caves in |
 | The Undertow | Boss, floor 1 | Heals 2 and gains 2 shield each turn |
 | The Sapper King | Boss, floor 2 | Starts with 12 shield; snatches one of your stacks each turn |
 | The Tidecaller | Boss, floor 2 | The first rite each turn only grazes her; heals for 30% of damage dealt |
-| Null Cartographer | Boss, floor 3 | One extra reveal, 3 mines pre-flagged; jams your surge at 6 |
+| Null Cartographer | Boss, floor 3 | One extra pick, 3 of its cracks propped up; jams your surge at 6 |
 | The Deep Engine | Boss, floor 3 | Every hit deals 2 less; +1 power every turn |
 
 Each floor's boss is one of its two, at random; the map shows which one waits for you.
@@ -363,7 +364,7 @@ Six descents, each harder than the last. Clearing one opens the next.
 | Shallow Mines | No extra rules |
 | Flooded Caverns | Enemies have 10% more HP |
 | Ember Depths | Enemies have 10% more HP; bosses gain +1 power every 2 turns |
-| Crystal Hollows | Enemies have 15% more HP; bosses gain +1 power every 2 turns; 1 fewer reveal each turn |
+| Crystal Hollows | Enemies have 15% more HP; bosses gain +1 power every 2 turns; 1 fewer pick each turn |
 | The Rift | Every law of Crystal Hollows; every floor's twist is a curse; every rite costs 1 more gem, of any element |
 | The Null | Every law of The Rift; enemies have 25% more HP and +1 power |
 
@@ -375,29 +376,31 @@ cut by a bar. Any element fills it.
 
 | Twist | Effect |
 | --- | --- |
-| Shallow Seams | 1 fewer mine on each of your boards |
+| Shallow Seams | 1 fewer fault on each of your boards |
 | Tailwind | Begin each turn with 2 surge |
 | Second Wind | Heal 6 whenever a new wave steps in |
 | Gold Dust | +50% shards from battles |
-| Fault Lines | Mines deal 1 more damage to you (curse) |
+| Fault Lines | Cave-ins deal 1 more damage to you (curse) |
 | Iron Hides | Enemies start each wave with 6 shield (curse) |
 | Restless Dead | Enemies have +1 power (curse) |
-| Thick Fog | 1 fewer reveal each turn (curse) |
-| Brittle Ground | 1 more mine on every board, yours and theirs |
+| Thick Fog | 1 fewer pick each turn (curse) |
+| Brittle Ground | 1 more fault on every board, yours and theirs |
 | Sharp Edges | Everyone has +1 power |
 
 </details>
 
 ### Tips
 
-- **Read the crystal's corner number.** When it matches the flags around the crystal, every other
-  tile next to it is safe.
-- **Flip before you cast.** Surge only grows from safe flips, and each rite spends a step, so the
-  best moment to cast is after your safe flips and before a risky one.
+- **Hover before you mine.** A crystal shows what mining it would bring down, and the HP it would
+  cost you.
+- **Vent early.** A tile one crack from caving in is cheap to save, and the vent eases the tiles
+  around it too.
+- **Mine before you cast.** Surge only grows from mining, and each rite spends a step, so the best
+  moment to cast is after your mining is done.
 - **Watch NEXT.** If the enemy is about to cast something big, a shield or a weaken (Sandstorm,
   Hex) now beats a little extra damage.
-- **Use its board.** Thunderclap, Fracture and Snare break its crystals or bury mines on the board
-  it is sweeping. Its gems are visible under its board.
+- **Use its board.** Thunderclap, Fracture and Snare break its crystals or crack the ground on the
+  board it is mining. Its gems are visible under its board.
 - **Waves are where it hurts.** You heal to full between battles, but not between the waves of
   one battle, so a two- or three-wave fight is the one to plan for.
 - **Set up for free.** Bulwark, Lodestone, Mistveil and Sandstorm spend no surge, so cast them

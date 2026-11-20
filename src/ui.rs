@@ -1,8 +1,8 @@
 //! Immediate-mode screens: each function draws one screen and reports what was clicked.
 
 use crate::{
-    battle::{Battle, Event, Fighter, PRESSURE_TURN},
-    board::{Board, W},
+    battle::{Battle, Event, Fighter, CAVE_DMG, CLAIM_GEMS, PRESSURE_TURN},
+    board::{Board, CAVE, N, W},
     data::*,
     run::*,
     save::{Save, CLEARED},
@@ -131,7 +131,7 @@ struct Fx {
     turn_at: f64,
     /// sounds waiting for their moment: (game time, sound)
     later: Vec<(f64, Sfx)>,
-    /// a mine just flipped: when it goes off
+    /// ground just caved in: when it goes off
     boom: Option<f64>,
     /// a killing blow on its way: (game time it lands, side that falls)
     fell: Option<(f64, usize)>,
@@ -148,6 +148,10 @@ struct Fx {
     turn: Option<usize>,
     /// a quick zoom-in on a heavy hit: start
     punch: f64,
+    /// a hit of `HUGE` or more on its way: (game time it lands, side hit)
+    huge: Option<(f64, usize)>,
+    /// impact frames for that hit once it lands: (real time they started, side hit)
+    impact: Option<(f64, usize)>,
     /// the shop ware being looked at
     pick: Option<usize>,
     /// the shopkeeper's last reaction and when it was said
@@ -170,7 +174,7 @@ struct Fx {
     ended_at: f64,
     /// sheet animations playing: (frames, centre, size, start, duration, tint)
     anims: Vec<(&'static [(f32, f32, f32)], Vec2, f32, f64, f32, Color)>,
-    /// your board as last drawn: (which one, tiles turned over, when it last came in anew)
+    /// your board as last drawn: (which one, tiles turned face up, when it last came in anew)
     board_seen: (usize, usize, f64),
 }
 
@@ -454,11 +458,6 @@ fn born(key: (usize, usize, usize)) -> f64 {
     fx(|fx| *fx.pops.entry(key).or_insert(now))
 }
 
-/// Scale for a thing identified by `key`, bouncing in from the first frame it is drawn.
-fn pop(key: (usize, usize, usize)) -> f32 {
-    bounce(born(key))
-}
-
 fn unpop(key: (usize, usize, usize)) {
     fx(|fx| fx.pops.remove(&key));
 }
@@ -651,10 +650,10 @@ fn keyword(word: &str) -> Option<(Color, Option<Motion>)> {
         "ember" => still(rgb(0xff8a4c)),
         "shield" | "armor" | "tide" => still(rgb(0x6fb6ff)),
         "heal" | "heals" | "healing" | "hp" => still(rgb(0x7bd88f)),
-        "damage" | "mine" | "mines" => still(BLOOD),
+        "damage" | "cave-in" | "cave-ins" | "fault" | "faults" => still(BLOOD),
         "shard" | "shards" => still(GOLD),
         "surge" | "spark" => still(rgb(0xffe066)),
-        "reveal" | "reveals" | "flag" | "flagged" | "gale" => still(rgb(0x5fe0c8)),
+        "reveal" | "pick" | "picks" | "gale" => still(rgb(0x5fe0c8)),
         "ignite" => Some((rgb(0xff8a4c), Some(Motion::Wave))),
         "douse" => Some((rgb(0x6fb6ff), Some(Motion::Wave))),
         "gust" => Some((rgb(0x5fe0c8), Some(Motion::Wave))),
@@ -679,18 +678,21 @@ fn glossary(word: &str) -> Option<(&'static str, &'static str)> {
         "armor" => ("Armor", "Every hit on it deals this much less, down to 1."),
         "evade" => ("Evade", "The first rite cast at it each turn misses: no damage, no effects, and the gems are still spent."),
         "grazes" | "graze" => ("Graze", "The first rite cast at it each turn deals half damage. Everything else the rite does still lands."),
-        "surge" => ("Surge", "Each safe flip in a row adds a step, +10% rite damage, up to 10. Every rite you cast spends a step, and a mine wipes them all."),
+        "surge" => ("Surge", "Each crystal you mine adds a step, +10% rite damage, up to 10. Every rite you cast spends a step."),
         "overpressure" => ("Overpressure", "From turn 13 on, every rite deals 2 more each turn, so no fight can stall forever."),
         "power" => ("Power", "Damage for each gem a rite spends, before its bonus and surge."),
-        "duds" => ("Duds", "Mines that will be found harmlessly this wave instead of going off."),
-        "reveal" | "reveals" => ("Reveals", "Tiles you can flip this turn. Penalties never leave you fewer than 5."),
-        "crystal" | "crystals" => ("Crystal", "Clear every safe tile around it to claim a gem of its board's element. A mine beside it breaks it. The corner number counts the mines touching it."),
+        "duds" => ("Duds", "Cave-ins on your boards that will do you no harm this wave."),
+        "pick" | "picks" => ("Picks", "Moves you have this turn: each mines a crystal or digs a vent. Penalties never leave you fewer than 3."),
+        "cave-in" | "cave-ins" => ("Cave-in", "A tile with 3 cracks gives way: 6 damage to whoever's board it is on, and a crystal there is lost. It takes nothing else down with it."),
+        "vent" | "vents" => ("Vent", "Dug on any tile without a crystal, for a pick: it and every tile around it lose a crack."),
+        "fault" | "faults" => ("Fault", "A tile dealt with 2 cracks: one more and it caves in."),
+        "crystal" | "crystals" => ("Crystal", "Mine it for a gem of its board's element. Every tile around it takes a crack."),
         "rare" => ("Rare", "Changes how a turn plays. Offered less often than Common pacts; 45 shards in a shop."),
         "legendary" => ("Legendary", "Bends a core rule. Offered rarely; 65 shards in a shop."),
         "mark" => ("Mark", "The elements of the last rite that hit a fighter. A rite bringing any other element reacts."),
         "ignite" => ("Ignite", "Ember reacts: +3 burn on the target."),
         "douse" => ("Douse", "Tide reacts: +4 shield for the caster."),
-        "gust" => ("Gust", "Gale reacts: +1 reveal for the caster."),
+        "gust" => ("Gust", "Gale reacts: +1 pick for the caster."),
         "crush" => ("Crush", "Stone reacts: +4 damage, before surge."),
         "arc" => ("Arc", "Spark reacts: +2 surge for the caster."),
         "brittle" => ("Brittle", "The next rite that hits this shield is blocked, then all of the shield shatters and the attacker takes that much damage."),
@@ -759,19 +761,22 @@ fn draw_tip() {
     if let Some(mark) = MARK_TIP.with(|c| c.borrow_mut().take()) {
         // every element by its sign: the ones in the mark set off nothing, the rest react
         let all = [Element::Ember, Element::Tide, Element::Gale, Element::Stone, Element::Spark];
+        let what = |e: Element| if mark.contains(&e) { "in the mark: nothing" } else { reaction_text(e) };
+        let head = "Hit last by these. A rite with any other reacts:";
+        // as wide as its widest line, so nothing spills out of the box
+        let w = all.iter().map(|&e| 94.0 + measure(what(e), 15.0).width).fold(measure(head, 15.0).width, f32::max) + 28.0;
         let h = 84.0 + all.len() as f32 * 26.0;
         let m = mouse();
-        let r = Rect::new((m.x + 16.0).min(VIEW.x - 370.0), if m.y + 20.0 + h > VIEW.y { m.y - 12.0 - h } else { m.y + 20.0 }, 358.0, h);
+        let r = Rect::new((m.x + 16.0).min(VIEW.x - 12.0 - w), if m.y + 20.0 + h > VIEW.y { m.y - 12.0 - h } else { m.y + 20.0 }, w, h);
         plate(r, CARD);
         text("Marked", r.x + 14.0, r.y + 24.0, 16.0, INK);
-        text("Hit last by these. A rite with any other reacts:", r.x + 14.0, r.y + 48.0, 15.0, MUTED);
+        text(head, r.x + 14.0, r.y + 48.0, 15.0, MUTED);
         for (k, &e) in all.iter().enumerate() {
             let y = r.y + 80.0 + k as f32 * 26.0;
             let marked = mark.contains(&e);
             sign(e, vec2(r.x + 24.0, y - 5.0), 8.0, if marked { FAINT } else { INK });
             text(element_tip(e).0, r.x + 44.0, y, 15.0, if marked { FAINT } else { INK });
-            let what = if marked { "in the mark: nothing" } else { reaction_text(e) };
-            text(what, r.x + 108.0, y, 15.0, if marked { FAINT } else { MUTED });
+            text(what(e), r.x + 108.0, y, 15.0, if marked { FAINT } else { MUTED });
         }
         return;
     }
@@ -1189,9 +1194,9 @@ pub fn title() -> Option<Go> {
     }
     for (k, line) in [
         // the rules, as the Below would say them
-        "Bare the ground around a crystal and it answers to you. Walk unbroken, and the surge rises.",
+        "Take a crystal and the ground around it groans. Take them one after another, and the surge rises.",
         "Feed the sockets and the rite is spoken. What you cannot spend, throw at their face.",
-        "The first stone never bites. The rest remember your name.",
+        "Mind the cracks. What falls on you remembers your name.",
     ]
     .iter()
     .enumerate()
@@ -1475,6 +1480,10 @@ const STEP: f32 = 56.0;
 const BOARD: Vec2 = vec2(472.0, 330.0);
 /// where each fighter's sigil is centred, and how big: you on the left, the enemy alone at the top
 const STAND: [Vec2; 2] = [vec2(104.0, 348.0), vec2(640.0, 82.0)];
+/// A hit this big gets impact frames and an outsized number.
+const HUGE: i32 = 100;
+/// How long each of a huge hit's two impact frames holds, in real seconds.
+const IMPACT: f64 = 0.07;
 const FIGHTER: [f32; 2] = [96.0, 120.0];
 /// the enemy's board, shrunk to a preview in the top right
 const PEEK: Vec2 = vec2(1082.0, 62.0);
@@ -1535,7 +1544,7 @@ fn reaction_text(e: Element) -> &'static str {
     match e {
         Element::Ember => "ignite: +3 burn on it",
         Element::Tide => "douse: +4 shield for you",
-        Element::Gale => "gust: +1 reveal for you",
+        Element::Gale => "gust: +1 pick for you",
         Element::Stone => "crush: +4 damage",
         Element::Spark => "arc: +2 surge for you",
     }
@@ -1546,7 +1555,7 @@ fn element_tip(e: Element) -> (&'static str, &'static str) {
     match e {
         Element::Ember => ("Ember", "Reacts as ignite: an Ember rite on a target whose mark lacks Ember puts 3 more burn on it."),
         Element::Tide => ("Tide", "Reacts as douse: a Tide rite on a target whose mark lacks Tide gives you 4 shield."),
-        Element::Gale => ("Gale", "Reacts as gust: a Gale rite on a target whose mark lacks Gale gives you 1 more reveal."),
+        Element::Gale => ("Gale", "Reacts as gust: a Gale rite on a target whose mark lacks Gale gives you 1 more pick."),
         Element::Stone => ("Stone", "Reacts as crush: a Stone rite on a target whose mark lacks Stone deals 4 more damage."),
         Element::Spark => ("Spark", "Reacts as arc: a Spark rite on a target whose mark lacks Spark gives you 2 surge."),
     }
@@ -1592,13 +1601,20 @@ fn rock(r: Rect) {
     }
 }
 
-/// A mine: a round body with eight spikes.
-fn mine_mark(c: Vec2, r: f32, col: Color) {
-    for k in 0..4 {
-        let d = Vec2::from_angle(k as f32 * std::f32::consts::FRAC_PI_4) * r;
-        draw_line(c.x - d.x, c.y - d.y, c.x + d.x, c.y + d.y, 2.0, col);
+/// A board tile's ground, before cracks.
+const TILE_BG: Color = rgb(0x1c1c1c);
+
+/// A tile's colour under `n` cracks: from bare ground, warming toward red as it nears caving in.
+fn strain(n: u8) -> Color {
+    mix(TILE_BG, BLOOD, [0.0, 0.2, 0.48, 0.75][(n as usize).min(3)])
+}
+
+/// A caved-in tile: a dark hole with broken slabs in it.
+fn rubble(r: Rect) {
+    block(r, rgb(0x0a0a0a));
+    for (x, y, w, h) in [(0.12, 0.2, 0.34, 0.2), (0.52, 0.5, 0.36, 0.22), (0.2, 0.66, 0.26, 0.18)] {
+        draw_rectangle(r.x + x * r.w, r.y + y * r.h, w * r.w, h * r.h, rgb(0x262626));
     }
-    draw_circle(c.x, c.y, r * 0.6, col);
 }
 
 /// A jagged bolt from `a` to `z`, redrawn with new kinks every frame.
@@ -1952,7 +1968,7 @@ fn mastery_word(m: Option<Effect>) -> &'static str {
         Some(Effect::Lifesteal(_)) => "BLOOD DRINK",
         Some(Effect::Sure) => "TRUE STRIKE",
         Some(Effect::KeepSurge) => "SURGE HELD",
-        Some(Effect::Scout(_)) => "MINES FOUND",
+        Some(Effect::Scout(_)) => "PROPPED UP",
         Some(Effect::Hold) => "HOLD FAST",
         Some(Effect::Steal(_)) => "STOLEN",
         Some(Effect::Blind(_)) => "BLINDED",
@@ -2007,8 +2023,6 @@ fn card_dur(lvl: usize) -> f32 {
 }
 /// Seconds of quiet after a bolt lands before the next action starts.
 const SETTLE: f64 = 0.4;
-/// Seconds from a mine being turned over to it going off.
-const BOOM: f64 = 0.28;
 
 /// When the action that starts now actually gets the stage: once whatever is playing has finished.
 fn queued(now: f64) -> f64 {
@@ -2036,12 +2050,14 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 play(Sfx::Claim);
                 claims.push((side, element, tiles));
             }
-            Event::Mine => {
-                // the tile turns over to show it, the fuse fizzes for a beat, then it goes off
+            Event::Cave { side } => {
+                // the ground gives way: on your board it shakes the whole screen
                 play(Sfx::Mine);
                 fx(|fx| {
-                    fx.boom = Some(now + BOOM);
-                    fx.busy = fx.busy.max(now + BOOM + 0.6);
+                    if side == 0 {
+                        fx.boom = Some(now);
+                    }
+                    fx.busy = fx.busy.max(now + 0.5);
                 });
             }
             Event::Cast { from, name, element, miss, skill, master } => {
@@ -2219,12 +2235,17 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             if d != 0 {
                 // the number and the bar wait until the skill that caused it visibly lands
                 let big = d <= -15;
+                if d <= -HUGE {
+                    fx.huge = Some((at, s));
+                }
+                let size = if d <= -HUGE { 120.0 } else { 38.0 + d.abs().min(40) as f32 * 1.1 };
                 let (label, colour) = match d {
-                    _ if big => (format!("{d}!"), GOLD_C),
-                    _ if d < 0 => (format!("{d}"), BAD),
-                    _ => (format!("{d:+}"), GOOD),
+                    // in colour, so they stand out against the white fighters: damage red, healing green
+                    _ if big => (format!("{d}!"), BLOOD),
+                    _ if d < 0 => (format!("{d}"), BLOOD),
+                    _ => (format!("{d:+}"), rgb(0x7bd88f)),
                 };
-                fx.floats.push((STAND[s] - vec2(0.0, 30.0), label, colour, at, 38.0 + d.abs().min(40) as f32 * 1.1));
+                fx.floats.push((STAND[s] - vec2(0.0, 30.0), label, colour, at, size));
                 if d < 0 {
                     fx.hit[s] = at;
                 }
@@ -2306,7 +2327,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         None => {}
     }
     let fallen = fx(|fx| fx.fallen.clone());
-    let (mut reveal, mut flag, mut swap, mut cast) = (None, None, None, None);
+    let (mut dig_at, mut vent_at, mut swap, mut cast) = (None, None, None, None);
 
     // where the run stands, top left, above your pacts
     label(&format!("FLOOR {}  ·  WAVE {}/{}  ·  TURN {}", floor + 1, b.wave, b.waves, b.turn), 56.0, 40.0);
@@ -2361,40 +2382,27 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             let at = vec2(PEEK.x + 142.0 - (foe.boards.len() - 1 - k) as f32 * 20.0, PEEK.y - 17.0);
             sign(bd.element, at, 7.0, if k == foe.cur { INK } else { FAINT });
         }
+        let peek = |i: usize| Rect::new(PEEK.x + (i % W) as f32 * 25.0, PEEK.y + (i / W) as f32 * 25.0, 23.0, 23.0);
         for (i, t) in fb.tiles.iter().enumerate() {
-            let r = Rect::new(PEEK.x + (i % W) as f32 * 25.0, PEEK.y + (i / W) as f32 * 25.0, 23.0, 23.0);
+            let r = peek(i);
             let key = (1, foe.cur, i);
-            let seen = fx(|fx| fx.pops.contains_key(&key));
-            if t.revealed && t.mine && !seen {
-                burst(r.center(), 20, 180.0, 6.0, BAD);
-            }
-            if t.claimed || t.revealed {
-                born(key);
-            } else {
-                unpop(key);
-            }
             if t.rock {
                 block(r, rgb(0x161616));
-            } else if t.crystal && !t.claimed && !t.broken {
-                draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, INK);
-                sign(fb.element, r.center(), 6.0, INK);
-            } else if t.crystal {
-                draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, FAINT);
-            } else if !t.revealed {
-                block(r, rgb(0x5a5a5a));
-            } else if t.mine {
-                draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, INK);
-                mine_mark(r.center(), 6.0, INK);
+            } else if t.caved {
+                if !fx(|fx| fx.pops.contains_key(&key)) {
+                    burst(r.center(), 16, 160.0, 5.0, MUTED);
+                }
+                born(key);
+                block(r, rgb(0x0a0a0a));
             } else {
-                draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, rgb(0x2a2a2a));
-                // its numbers too, so you can read how its sweep is going
-                let n = fb.adjacent(i);
-                if n > 0 {
-                    centered(&n.to_string(), r.center().x, r.center().y + 5.0, 14.0, MUTED);
+                unpop(key);
+                block(r, strain(t.crack));
+                if t.crystal {
+                    sign(fb.element, r.center(), 6.0, if t.used { FAINT } else { INK });
                 }
             }
         }
-        rich(&format!("{} reveals · {} mines", foe.reveals_left, fb.mines), PEEK.x, PEEK.y + 170.0, 14.0, MUTED);
+        rich(&format!("{} picks", foe.reveals_left), PEEK.x, PEEK.y + 170.0, 14.0, MUTED);
         let mut x = PEEK.x;
         for (e, n) in by_element(&foe.elements, foe.stacks.iter().copied()) {
             sign(e, vec2(x + 8.0, 262.0), 8.0, if n > 0 { INK } else { FAINT });
@@ -2449,8 +2457,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         x -= 13.0;
     }
     right("SURGE", x - 2.0, 316.0, 15.0, MUTED);
-    // a board dealt anew (fewer tiles turned than a moment ago) or another one put up drops in, tile by tile
-    let shown = board.tiles.iter().filter(|t| t.revealed).count();
+    // a board dealt anew (fewer tiles mined or fallen than a moment ago) or another one put up drops in, tile by tile
+    let shown = board.tiles.iter().filter(|t| t.used || t.caved).count();
     let (came, redealt) = fx(|fx| {
         let (k, n, _) = fx.board_seen;
         let (new, redealt) = (k != me.cur || shown < n, k == me.cur && shown < n);
@@ -2460,8 +2468,23 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     if redealt {
         play(Sfx::Whoosh);
     }
+    let tile_at = |i: usize| Rect::new(BOARD.x + (i % W) as f32 * STEP, BOARD.y + (i / W) as f32 * STEP, TILE, TILE);
+    let hover = (0..N).find(|&i| tile_at(i).contains(mouse())).filter(|_| mine && !modal());
+    // venting the tile under the mouse: the tiles it would ease
+    let eases = hover.map(|i| board.vent_eases(i)).unwrap_or_default();
+    if let Some(i) = hover.filter(|_| clicked()) {
+        if board.live(i) {
+            dig_at = Some(i);
+        } else if !eases.is_empty() {
+            vent_at = Some(i);
+        }
+    }
+    // mining the crystal under the mouse: the tiles it would crack, and those that would fall
+    let aim = hover.filter(|&i| board.live(i));
+    let fall = aim.map(|i| board.would_cave(i)).unwrap_or_default();
+    let shaken: Vec<usize> = aim.map(|i| Board::around(i).filter(|&j| board.standing(j)).collect()).unwrap_or_default();
     for (i, t) in board.tiles.iter().enumerate() {
-        let r = Rect::new(BOARD.x + (i % W) as f32 * STEP, BOARD.y + (i / W) as f32 * STEP, TILE, TILE);
+        let r = tile_at(i);
         // corner to corner, each tile a beat after the one before; it falls a little as it grows
         let p = (((now - came - ((i % W) + (i / W)) as f64 * 0.025) / 0.2) as f32).clamp(0.0, 1.0);
         let k = if came > 0.0 { 1.0 - (1.0 - p).powi(3) } else { 1.0 };
@@ -2470,120 +2493,79 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         }
         let r = scaled(Rect::new(r.x, r.y - (1.0 - k) * 18.0, r.w, r.h), k);
         let mid = r.center();
-        // tiles around a crystal that can still be claimed stand out brighter
-        let near = Board::neighbors(i).any(|c| board.live(c));
-        let up = if near { INK } else { rgb(0xb0b0b0) };
-        let key = (0, me.cur, i);
+        let key = (2, me.cur, i);
         if t.rock {
             rock(r);
-        } else if t.crystal {
-            if t.claimed {
-                let k = pop(key);
-                outline(r, FAINT);
-                sign(board.element, mid, 12.0 * k, MUTED);
-            } else if t.broken {
-                outline(r, FAINT);
-                for (a, b) in [((-14.0, -12.0), (2.0, 0.0)), ((2.0, 0.0), (14.0, -6.0)), ((2.0, 0.0), (-4.0, 14.0))] {
-                    draw_line(mid.x + a.0, mid.y + a.1, mid.x + b.0, mid.y + b.1, 2.0, MUTED);
-                }
-            } else {
-                unpop(key);
-                outline(r, INK);
-                // each crystal bobs on its own beat; the number is how many tiles are left around it
-                gem(board.element, mid - vec2(0.0, 7.0 + (now as f32 * 2.6 + i as f32 * 1.7).sin() * 1.5), 13.0);
-                centered(&board.left_around(i).to_string(), mid.x, r.y + 48.0, 15.0, INK);
-                // and, in its corner, the mines touching it: a clue like any number
-                let n = board.adjacent(i);
-                if n > 0 {
-                    mine_mark(vec2(r.x + 9.0, r.y + 9.0), 4.0, MUTED);
-                    text(&n.to_string(), r.x + 15.0, r.y + 14.0, 14.0, INK);
-                }
+            continue;
+        }
+        if t.caved {
+            // it gives way: a cloud of dust, then rubble settles into the hole
+            if !fx(|fx| fx.pops.contains_key(&key)) {
+                burst(mid, 40, 320.0, 9.0, MUTED);
+                burst(mid, 14, 200.0, 6.0, BLOOD);
             }
-        } else if !t.revealed {
-            unpop(key);
-            let hot = mine && r.contains(mouse());
-            let lift = if hot { 3.0 } else { 0.0 };
-            block(Rect::new(r.x, r.y - lift, TILE, TILE), if hot { WHITE } else { up });
-            if t.flagged {
-                // a flag: a pole on a little base, a pennant flying from its top
-                let y = mid.y - lift;
-                draw_rectangle(mid.x - 4.0, y - 14.0, 3.0, 26.0, OUT);
-                draw_rectangle(mid.x - 10.0, y + 10.0, 15.0, 4.0, OUT);
-                draw_triangle(vec2(mid.x - 1.0, y - 14.0), vec2(mid.x - 1.0, y - 2.0), vec2(mid.x + 12.0, y - 8.0), OUT);
-            }
-            if hot && clicked() && !t.flagged {
-                reveal = Some(i);
-            }
-            if hot && is_mouse_button_pressed(MouseButton::Right) {
-                flag = Some(i);
-            }
-        } else {
-            // the tile turns over: its back narrows to an edge, then its face widens out
             let t0 = born(key);
-            let el = now - t0;
-            // a mine shows its fuse for a beat, then blows (in step with the shake and sound)
-            if t.mine && dt() > 0.0 && el >= BOOM && el - (dt() as f64) < BOOM {
-                burst(mid, 70, 460.0, 13.0, BAD);
-                burst(mid, 34, 300.0, 9.0, INK);
-                anim(fx_impact(Element::Ember), mid, 170.0, 0.45, mix(BAD, WHITE, 0.2));
-            }
-            let turn = ((el / 0.16) as f32).clamp(0.0, 1.0);
-            if turn < 0.5 {
-                let w = TILE * (1.0 - turn * 2.0);
-                block(Rect::new(mid.x - w / 2.0, r.y, w, TILE), up);
-            } else {
-                let q = scaled(r, bounce(t0 + 0.08));
-                let w = q.w * (turn * 2.0 - 1.0);
-                let q = Rect::new(mid.x - w / 2.0, q.y, w, q.h);
-                if t.mine {
-                    block(q, OUT);
-                }
-                if w > 2.0 {
-                    outline(q, if t.mine { INK } else { FAINT });
-                }
-                let n = board.adjacent(i);
-                if turn >= 0.75 && t.mine && el < BOOM {
-                    // the fuse: the tile reddens and the mine swells and shivers
-                    let k = (el / BOOM) as f32;
-                    block(q, fade(BAD, 0.3 + 0.45 * k));
-                    mine_mark(mid + vec2((now as f32 * 70.0).sin() * 2.0 * k, 0.0), 13.0 + 7.0 * k, mix(INK, WHITE, k));
-                } else if turn >= 0.75 && t.mine {
-                    mine_mark(mid, 13.0, INK);
-                } else if turn >= 0.75 && n > 0 {
-                    centered(&n.to_string(), mid.x, mid.y + 8.0, 23.0, if n > 1 { INK } else { ACCENT });
-                }
-            }
-            if t.mine && (BOOM..BOOM + 0.45).contains(&el) {
-                // the blast's ring rolls out over the board
-                let q = ((el - BOOM) / 0.45) as f32;
-                draw_circle_lines(mid.x, mid.y, 20.0 + 170.0 * q, 8.0 * (1.0 - q), fade(BAD, 1.0 - q));
-            }
+            rubble(scaled(r, bounce(t0)));
+            continue;
+        }
+        unpop(key);
+        let hot = hover == Some(i) && (board.live(i) || !eases.is_empty());
+        let r = Rect::new(r.x, r.y - if hot { 3.0 } else { 0.0 }, r.w, r.h);
+        let (doomed, shook, eased) = (fall.contains(&i), shaken.contains(&i), eases.contains(&i));
+        let cracked = t.crack + u8::from(shook) - u8::from(eased);
+        block(r, strain(if doomed { CAVE } else { cracked }));
+        outline(r, if hot { INK } else if shook || eased { MUTED } else { FAINT });
+        if t.crystal {
+            // a live crystal bobs on its own beat; a mined one is a faint print
+            let bob = if t.used { 0.0 } else { (now as f32 * 2.6 + i as f32 * 1.7).sin() * 1.5 };
+            sign(board.element, mid - vec2(0.0, bob), 13.0, if t.used { FAINT } else { INK });
+        }
+    }
+    // over the tile under the mouse: what a pick there would do
+    if let Some(i) = hover {
+        let at = tile_at(i);
+        let gems = CLAIM_GEMS + me.mods.claim_bonus.max(0) as usize;
+        let hurt = (CAVE_DMG - me.mods.mine_guard).max(0) * fall.len() as i32;
+        let line = if board.live(i) && fall.is_empty() {
+            Some((format!("mine: +{gems} gem{}", if gems == 1 { "" } else { "s" }), INK))
+        } else if board.live(i) {
+            Some((format!("mine: {} cave-in{}, -{hurt} HP", fall.len(), if fall.len() == 1 { "" } else { "s" }), BLOOD))
+        } else if !eases.is_empty() {
+            Some((format!("vent: eases {} tile{}", eases.len(), if eases.len() == 1 { "" } else { "s" }), INK))
+        } else {
+            None
+        };
+        if let Some((what, col)) = line {
+            // above the tile, or under it on the top row, clear of the surge bar
+            let (w, y) = (measure(&what, 15.0).width, if i < W { at.bottom() + 27.0 } else { at.y });
+            block(Rect::new(at.center().x - w / 2.0 - 6.0, y - 27.0, w + 12.0, 22.0), OUT);
+            centered(&what, at.center().x, y - 10.0, 15.0, col);
         }
     }
     // one tab per board under it, the current one underlined
     let mut tx = BOARD.x;
     for (k, bd) in me.boards.iter().enumerate() {
         let cur = k == me.cur;
-        let r = Rect::new(tx, 672.0, 34.0, 30.0);
+        let r = Rect::new(tx, 672.0, 44.0, 30.0);
         let hot = mine && !cur && r.contains(mouse());
         if hot {
             block(r, CARD_HI);
         }
-        sign(bd.element, r.center(), 9.0, if cur || hot { INK } else { MUTED });
+        sign(bd.element, r.center() + vec2(5.0, 0.0), 9.0, if cur || hot { INK } else { MUTED });
         if cur {
             draw_line(r.x + 4.0, r.bottom(), r.right() - 4.0, r.bottom(), 2.0, INK);
         }
         // keys 1-3 pick a board too; the faint number in the corner says which
         let key = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3].get(k).copied();
         if key.is_some() {
-            text(&(k + 1).to_string(), r.x + 3.0, r.y + 11.0, 12.0, FAINT);
+            text(&(k + 1).to_string(), r.x + 4.0, r.y + 12.0, 12.0, FAINT);
         }
         if (hot && clicked()) || (mine && !cur && !modal() && key.is_some_and(is_key_pressed)) {
             swap = Some(k);
         }
-        tx += 42.0;
+        tx += 52.0;
     }
-    right(&format!("{} reveals left · {} mines", me.reveals_left, board.mines), BOARD.x + 6.0 * STEP - 2.0, 694.0, 15.0, MUTED);
+    right(&format!("{} picks left", me.reveals_left), BOARD.x + 6.0 * STEP - 2.0, 694.0, 15.0, MUTED);
 
     // your stacks: drag a chip onto a rite's sockets
     label("STACKS", hx, 584.0);
@@ -2847,7 +2829,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     if space {
         ASKED.with(|a| a.set(if space_ends { f64::MIN } else { now }));
     } else if mine && now - asked < 2.0 {
-        right(&format!("{left} reveals left. Space again ends the turn."), 1230.0, 708.0, 14.0, MUTED);
+        right(&format!("{left} picks left. Space again ends the turn."), 1230.0, 708.0, 14.0, MUTED);
     }
     let pass = button(Rect::new(880.0, 640.0, 350.0, 44.0), "End turn", mine, true) || space_ends;
     if pass {
@@ -2856,10 +2838,10 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         b.cast_with(c, &paid);
     } else if let Some(k) = swap {
         b.swap(k);
-    } else if let Some(i) = reveal {
-        b.reveal(i);
-    } else if let Some(i) = flag {
-        b.toggle_flag(i);
+    } else if let Some(i) = dig_at {
+        b.dig(i);
+    } else if let Some(i) = vent_at {
+        b.vent(i);
     }
 
     if !over && b.active == 1 {
@@ -2922,6 +2904,34 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         let p = (now - t0) as f32 / 0.18;
         if p < 1.0 {
             draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(c, 0.32 * (1.0 - p)));
+        }
+    }
+    // a hit of HUGE or more: the game stops dead on two impact frames, black then inverted
+    if let Some(s) = fx(|fx| fx.huge).filter(|h| now >= h.0).map(|h| h.1) {
+        fx(|fx| (fx.huge, fx.impact) = (None, Some((get_time(), s))));
+        hitstop(IMPACT * 2.0);
+        quake(36.0);
+        play(Sfx::Boom);
+    }
+    if let Some((t0, s)) = fx(|fx| fx.impact) {
+        let el = get_time() - t0;
+        if el >= IMPACT * 2.0 {
+            fx(|fx| fx.impact = None);
+        } else {
+            let (bg, ink) = if el < IMPACT { (BLACK, WHITE) } else { (WHITE, BLACK) };
+            draw_rectangle(-2000.0, -2000.0, VIEW.x + 4000.0, VIEW.y + 4000.0, bg);
+            // speed lines bursting out of whoever was hit
+            for _ in 0..36 {
+                let dir = Vec2::from_angle(gen_range(0.0, std::f32::consts::TAU));
+                let from = STAND[s] + dir * FIGHTER[s] * gen_range(0.7, 1.2);
+                draw_line(from.x, from.y, from.x + dir.x * 1600.0, from.y + dir.y * 1600.0, gen_range(2.0, 9.0), ink);
+            }
+            let fallen = fx(|fx| fx.fallen.as_ref().map(|f| f.sprite));
+            for k in 0..2 {
+                let sprite = if k == 1 { fallen.unwrap_or(b.f[1].sprite) } else { b.f[0].sprite };
+                let size = FIGHTER[k] * if k == s { 1.25 } else { 1.0 };
+                sprite_rect(sprite, Rect::new(STAND[k].x - size / 2.0, STAND[k].y - size / 2.0, size, size), ink);
+            }
         }
     }
     fx(|fx| {
@@ -3676,6 +3686,10 @@ pub fn retreat() -> bool {
 
 /// Mid-fight: give up the battle, and with it the whole expedition. How far you got still counts.
 pub fn surrender() -> bool {
+    // a huge hit's impact frames own the whole screen for their blink
+    if fx(|fx| fx.impact.is_some()) {
+        return false;
+    }
     give_up(Rect::new(56.0, 652.0, 150.0, 36.0), "Surrender", ["The fight is lost, and the expedition with it.", "How far you got still counts."])
 }
 
@@ -3717,10 +3731,10 @@ pub fn rules() -> bool {
     stamped("How to play", 640.0, 94.0, 38.0, INK);
     let mut y = 136.0;
     for line in [
-        "Each board holds crystals of one element. Clear every safe tile around a crystal to claim a gem of that element.",
-        "Numbers count the mines touching a tile. A crystal shows its count in the corner. Right-click a tile to flag it.",
-        "A mine costs HP, wipes your surge, breaks the crystals beside it and ends your turn.",
-        "Safe flips in a row build surge: +10% rite damage per step, up to 10. Every rite you cast spends a step, so think about when to fire.",
+        "Each board holds crystals of one element, all in view. Click a crystal to mine it: a gem of that element, for a pick.",
+        "Mining cracks every tile around the crystal. A tile with 3 cracks caves in: 6 damage, and a crystal there is lost.",
+        "Click a tile without a crystal to dig a vent, for a pick: it and every tile around it lose a crack.",
+        "Every crystal mined builds surge: +10% rite damage per step, up to 10. Every rite you cast spends a step, so think about when to fire.",
         "Drag gems into a rite's sockets to cast it. Gems no rite can use wait in your stacks.",
         "Swap boards with the tabs under yours; it is free. Some rites reach into the enemy's board.",
         "The enemy loads its rites at the end of its turn and fires them when its next turn starts. Deal the break damage first and they shatter.",

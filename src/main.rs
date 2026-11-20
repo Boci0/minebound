@@ -262,18 +262,20 @@ async fn main() {
             Screen::Run(run, stage, opened) => {
                 // debug builds only, to reach any screen quickly: F9, Ctrl+W or a middle click wins the current
                 // fight, F7 or Ctrl+L loses it, F8 or Ctrl+B jumps to the last floor's boss (laptops often
-                // hide F keys behind Fn), Ctrl+E takes every key and jumps to the first ending's boss.
+                // hide F keys behind Fn), Ctrl+E takes every key and jumps to the first ending's boss, Ctrl+K hits the enemy
+                // for 130 to show a huge hit.
                 // A run that used one is not saved.
                 if cfg!(debug_assertions) {
                     let ctrl = |k| (is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl)) && is_key_pressed(k);
                     let win = is_key_pressed(KeyCode::F9) || ctrl(KeyCode::W) || is_mouse_button_pressed(MouseButton::Middle);
                     let (lose, jump) = (is_key_pressed(KeyCode::F7) || ctrl(KeyCode::L), is_key_pressed(KeyCode::F8) || ctrl(KeyCode::B));
-                    let endings = ctrl(KeyCode::E);
-                    run.debug |= win || lose || jump || endings;
+                    let (endings, smite) = (ctrl(KeyCode::E), ctrl(KeyCode::K));
+                    run.debug |= win || lose || jump || endings || smite;
                     match stage {
                         Stage::Battle(b) if b.over() => {}
                         Stage::Battle(b) if win => b.debug_win(),
                         Stage::Battle(b) if lose => b.f[0].hp = 0,
+                        Stage::Battle(b) if smite => b.f[1].hp -= 130,
                         _ => {}
                     }
                     if (jump || endings) && !matches!(stage, Stage::Battle(b) if b.over()) {

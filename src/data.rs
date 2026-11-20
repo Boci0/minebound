@@ -46,6 +46,8 @@ pub struct Mods {
     pub first_pct: i32,
     /// each point of shield stops this many more damage
     pub shield_block: i32,
+    /// shield no longer wears off between turns
+    pub keep_shield: i32,
     // crystals and mines
     pub claim_zap: i32,
     pub claim_heal: i32,
@@ -68,7 +70,8 @@ pub struct Mods {
     pub reveal_shield: i32,
     pub hoard_shield: i32,
     pub chain: i32,
-    pub mine_no_end: i32,
+    /// surge gained when it sets off a mine
+    pub mine_surge: i32,
     pub sense: i32,
     pub echo: i32,
     pub desperate: i32,
@@ -124,7 +127,7 @@ pub enum Effect {
     Sure,
     /// spends no surge step
     KeepSurge,
-    /// flags this many mines on each of the caster's boards
+    /// defuses this many mines on each of the caster's boards
     Scout(usize),
     /// the caster's shield does not wear off at its next turn
     Hold,
@@ -219,7 +222,7 @@ impl Effect {
             Detonate => "detonate foe's burn".into(),
             Reveal(n) => {
                 let k = at_level(n, lvl);
-                format!("+{k} reveal{}", if k == 1 { "" } else { "s" })
+                format!("+{k} pick{}", if k == 1 { "" } else { "s" })
             }
             Shatter(n) => {
                 let k = at_level(n as i32, lvl);
@@ -227,10 +230,10 @@ impl Effect {
             }
             Bury(n) => {
                 let k = at_level(n as i32, lvl);
-                format!("+{k} foe mine{}", if k == 1 { "" } else { "s" })
+                format!("crack {k} foe tile{}", if k == 1 { "" } else { "s" })
             }
             Surge(v) => format!("+{} surge", at_level(v, lvl)),
-            PerReveal(v) => format!("+{} damage per reveal used", at_level(v, lvl)),
+            PerReveal(v) => format!("+{} damage per pick used", at_level(v, lvl)),
             DoubleShield(cap) => match double_cap(cap, lvl) {
                 Some(c) => format!("double your shield (up to +{c})"),
                 None => "double your shield, no limit".into(),
@@ -243,17 +246,17 @@ impl Effect {
             PerBurn(v) => format!("+{} damage per burn on foe", at_level(v, lvl)),
             PerQuarterLost(v) => format!("+{} damage per quarter of HP lost", at_level(v, lvl)),
             SelfDamage(v) => format!("you lose {} HP", at_level(v, lvl)),
-            Duds(n) => format!("your next {n} mines are duds"),
+            Duds(n) => format!("your next {n} cave-ins do no harm"),
             Lifesteal(p) => format!("heal {p}% of its damage"),
             Sure => "can't miss, ignores armor".into(),
             KeepSurge => "spends no surge".into(),
-            Scout(n) => format!("flag {n} mines on each board"),
+            Scout(n) => format!("prop up {n} tiles on each board"),
             Hold => "shield won't wear off next turn".into(),
             Steal(n) => format!("steal {n} foe stacks"),
-            Blind(n) => format!("foe gets {n} fewer reveals"),
+            Blind(n) => format!("foe gets {n} fewer picks"),
             PerShatter(v) => format!("+{v} damage per crystal broken"),
             Execute => "x2 damage if foe is at half HP".into(),
-            Unused => "unused reveals count too".into(),
+            Unused => "unused picks count too".into(),
             KeepHalf => "keep half your shield".into(),
             Stoke(n) => format!("+{n} power this battle"),
             Cleanse => "clear your burn and weaken".into(),
@@ -284,7 +287,7 @@ pub static BLESSINGS: &[Blessing] = &[
     blessing("Cinders", "Your burns deal +3 damage each turn.", |m| m.burn_bonus += 3),
     blessing("Leech", "Heal for 30% of the damage your rites deal.", |m| m.lifesteal_pct += 30),
     blessing("Vigor", "+30 max HP.", |m| m.max_hp += 30),
-    blessing("Sight", "+1 reveal each turn.", |m| m.reveals += 1),
+    blessing("Sight", "+1 pick each turn.", |m| m.reveals += 1),
     blessing("Surge", "Begin each turn with 4 surge.", |m| m.surge_start += 4),
 ];
 
@@ -369,7 +372,7 @@ pub static HEROES: &[Hero] = &[
             m.mine_guard += 1;
             m.armor += 3;
         },
-        passive_desc: "Ashen hide: mines deal 1 less damage, and every hit on you 3 less.",
+        passive_desc: "Ashen hide: cave-ins deal 1 less damage, and every hit on you 3 less.",
     },
     Hero {
         name: "Stormreader",
@@ -381,7 +384,7 @@ pub static HEROES: &[Hero] = &[
             m.reveals += 1;
             m.reveal_shield += 3;
         },
-        passive_desc: "Quick read: +1 reveal each turn, and each reveal left unused at turn end becomes 3 shield.",
+        passive_desc: "Quick read: +1 pick each turn, and each pick left unused at turn end becomes 3 shield.",
     },
     Hero {
         name: "Deepforger",
@@ -391,8 +394,9 @@ pub static HEROES: &[Hero] = &[
         elements: [Tide, Stone, Spark],
         passive: |m| {
             m.shield_block += 1;
+            m.keep_shield += 1;
         },
-        passive_desc: "Plated: each point of shield you hold stops 2 damage.",
+        passive_desc: "Plated: your shield never wears off, and each point of it stops 2 damage.",
     },
     Hero {
         name: "Scaldwright",
@@ -447,50 +451,50 @@ const fn charm(name: &'static str, rarity: Rarity, icon: (usize, u32), hook: &'s
 const PLAIN: u32 = 0xffffff;
 
 pub static CHARMS: &[Charm] = &[
-    charm("Lucky Coin", Common, (HD + 28, PLAIN), "duds", "The first mine you hit each wave is a dud.", |m| m.duds += 1),
-    charm("Dowsing Rod", Common, (HD + 29, PLAIN), "scouts", "3 mines start flagged on each of your boards.", |m| m.scouts += 3),
+    charm("Lucky Coin", Common, (HD + 28, PLAIN), "duds", "The first cave-in on your boards each wave does no harm.", |m| m.duds += 1),
+    charm("Dowsing Rod", Common, (HD + 29, PLAIN), "scouts", "Every board you are dealt has 3 cracks propped up.", |m| m.scouts += 3),
     charm("Ward Stone", Common, (HD + 30, PLAIN), "start_shield", "Gain 10 shield at the start of each wave.", |m| m.start_shield += 10),
     charm("Field Rations", Common, (HD + 31, PLAIN), "heal_after", "Heal 10 whenever a new wave steps in.", |m| m.heal_after += 10),
     charm("Magpie Purse", Common, (HD + 32, PLAIN), "shard_pct", "+50% shards from battles.", |m| m.shard_pct += 50),
     charm("Head Start", Common, (HD + 33, PLAIN), "start_stacks", "Begin each battle with 3 random stacks.", |m| m.start_stacks += 3),
     charm("Bramble Coat", Common, (HD + 34, PLAIN), "thorns", "Enemy rites that hit you cost them 4 HP.", |m| m.thorns += 4),
-    charm("Saboteur Kit", Common, (HD + 35, PLAIN), "foe_mines", "+2 mines on every enemy board.", |m| m.foe_mines += 2),
-    charm("Sweeper's Map", Common, (HD + 36, PLAIN), "fewer_mines", "1 fewer mine on each of your boards.", |m| m.fewer_mines += 1),
+    charm("Saboteur Kit", Common, (HD + 35, PLAIN), "foe_mines", "+2 faults on every enemy board.", |m| m.foe_mines += 2),
+    charm("Sweeper's Map", Common, (HD + 36, PLAIN), "fewer_mines", "1 fewer fault on each of your boards.", |m| m.fewer_mines += 1),
     charm("Shell Fragment", Common, (HD + 37, PLAIN), "shield_turn", "Gain 4 shield at the start of your turn.", |m| m.shield_turn += 4),
     charm("Whetted Shard", Common, (HD + 38, PLAIN), "rite_bonus", "Your rites deal +5 damage.", |m| m.rite_bonus += 5),
     charm("Kindling", Common, (HD + 39, PLAIN), "rite_burn", "Every rite you cast adds 1 burn on the enemy.", |m| m.rite_burn += 1),
     charm("Slow Fuse", Common, (HD + 40, PLAIN), "burn_bonus", "Your burns deal +2 more damage each turn.", |m| m.burn_bonus += 2),
-    charm("Sap Tap", Common, (HD + 41, PLAIN), "claim_heal", "Each crystal you claim heals you for 2.", |m| m.claim_heal += 2),
-    charm("Crystal Skin", Common, (HD + 42, PLAIN), "claim_shield", "Each crystal you claim gives 3 shield.", |m| m.claim_shield += 3),
+    charm("Sap Tap", Common, (HD + 41, PLAIN), "claim_heal", "Each crystal you mine heals you for 2.", |m| m.claim_heal += 2),
+    charm("Crystal Skin", Common, (HD + 42, PLAIN), "claim_shield", "Each crystal you mine gives 3 shield.", |m| m.claim_shield += 3),
     charm("Plate Scraps", Common, (HD + 43, PLAIN), "armor", "Every hit on you deals 2 less.", |m| m.armor += 2),
     charm("Heart Root", Common, (HD + 44, PLAIN), "max_hp", "+20 max HP.", |m| m.max_hp += 20),
     // rares change how a turn is played
-    charm("Quick Fingers", Rare, (HD + 45, PLAIN), "reveals", "+1 reveal each turn.", |m| m.reveals += 1),
+    charm("Quick Fingers", Rare, (HD + 45, PLAIN), "reveals", "+1 pick each turn.", |m| m.reveals += 1),
     charm("Resonator", Rare, (HD + 46, PLAIN), "combo_pct", "Each rite's listed damage, shield and healing are 75% stronger.", |m| m.combo_pct += 75),
     charm("Leech Fang", Rare, (HD + 47, PLAIN), "lifesteal_pct", "Heal for 30% of the damage your rites deal.", |m| m.lifesteal_pct += 30),
     charm("Ambush Wire", Rare, (HD + 48, PLAIN), "opening", "Deal 10 damage at the start of each wave.", |m| m.opening += 10),
     charm("Running Start", Rare, (HD + 49, PLAIN), "surge_start", "Begin each turn with 6 surge.", |m| m.surge_start += 6),
     charm("Overcharger", Rare, (HD + 50, PLAIN), "surge_pct", "Each surge step is worth +17% instead of +10%.", |m| m.surge_pct += 7),
-    charm("Steady Hands", Rare, (HD + 51, PLAIN), "keep_surge", "Surge carries over between your turns. Mines still wipe it.", |m| m.keep_surge += 1),
+    charm("Steady Hands", Rare, (HD + 51, PLAIN), "keep_surge", "Surge carries over between your turns.", |m| m.keep_surge += 1),
     charm("Opening Gambit", Rare, (HD + 52, PLAIN), "first_pct", "Your first rite each turn deals +100%.", |m| m.first_pct += 100),
-    charm("Resonant Shards", Rare, (HD + 53, PLAIN), "claim_zap", "Each crystal you claim zaps the enemy for 3.", |m| m.claim_zap += 3),
-    charm("Salvager", Rare, (HD + 54, PLAIN), "salvage", "Crystals you break with a mine still pay out.", |m| m.salvage += 1),
-    charm("Spite Fuse", Rare, (HD + 55, PLAIN), "mine_spite", "Mines you hit also deal 6 damage to the enemy.", |m| m.mine_spite += 6),
-    charm("Hourglass", Rare, (HD + 56, PLAIN), "reveal_shield", "Each reveal you leave unused when your turn ends becomes 3 shield.", |m| m.reveal_shield += 3),
+    charm("Resonant Shards", Rare, (HD + 53, PLAIN), "claim_zap", "Each crystal you mine zaps the enemy for 3.", |m| m.claim_zap += 3),
+    charm("Salvager", Rare, (HD + 54, PLAIN), "salvage", "Each cave-in on your boards gives a stack of its element.", |m| m.salvage += 1),
+    charm("Spite Fuse", Rare, (HD + 55, PLAIN), "mine_spite", "Each cave-in on your boards also deals 6 damage to the enemy.", |m| m.mine_spite += 6),
+    charm("Hourglass", Rare, (HD + 56, PLAIN), "reveal_shield", "Each pick you leave unused when your turn ends becomes 3 shield.", |m| m.reveal_shield += 3),
     charm("Hoarder's Sack", Rare, (HD + 57, PLAIN), "hoard_shield", "End your turn holding 3 or more stacks: gain 6 shield.", |m| m.hoard_shield += 6),
     charm("Chain Lightning", Rare, (HD + 58, PLAIN), "chain", "Each rite after your first in a turn deals +5 more than the one before.", |m| m.chain += 5),
-    charm("Powder Keg", Rare, (HD + 59, PLAIN), "mine_no_end", "Mines no longer end your turn. They still hurt and wipe surge.", |m| m.mine_no_end += 1),
+    charm("Powder Keg", Rare, (HD + 59, PLAIN), "mine_surge", "Each cave-in on your boards gives 3 surge.", |m| m.mine_surge += 3),
     // legendaries bend a core rule
-    charm("Twin Vein", Legendary, (HD + 60, PLAIN), "claim_bonus", "Crystals give 2 stacks, but your boards hold 2 more mines.", |m| {
+    charm("Twin Vein", Legendary, (HD + 60, PLAIN), "claim_bonus", "Crystals give 2 stacks, but your boards hold 2 more faults.", |m| {
         m.claim_bonus += 1;
         m.fewer_mines -= 2
     }),
-    charm("Glass Blade", Legendary, (HD + 61, PLAIN), "power", "+2 power, but mines deal 2 more damage to you.", |m| {
+    charm("Glass Blade", Legendary, (HD + 61, PLAIN), "power", "+2 power, but cave-ins deal 2 more damage to you.", |m| {
         m.power += 2;
         m.mine_guard -= 2
     }),
     charm("Smoke Bomb", Legendary, (HD + 62, PLAIN), "evade", "The first enemy rite each turn misses you.", |m| m.evade += 1),
-    charm("Sixth Sense", Legendary, (HD + 63, PLAIN), "sense", "The first mine you flip each turn is flagged instead of going off.", |m| m.sense += 1),
+    charm("Sixth Sense", Legendary, (HD + 63, PLAIN), "sense", "The first cave-in on your boards each turn does no harm.", |m| m.sense += 1),
     charm("Echo Chamber", Legendary, (HD + 64, PLAIN), "echo", "Your three-element rites fire twice.", |m| m.echo += 1),
     charm("Berserker's Axe", Legendary, (HD + 65, PLAIN), "desperate", "Below half HP, +4 power.", |m| m.desperate += 4),
 ];
@@ -519,7 +523,7 @@ const fn foe(name: &'static str, sprite: usize, desc: &'static str, hp: i32, pow
 // Every enemy bends one rule, so each asks for a different answer.
 pub static NORMALS: &[EnemyDef] = &[
     foe("Mire Hound", HD + 3, "Grows fiercer: +1 power every turn.", 16, 1, &[Tide, Stone], 2, |m| m.enrage = 1),
-    foe("Cinder Imp", HD + 4, "Gains a stack whenever you hit a mine.", 12, 2, &[Ember, Spark], 2, |m| m.foe_mine_gift = 1),
+    foe("Cinder Imp", HD + 4, "Gains a stack whenever your ground caves in.", 12, 2, &[Ember, Spark], 2, |m| m.foe_mine_gift = 1),
     foe("Gust Wisp", HD + 5, "Slippery: the first rite each turn only grazes it, for half damage.", 12, 1, &[Gale, Spark], 3, |m| {
         m.evade = 1;
         m.graze = 1
@@ -536,7 +540,7 @@ pub static ELITES: &[EnemyDef] = &[
         m.start_shield = 8;
         m.armor = 1
     }),
-    foe("Gale Duchess", HD + 12, "One extra reveal. The first rite each turn only grazes her, for half damage.", 38, 2, &[Gale, Tide, Spark], 4, |m| {
+    foe("Gale Duchess", HD + 12, "One extra pick. The first rite each turn only grazes her, for half damage.", 38, 2, &[Gale, Tide, Spark], 4, |m| {
         m.reveals = 1;
         m.evade = 1;
         m.graze = 1
@@ -551,7 +555,7 @@ pub static ELITES: &[EnemyDef] = &[
 /// Two per floor; each map rolls which one waits at the end.
 pub static BOSSES: &[[EnemyDef; 2]] = &[
     [
-        foe("Minelayer Queen", HD + 14, "1 extra mine in your boards. Gains a stack when you hit one.", 50, 2, &[Ember, Stone, Spark], 4, |m| {
+        foe("Minelayer Queen", HD + 14, "1 more fault in your boards. Gains a stack whenever your ground caves in.", 50, 2, &[Ember, Stone, Spark], 4, |m| {
             m.foe_mines = 1;
             m.foe_mine_gift = 1
         }),
@@ -573,7 +577,7 @@ pub static BOSSES: &[[EnemyDef; 2]] = &[
         }),
     ],
     [
-        foe("Null Cartographer", HD + 18, "One extra reveal, 3 mines pre-flagged. Jams your surge at 6.", 135, 4, &[Spark, Gale, Ember], 5, |m| {
+        foe("Null Cartographer", HD + 18, "One extra pick, 3 of its cracks propped up. Jams your surge at 6.", 135, 4, &[Spark, Gale, Ember], 5, |m| {
             m.reveals = 1;
             m.scouts = 3;
             m.foe_surge_cap = 6
@@ -611,7 +615,7 @@ pub static ENDINGS: &[Ending] = &[
         name: "The Drowned Archive",
         key: "Brine Lantern",
         key_sprite: HD + 82,
-        boon: "+1 reveal each turn.",
+        boon: "+1 pick each turn.",
         curse: "Enemies have 15% more HP.",
         me: |m| m.reveals += 1,
         hp_pct: 115,
@@ -636,7 +640,7 @@ pub static ENDINGS: &[Ending] = &[
                 m.armor = 1
             }),
         ],
-        elite: foe("The Angler", HD + 70, "Its lure hides 2 more mines in your boards. The first rite each turn only grazes it.", 50, 3, &[Tide, Gale, Spark], 4, |m| {
+        elite: foe("The Angler", HD + 70, "Its lure leaves 2 more faults in your boards. The first rite each turn only grazes it.", 50, 3, &[Tide, Gale, Spark], 4, |m| {
             m.foe_mines = 2;
             m.evade = 1;
             m.graze = 1
@@ -669,11 +673,11 @@ pub static ENDINGS: &[Ending] = &[
                 m.rite_burn = 1;
                 m.burn_bonus = 1
             }),
-            foe("Living Flame", HD + 73, "+1 power every turn. Mines it hits burst at you for 5.", 14, 3, &[Ember, Gale], 3, |m| {
+            foe("Living Flame", HD + 73, "+1 power every turn. Cave-ins on its boards burst at you for 5.", 14, 3, &[Ember, Gale], 3, |m| {
                 m.enrage = 1;
                 m.mine_spite = 5
             }),
-            foe("Cinder Whirl", HD + 74, "Each crystal it claims scorches you for 3.", 15, 2, &[Ember, Spark], 2, |m| m.claim_zap = 3),
+            foe("Cinder Whirl", HD + 74, "Each crystal it mines scorches you for 3.", 15, 2, &[Ember, Spark], 2, |m| m.claim_zap = 3),
         ],
         elite: foe("Slag Colossus", HD + 75, "Starts with 12 shield and gains 3 each turn. Its rites set you burning.", 55, 3, &[Ember, Stone, Spark], 4, |m| {
             m.start_shield = 12;
@@ -701,11 +705,11 @@ pub static ENDINGS: &[Ending] = &[
             choices: &[pick("Pry the eye loose.", &[Key(2)]), pick("Walk past it.", &[Text("It keeps watching.")])],
         },
         normals: &[
-            foe("Spindle Crawler", HD + 77, "Plants 1 more mine in your boards, and gains a stack when you hit one.", 16, 2, &[Spark, Stone], 2, |m| {
+            foe("Spindle Crawler", HD + 77, "Leaves 1 more fault in your boards, and gains a stack whenever your ground caves in.", 16, 2, &[Spark, Stone], 2, |m| {
                 m.foe_mines = 1;
                 m.foe_mine_gift = 1
             }),
-            foe("Hover Drone", HD + 78, "One extra reveal. The first rite each turn only grazes it.", 13, 2, &[Spark, Gale], 2, |m| {
+            foe("Hover Drone", HD + 78, "One extra pick. The first rite each turn only grazes it.", 13, 2, &[Spark, Gale], 2, |m| {
                 m.reveals = 1;
                 m.evade = 1;
                 m.graze = 1
@@ -719,7 +723,7 @@ pub static ENDINGS: &[Ending] = &[
             m.foe_surge_cap = 4;
             m.armor = 2
         }),
-        boss: foe("The Silent Engine", HD + 81, "Jams your surge at 4 and plants 2 more mines in your boards. Every hit deals 1 less.", 200, 5, &[Spark, Stone, Tide], 5, |m| {
+        boss: foe("The Silent Engine", HD + 81, "Jams your surge at 4 and leaves 2 more faults in your boards. Every hit deals 1 less.", 200, 5, &[Spark, Stone, Tide], 5, |m| {
             m.foe_surge_cap = 4;
             m.foe_mines = 2;
             m.armor = 1
@@ -783,7 +787,7 @@ pub static EXPEDITIONS: &[Expedition] = &[
     Expedition {
         name: "Crystal Hollows",
         text: "Caves of glass. Every step rings, and the boards hide more than they show.",
-        rules: &["Enemies have 15% more HP.", "Bosses gain +1 power every 2 turns.", "1 fewer reveal each turn."],
+        rules: &["Enemies have 15% more HP.", "Bosses gain +1 power every 2 turns.", "1 fewer pick each turn."],
         hp_pct: 115,
         me: |m| m.reveals -= 1,
         foe: NOTHING,
@@ -835,15 +839,15 @@ const fn twist(name: &'static str, tone: i32, desc: &'static str, me: Tweak, foe
 const NOTHING: Tweak = |_| {};
 
 pub static TWISTS: &[Twist] = &[
-    twist("Shallow Seams", 1, "1 fewer mine on each of your boards.", |m| m.fewer_mines += 1, NOTHING),
+    twist("Shallow Seams", 1, "1 fewer fault on each of your boards.", |m| m.fewer_mines += 1, NOTHING),
     twist("Tailwind", 1, "Begin each turn with 2 surge.", |m| m.surge_start += 2, NOTHING),
     twist("Second Wind", 1, "Heal 6 whenever a new wave steps in.", |m| m.heal_after += 6, NOTHING),
     twist("Gold Dust", 1, "+50% shards from battles.", |m| m.shard_pct += 50, NOTHING),
-    twist("Fault Lines", -1, "Mines deal 1 more damage to you.", |m| m.mine_guard -= 1, NOTHING),
+    twist("Fault Lines", -1, "Cave-ins deal 1 more damage to you.", |m| m.mine_guard -= 1, NOTHING),
     twist("Iron Hides", -1, "Enemies start each wave with 6 shield.", NOTHING, |m| m.start_shield += 6),
     twist("Restless Dead", -1, "Enemies have +1 power.", NOTHING, |m| m.power += 1),
-    twist("Thick Fog", -1, "1 fewer reveal each turn.", |m| m.reveals -= 1, NOTHING),
-    twist("Brittle Ground", 0, "1 more mine on every board, yours and theirs.", |m| m.fewer_mines -= 1, |m| m.fewer_mines -= 1),
+    twist("Thick Fog", -1, "1 fewer pick each turn.", |m| m.reveals -= 1, NOTHING),
+    twist("Brittle Ground", 0, "1 more fault on every board, yours and theirs.", |m| m.fewer_mines -= 1, |m| m.fewer_mines -= 1),
     twist("Sharp Edges", 0, "Everyone has +1 power.", |m| m.power += 1, |m| m.power += 1),
 ];
 

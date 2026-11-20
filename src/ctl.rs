@@ -53,6 +53,7 @@ fn key(name: &str) -> Option<KeyCode> {
         "4" => Key4,
         "b" => B,
         "e" => E,
+        "k" => K,
         "l" => L,
         "m" => M,
         "n" => N,
@@ -69,6 +70,8 @@ fn parse(line: &str) -> Vec<Step> {
     match (w.first().copied(), num.len()) {
         (Some("move"), 2) => vec![Step::Move(at(0))],
         (Some("click"), 2) => vec![Step::Move(at(0)), Step::Down(MouseButton::Left, at(0)), Step::Up(MouseButton::Left)],
+        (Some("down"), 2) => vec![Step::Move(at(0)), Step::Down(MouseButton::Left, at(0))],
+        (Some("up"), 0) => vec![Step::Up(MouseButton::Left)],
         (Some("rclick"), 2) => vec![Step::Move(at(0)), Step::Down(MouseButton::Right, at(0)), Step::Up(MouseButton::Right)],
         (Some("drag"), 4) => {
             let (a, z) = (at(0), at(2));

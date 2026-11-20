@@ -3,201 +3,156 @@ use crate::{data::Element, rng::Rng};
 pub const W: usize = 6;
 pub const N: usize = W * W;
 /// Crystals on a board: between these two, so no two boards feel alike.
-pub const CRYSTALS: (usize, usize) = (4, 6);
-/// Most solid rock a board can hold. Rock cannot be flipped and needs no clearing.
-pub const MAX_ROCK: usize = 6;
+pub const CRYSTALS: (usize, usize) = (8, 11);
+/// Most solid rock a board can hold. Rock never cracks.
+pub const MAX_ROCK: usize = 4;
+/// A tile caves in when it reaches this many cracks.
+pub const CAVE: u8 = 3;
 
 #[derive(Clone, Copy, Default)]
 pub struct Tile {
-    pub mine: bool,
-    /// always visible, never clickable; clear every safe tile around it to claim a stack
+    /// gives a stack of the board's element to whoever mines it
     pub crystal: bool,
-    /// solid rock: never flipped, hides nothing, shapes the board
+    /// solid rock: never cracks, never caves in
     pub rock: bool,
-    /// crystal only: its stack has been collected
-    pub claimed: bool,
-    /// crystal only: a mine went off next to it, so it gives nothing
-    pub broken: bool,
-    pub revealed: bool,
-    pub flagged: bool,
+    /// 0 to `CAVE - 1`; at `CAVE` it caves in
+    pub crack: u8,
+    /// caved in: rubble for good, and a crystal there is lost
+    pub caved: bool,
+    /// a crystal already mined
+    pub used: bool,
 }
 
-/// One board holds crystals of a single element.
+/// One board holds crystals of a single element, all in view. Mining one cracks the tiles around it.
 #[derive(Clone)]
 pub struct Board {
     pub element: Element,
     pub tiles: Vec<Tile>,
-    pub mines: usize,
-    /// nothing flipped yet: the first flip is guaranteed safe
-    pub fresh: bool,
-}
-
-/// What flipping a tile did.
-pub struct Flip {
-    pub mine: bool,
-    /// crystals whose surroundings are now fully cleared
-    pub claimed: usize,
-    /// crystals a mine just broke
-    pub broken: usize,
 }
 
 impl Board {
-    pub fn deal(rng: &mut Rng, element: Element, mines: usize) -> Board {
+    pub fn deal(rng: &mut Rng, element: Element, weak: usize) -> Board {
         // every deal rolls its own mix: how many crystals, how much rock
         let crystals = CRYSTALS.0 + rng.below(CRYSTALS.1 - CRYSTALS.0 + 1);
         let rock = rng.below(MAX_ROCK + 1);
-        let mut tiles: Vec<Tile> = (0..N)
-            .map(|i| Tile {
-                mine: i < mines,
-                crystal: i >= mines && i < mines + crystals,
-                rock: i >= mines + crystals && i < mines + crystals + rock,
-                ..Tile::default()
-            })
-            .collect();
+        let mut tiles: Vec<Tile> = (0..N).map(|i| Tile { crystal: i < crystals, rock: i >= crystals && i < crystals + rock, ..Tile::default() }).collect();
         rng.shuffle(&mut tiles);
-        Board { element, tiles, mines, fresh: true }
+        // a third of the ground starts hairline-cracked, and `weak` tiles are one crack from going
+        let mut ground: Vec<usize> = (0..N).filter(|&i| !tiles[i].rock).collect();
+        rng.shuffle(&mut ground);
+        let weak = weak.min(ground.len());
+        for (k, &i) in ground.iter().enumerate() {
+            tiles[i].crack = if k < weak { CAVE - 1 } else if k < weak + ground.len() / 3 { 1 } else { 0 };
+        }
+        Board { element, tiles }
     }
 
-    pub fn neighbors(i: usize) -> impl Iterator<Item = usize> {
-        let (x, y) = ((i % W) as i32, (i / W) as i32);
-        (-1..=1)
-            .flat_map(move |dy| (-1..=1).map(move |dx| (x + dx, y + dy)))
-            .filter(move |&(nx, ny)| {
-                (nx, ny) != (x, y) && nx >= 0 && ny >= 0 && nx < W as i32 && ny < W as i32
-            })
-            .map(|(nx, ny)| ny as usize * W + nx as usize)
+    /// The tiles sharing an edge with `i`.
+    pub fn around(i: usize) -> impl Iterator<Item = usize> {
+        let (x, y) = (i % W, i / W);
+        [(x > 0).then(|| i - 1), (x + 1 < W).then(|| i + 1), (y > 0).then(|| i - W), (y + 1 < W).then(|| i + W)].into_iter().flatten()
     }
 
-    /// The minesweeper hint: mines touching tile `i`.
-    pub fn adjacent(&self, i: usize) -> usize {
-        Self::neighbors(i).filter(|&j| self.tiles[j].mine).count()
-    }
-
-    /// A crystal that can still be claimed.
+    /// A crystal that can still be mined.
     pub fn live(&self, i: usize) -> bool {
-        let t = &self.tiles[i];
-        t.crystal && !t.claimed && !t.broken
+        let t = self.tiles[i];
+        t.crystal && !t.used && !t.caved
     }
 
-    /// Hidden tiles still standing between crystal `c` and its stack (mines included: you cannot tell).
-    pub fn left_around(&self, c: usize) -> usize {
-        Self::neighbors(c).filter(|&j| !self.tiles[j].revealed && !self.tiles[j].crystal && !self.tiles[j].rock).count()
+    /// A tile that can still crack: not rock, not rubble.
+    pub fn standing(&self, i: usize) -> bool {
+        !self.tiles[i].rock && !self.tiles[i].caved
     }
 
-    /// No crystal left to claim: time for a fresh board.
+    /// No crystal left to mine: time for a fresh board.
     pub fn spent(&self) -> bool {
         !(0..N).any(|i| self.live(i))
     }
 
-    /// Hidden, unflagged and not a crystal: a tile that can be flipped.
-    pub fn open(&self, i: usize) -> bool {
-        let t = &self.tiles[i];
-        !t.revealed && !t.flagged && !t.crystal && !t.rock
-    }
-
-    /// Safe opening: if the first tile flipped on a board hides a mine, the mine moves elsewhere.
-    /// The first click is never a lost turn, but it is not a free area either.
-    fn clear_opening(&mut self, i: usize, rng: &mut Rng) {
-        let mut spare: Vec<usize> = (0..N).filter(|&k| k != i && !self.tiles[k].mine && !self.tiles[k].crystal && !self.tiles[k].rock).collect();
-        rng.shuffle(&mut spare);
-        if let (true, Some(k)) = (self.tiles[i].mine, spare.pop()) {
-            // a scouting flag travels with its mine
-            self.tiles[k].mine = true;
-            self.tiles[k].flagged = self.tiles[i].flagged;
-            self.tiles[i].mine = false;
-            self.tiles[i].flagged = false;
-        }
-    }
-
-    /// Flip open tile `i`. A safe "0" opens its neighbours too, like minesweeper.
-    /// A mine breaks every unclaimed crystal it touches.
-    pub fn flip(&mut self, i: usize, rng: &mut Rng) -> Flip {
-        if std::mem::take(&mut self.fresh) {
-            self.clear_opening(i, rng);
-        }
-        self.tiles[i].revealed = true;
-        if self.tiles[i].mine {
-            let mut broken = 0;
-            for j in Self::neighbors(i) {
-                if self.live(j) {
-                    self.tiles[j].broken = true;
-                    broken += 1;
-                }
+    /// Adds a crack to each tile in `hit`. A tile that reaches `CAVE` caves in; it takes nothing else
+    /// down with it, so what a pick can cost is always in view. Returns the tiles that caved in, in order.
+    pub fn crack(&mut self, hit: impl IntoIterator<Item = usize>) -> Vec<usize> {
+        let mut caved = vec![];
+        for i in hit {
+            if !self.standing(i) {
+                continue;
             }
-            return Flip { mine: true, claimed: 0, broken };
-        }
-        let mut todo = vec![i];
-        while let Some(k) = todo.pop() {
-            if self.adjacent(k) == 0 {
-                for j in Self::neighbors(k) {
-                    if self.open(j) {
-                        self.tiles[j].revealed = true;
-                        todo.push(j);
-                    }
-                }
+            self.tiles[i].crack += 1;
+            if self.tiles[i].crack >= CAVE {
+                self.tiles[i].caved = true;
+                caved.push(i);
             }
         }
-        let mut claimed = 0;
-        for c in 0..N {
-            // "cleared" means every safe neighbour is revealed; mines stay hidden
-            if self.live(c) && Self::neighbors(c).all(|j| self.tiles[j].revealed || self.tiles[j].mine || self.tiles[j].crystal || self.tiles[j].rock) {
-                self.tiles[c].claimed = true;
-                claimed += 1;
-            }
-        }
-        Flip { mine: false, claimed, broken: 0 }
+        caved
     }
 
-    fn known_mine(&self, i: usize) -> bool {
-        self.tiles[i].flagged || (self.tiles[i].revealed && self.tiles[i].mine)
+    /// Mines crystal `i`: it is used up, and every tile touching it cracks. None if `i` is not a live
+    /// crystal; otherwise the tiles that caved in.
+    pub fn mine(&mut self, i: usize) -> Option<Vec<usize>> {
+        if !self.live(i) {
+            return None;
+        }
+        self.tiles[i].used = true;
+        Some(self.crack(Board::around(i)))
     }
 
-    /// Flags up to `n` hidden mines (scouting effects).
-    pub fn flag_mines(&mut self, n: usize) {
-        for t in self.tiles.iter_mut().filter(|t| t.mine && !t.revealed && !t.flagged).take(n) {
-            t.flagged = true;
+    /// Props tile `i` up: one crack fewer. False if it has none or cannot be propped.
+    pub fn prop(&mut self, i: usize) -> bool {
+        let ok = self.standing(i) && self.tiles[i].crack > 0;
+        if ok {
+            self.tiles[i].crack -= 1;
+        }
+        ok
+    }
+
+    /// The tiles a vent dug at `i` would ease: it and the tiles around it that hold a crack. Empty if
+    /// no vent can go there (a live crystal, rock or rubble).
+    pub fn vent_eases(&self, i: usize) -> Vec<usize> {
+        if !self.standing(i) || self.live(i) {
+            return vec![];
+        }
+        std::iter::once(i).chain(Board::around(i)).filter(|&j| self.standing(j) && self.tiles[j].crack > 0).collect()
+    }
+
+    /// Digs a vent at `i`: it and every tile around it lose a crack. False if it would ease nothing.
+    pub fn vent(&mut self, i: usize) -> bool {
+        let eased = self.vent_eases(i);
+        for &j in &eased {
+            self.tiles[j].crack -= 1;
+        }
+        !eased.is_empty()
+    }
+
+    /// Props up the `n` most cracked tiles, one crack each.
+    pub fn ease(&mut self, n: usize) {
+        let mut worst: Vec<usize> = (0..N).filter(|&i| self.standing(i) && self.tiles[i].crack > 0).collect();
+        worst.sort_by_key(|&i| std::cmp::Reverse(self.tiles[i].crack));
+        for &i in worst.iter().take(n) {
+            self.prop(i);
         }
     }
 
-    /// Plants up to `n` more mines under hidden tiles (an opponent's rite). Tiles beside a revealed
-    /// number are skipped while others remain, so numbers already read mostly stay true.
-    pub fn bury(&mut self, n: usize, rng: &mut Rng) {
-        let hidden = |b: &Board, i: usize| b.open(i) && !b.tiles[i].mine;
-        let quiet = |b: &Board, i: usize| hidden(b, i) && !Self::neighbors(i).any(|j| b.tiles[j].revealed);
-        let mut spots: Vec<usize> = (0..N).filter(|&i| quiet(self, i)).collect();
-        if spots.len() < n {
-            spots = (0..N).filter(|&i| hidden(self, i)).collect();
-        }
+    /// Cracks `n` standing tiles picked at random: an opponent's rite.
+    /// Returns the tiles that caved in.
+    pub fn quake(&mut self, n: usize, rng: &mut Rng) -> Vec<usize> {
+        let mut spots: Vec<usize> = (0..N).filter(|&i| self.standing(i)).collect();
         rng.shuffle(&mut spots);
-        for &i in spots.iter().take(n) {
-            self.tiles[i].mine = true;
-            self.mines += 1;
-        }
+        spots.truncate(n);
+        self.crack(spots)
     }
 
-    /// Chance that open tile `i` is a mine, judged only from what is visible (the AI does not cheat).
-    pub fn risk(&self, i: usize) -> f32 {
-        if self.fresh {
-            return 0.0; // safe opening
+    /// The tiles mining crystal `i` would bring down, without touching the board.
+    pub fn would_cave(&self, i: usize) -> Vec<usize> {
+        self.clone().mine(i).unwrap_or_default()
+    }
+
+    /// Breaks up to `n` live crystals: they become plain tiles. Returns how many broke.
+    pub fn shatter(&mut self, n: usize) -> usize {
+        let live: Vec<usize> = (0..N).filter(|&i| self.live(i)).take(n).collect();
+        for &i in &live {
+            self.tiles[i].crystal = false;
         }
-        let mut risk: Option<f32> = None;
-        // revealed numbers and crystals (which show their count too) are the clues
-        for j in Self::neighbors(i).filter(|&j| (self.tiles[j].revealed && !self.tiles[j].mine) || self.tiles[j].crystal) {
-            let known = Self::neighbors(j).filter(|&k| self.known_mine(k)).count();
-            let open = Self::neighbors(j).filter(|&k| self.open(k)).count();
-            let local = self.adjacent(j).saturating_sub(known) as f32 / open.max(1) as f32;
-            // one hint proving the tile safe beats any other hint
-            risk = Some(match risk {
-                Some(r) if r == 0.0 || local == 0.0 => 0.0,
-                Some(r) => r.max(local),
-                None => local,
-            });
-        }
-        risk.unwrap_or_else(|| {
-            let known = (0..N).filter(|&k| self.known_mine(k)).count();
-            let open = (0..N).filter(|&k| self.open(k)).count();
-            self.mines.saturating_sub(known) as f32 / open.max(1) as f32
-        })
+        live.len()
     }
 }
 
@@ -206,84 +161,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deal_has_exact_mines_crystals_and_true_hints() {
-        let mut rng = Rng::new(7);
-        let b = Board::deal(&mut rng, Element::Ember, 6);
-        assert_eq!(b.tiles.len(), N);
-        assert_eq!(b.tiles.iter().filter(|t| t.mine).count(), 6);
-        let crystals = b.tiles.iter().filter(|t| t.crystal).count();
-        assert!((CRYSTALS.0..=CRYSTALS.1).contains(&crystals));
-        assert!(b.tiles.iter().filter(|t| t.rock).count() <= MAX_ROCK);
-        assert!(b.tiles.iter().all(|t| t.mine as u8 + t.crystal as u8 + t.rock as u8 <= 1));
-        assert_eq!(Board::neighbors(0).count(), 3);
-        assert_eq!(Board::neighbors(7).count(), 8);
-        let around_mines: usize = (0..N).filter(|&i| b.tiles[i].mine).map(|i| Board::neighbors(i).count()).sum();
-        assert_eq!((0..N).map(|i| b.adjacent(i)).sum::<usize>(), around_mines);
-    }
-
-    #[test]
-    fn a_crystal_is_claimed_only_when_every_safe_tile_around_it_is_clear() {
+    fn deal_has_crystals_rock_and_weak_tiles() {
         for seed in 0..50 {
-            let mut b = Board::deal(&mut Rng::new(seed), Element::Ember, 6);
-            b.fresh = false;
-            let c = (0..N).find(|&i| b.tiles[i].crystal).unwrap();
-            let safe: Vec<usize> = Board::neighbors(c).filter(|&j| !b.tiles[j].mine && !b.tiles[j].crystal && !b.tiles[j].rock).collect();
-            let mut claimed_at = None;
-            for (step, &j) in safe.iter().enumerate() {
-                if b.open(j) {
-                    b.flip(j, &mut Rng::new(1));
-                }
-                if b.tiles[c].claimed && claimed_at.is_none() {
-                    claimed_at = Some(step);
-                }
-                let all_clear = safe.iter().all(|&k| b.tiles[k].revealed);
-                assert_eq!(b.tiles[c].claimed, all_clear || safe.is_empty(), "seed {seed}");
-            }
-            assert!(b.tiles.iter().all(|t| !(t.mine && t.revealed)), "clearing never opens a mine");
+            let b = Board::deal(&mut Rng::new(seed), Element::Ember, 4);
+            assert_eq!(b.tiles.len(), N);
+            let crystals = b.tiles.iter().filter(|t| t.crystal).count();
+            assert!((CRYSTALS.0..=CRYSTALS.1).contains(&crystals));
+            assert!(b.tiles.iter().filter(|t| t.rock).count() <= MAX_ROCK);
+            assert!(b.tiles.iter().all(|t| !(t.crystal && t.rock) && t.crack < CAVE && !t.caved && !t.used));
+            assert!(b.tiles.iter().all(|t| !t.rock || t.crack == 0), "rock never cracks");
+            assert_eq!(b.tiles.iter().filter(|t| t.crack == CAVE - 1).count(), 4);
         }
+        assert_eq!(Board::around(7).count() + Board::around(0).count(), 6);
+        assert!(Board::around(W - 1).all(|j| j != W), "no wrapping round the edge");
+    }
+
+    /// A blank board with crystals at `gems` and the given cracks.
+    fn blank(gems: &[usize], cracks: &[(usize, u8)]) -> Board {
+        let mut b = Board { element: Element::Ember, tiles: vec![Tile::default(); N] };
+        for &i in gems {
+            b.tiles[i].crystal = true;
+        }
+        for &(i, c) in cracks {
+            b.tiles[i].crack = c;
+        }
+        b
     }
 
     #[test]
-    fn the_first_flip_on_a_board_is_never_a_mine() {
-        for seed in 0..100 {
-            let mut rng = Rng::new(seed);
-            let mut b = Board::deal(&mut rng, Element::Ember, 8);
-            b.flag_mines(2);
-            let i = (0..N).filter(|&i| b.open(i)).nth(seed as usize % 20).unwrap();
-            assert!(!b.flip(i, &mut rng).mine, "seed {seed}");
-            assert_eq!(b.tiles.iter().filter(|t| t.mine).count(), 8, "mines move, none vanish");
-            assert!(b.tiles.iter().all(|t| !t.flagged || t.mine), "flags still mark mines");
-        }
+    fn mining_cracks_the_neighbours_and_a_cave_in_stays_put() {
+        // 7 touches 1, 6, 8 and 13; 8 is about to cave in, and 9 beside it too
+        let mut b = blank(&[7], &[(8, 2), (9, 2)]);
+        assert_eq!(b.would_cave(7), vec![8], "8 falls, and takes nothing with it");
+        assert!(b.live(7), "looking ahead changes nothing");
+        assert_eq!(b.mine(7), Some(vec![8]));
+        assert!(!b.live(7) && b.mine(7).is_none(), "a crystal is mined once");
+        assert_eq!((b.tiles[1].crack, b.tiles[6].crack, b.tiles[13].crack, b.tiles[9].crack), (1, 1, 1, 2));
+        assert!(b.tiles[8].caved && !b.prop(8), "rubble stays rubble");
+
+        // a crystal that caves in is lost, and rock never cracks
+        let mut b = blank(&[0, 1, 2], &[(1, 2)]);
+        b.tiles[6].rock = true;
+        assert_eq!(b.mine(0), Some(vec![1]));
+        assert!(!b.live(1) && b.live(2));
+        assert_eq!(b.tiles[6].crack, 0);
     }
 
     #[test]
-    fn a_mine_breaks_the_crystals_it_touches() {
-        for seed in 0..200 {
-            let mut b = Board::deal(&mut Rng::new(seed), Element::Ember, 6);
-            b.fresh = false;
-            let Some(m) = (0..N).find(|&i| b.tiles[i].mine && Board::neighbors(i).any(|j| b.tiles[j].crystal)) else { continue };
-            assert!(b.flip(m, &mut Rng::new(1)).mine);
-            for j in Board::neighbors(m).filter(|&j| b.tiles[j].crystal) {
-                assert!(b.tiles[j].broken && !b.live(j));
-            }
-            return;
-        }
-        panic!("no seed put a mine next to a crystal");
-    }
-
-    #[test]
-    fn a_proven_mine_reads_as_certain_and_crystals_are_never_open() {
+    fn props_ease_quake_and_shatter() {
+        let mut b = blank(&[0, 1, 2], &[(5, 2), (11, 1)]);
+        assert!(b.prop(5) && b.tiles[5].crack == 1 && !b.prop(4), "an uncracked tile needs no prop");
+        b.ease(2);
+        assert_eq!((b.tiles[5].crack, b.tiles[11].crack), (0, 0));
         let mut rng = Rng::new(3);
-        let mut b = Board::deal(&mut rng, Element::Ember, 6);
-        b.fresh = false;
-        for t in b.tiles.iter_mut().filter(|t| !t.mine && !t.crystal && !t.rock) {
-            t.revealed = true;
+        for _ in 0..CAVE {
+            b.quake(N, &mut rng);
         }
-        for i in 0..N {
-            assert_eq!(b.open(i), b.tiles[i].mine);
-            if b.open(i) {
-                assert!(b.risk(i) >= 1.0);
-            }
-        }
+        assert!(b.tiles.iter().all(|t| t.caved) && b.spent(), "crack every tile enough and the board comes down");
+        let mut b = blank(&[0, 1, 2], &[]);
+        assert_eq!(b.shatter(2), 2);
+
+        // a vent eases itself and the tiles around it, as often as there is a crack to ease, never on a live crystal
+        let mut b = blank(&[7], &[(8, 2), (9, 1), (2, 2), (14, 1), (6, 1)]);
+        assert!(b.vent_eases(7).is_empty() && b.vent_eases(30).is_empty(), "not on a crystal, and not with nothing to ease");
+        assert_eq!(b.vent_eases(8), vec![8, 9, 2, 14]);
+        assert!(b.vent(8));
+        assert_eq!((b.tiles[8].crack, b.tiles[9].crack, b.tiles[2].crack, b.tiles[14].crack, b.tiles[6].crack), (1, 0, 1, 0, 1));
+        assert!(b.vent(8) && b.tiles[8].crack == 0 && b.tiles[2].crack == 0, "the same tile vents again");
+        assert!(!b.vent(8), "but not with nothing left to ease");
+        assert_eq!((0..N).filter(|&i| b.live(i)).count(), 1);
     }
 }

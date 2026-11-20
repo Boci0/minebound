@@ -1,14 +1,19 @@
 use crate::{
-    board::{Board, N},
+    board::{Board, CAVE, N},
     data::*,
     rng::Rng,
 };
 
-pub const MINE_DMG: i32 = 2;
-pub const BASE_MINES: i32 = 5;
-pub const REVEALS: i32 = 6;
-/// The fewest reveals a player turn can have, however many penalties stack.
-pub const MIN_REVEALS: i32 = 5;
+/// What a cave-in costs whoever's board it was.
+pub const CAVE_DMG: i32 = 6;
+/// Gems a mined crystal pays, before charms.
+pub const CLAIM_GEMS: usize = 1;
+/// Tiles on a fresh board dealt one crack from caving in, give or take one.
+pub const BASE_WEAK: i32 = 8;
+/// Picks a turn: each mines a crystal or digs a vent.
+pub const REVEALS: i32 = 4;
+/// The fewest picks a player turn can have, however many penalties stack.
+pub const MIN_REVEALS: i32 = 3;
 pub const PRESSURE_TURN: usize = 12;
 /// Safe reveals in a row that count toward surge; each adds `SURGE_PCT` to skill damage.
 pub const MAX_SURGE: i32 = 10;
@@ -29,7 +34,7 @@ pub const HOOKS: &[&str] = &[
     "reveals", "power", "mine_guard", "start_shield", "combo_pct", "duds", "start_stacks", "burn_bonus", "scouts",
     "thorns", "foe_mines", "fewer_mines", "lifesteal_pct", "opening", "shield_turn", "surge_start", "surge_pct",
     "keep_surge", "rite_bonus", "rite_burn", "first_pct", "claim_zap", "claim_heal", "claim_shield", "claim_bonus",
-    "salvage", "mine_spite", "armor", "evade", "reveal_shield", "hoard_shield", "chain", "mine_no_end", "sense", "echo",
+    "salvage", "mine_spite", "armor", "evade", "reveal_shield", "hoard_shield", "chain", "mine_surge", "sense", "echo",
     "desperate", "heal_after",
 ];
 
@@ -48,7 +53,7 @@ pub struct Fighter {
     pub cur: usize,
     /// ammunition: spent by skills
     pub stacks: Vec<Element>,
-    /// safe reveals in a row this turn
+    /// crystals mined this turn, toward rite damage
     pub surge: i32,
     /// skills cast this turn
     pub cast_n: i32,
@@ -59,16 +64,17 @@ pub struct Fighter {
     pub burn: i32,
     pub weak: i32,
     pub reveals_left: i32,
-    /// reveals spent this turn
+    /// picks spent this turn
     pub used: i32,
+    /// cave-ins it will still shrug off this wave
     pub duds: i32,
-    /// mines it will still sense (and flag) this turn
+    /// cave-ins it will still shrug off this turn
     pub sense_left: i32,
     /// its shield skips wearing off at its next turn (Citadel)
     pub hold: bool,
     /// its shield shatters onto the next attacker whose rite hits it (Lodestone)
     pub brittle: bool,
-    /// reveals it loses at its next turn (Desert Wrath)
+    /// picks it loses at its next turn (Desert Wrath)
     pub blind: i32,
     /// its burn no longer halves (Hellbroth)
     pub simmer: bool,
@@ -181,7 +187,8 @@ pub enum Event {
     /// `side` claimed the crystals on these tiles of its `element` board. Carried here because the
     /// board may already be dealt anew when the last crystal on it goes
     Claim { side: usize, element: Element, tiles: Vec<usize> },
-    Mine,
+    /// tiles on `side`'s board just caved in
+    Cave { side: usize },
     /// `skill`: (index in `COMBOS`, level)
     /// `master`: a mastered rite whose mastery takes effect (Worldbreaker's only on a foe at half HP)
     Cast { from: usize, name: &'static str, element: Element, miss: bool, skill: (usize, usize), master: bool },
@@ -370,7 +377,7 @@ impl Battle {
                 Effect::Detonate => (format!("detonate {} burn", foe.burn), foe.burn.max(0) * (3 + f.mods.burn_bonus)),
                 Effect::PerReveal(v) => {
                     let n = f.used + if f.has(c, Effect::Unused) { f.reveals_left.max(0) } else { 0 };
-                    (format!("{n} reveals"), at_level(v, l) * n)
+                    (format!("{n} picks"), at_level(v, l) * n)
                 }
                 Effect::PerShatter(v) => {
                     let breaks = f.effects(c).find_map(|(e, l)| if let Effect::Shatter(n) = e { Some(at_level(n as i32, l) as usize) } else { None }).unwrap_or(0);
@@ -465,13 +472,13 @@ impl Battle {
     fn deal_board(&mut self, s: usize, k: usize) {
         // one fewer, the usual, or one more: boards differ in danger as well as shape
         let roll = self.rng.below(3) as i32 - 1;
-        let mut mines = (BASE_MINES + roll + self.f[1 - s].mods.foe_mines - self.f[s].mods.fewer_mines).clamp(2, 14);
-        // debug builds only: MINEBOUND_NO_MINES=1 gives the hero mine-free boards, so one flip claims a whole board
+        let mut weak = (BASE_WEAK + roll + self.f[1 - s].mods.foe_mines - self.f[s].mods.fewer_mines).clamp(0, 12);
+        // debug builds only: MINEBOUND_NO_MINES=1 gives the hero boards with no tile about to cave in
         if cfg!(debug_assertions) && s == 0 && std::env::var_os("MINEBOUND_NO_MINES").is_some() {
-            mines = 0;
+            weak = 0;
         }
-        let mut board = Board::deal(&mut self.rng, self.f[s].elements[k], mines as usize);
-        board.flag_mines(self.f[s].mods.scouts.max(0) as usize);
+        let mut board = Board::deal(&mut self.rng, self.f[s].elements[k], weak as usize);
+        board.ease(self.f[s].mods.scouts.max(0) as usize);
         if k < self.f[s].boards.len() {
             self.f[s].boards[k] = board;
         } else {
@@ -567,7 +574,7 @@ impl Battle {
         f.reveals_left = (REVEALS + f.mods.reveals - f.blind).max(if a == 0 { MIN_REVEALS } else { 1 });
         f.blind = 0;
         f.sense_left = f.mods.sense;
-        if turn > 1 && !f.hold {
+        if turn > 1 && !f.hold && f.mods.keep_shield == 0 {
             // shield wears off: half of it is gone by the start of its owner's next turn
             f.shield /= 2;
         }
@@ -636,6 +643,7 @@ impl Battle {
             return;
         }
         let a = self.active;
+        self.refresh(a);
         if self.f[a].weak > 0 {
             self.f[a].weak -= 1;
         }
@@ -651,9 +659,10 @@ impl Battle {
         self.begin_turn();
     }
 
-    /// Nothing left to flip and nothing left to fire: the turn passes on its own.
+    /// The enemy with no picks left and nothing left to fire: its turn passes on its own. The hero's
+    /// waits for End turn, so the ground settling never lands on the same click as a pick.
     fn tidy(&mut self, a: usize) {
-        if !self.over() && self.active == a && self.f[a].reveals_left <= 0 && self.ready(a).is_empty() {
+        if !self.over() && a == 1 && self.active == a && self.f[a].reveals_left <= 0 && self.ready(a).is_empty() {
             self.end_turn();
         }
     }
@@ -666,115 +675,108 @@ impl Battle {
         }
     }
 
-    /// Flip tile `i` on the active side's current board. False if the move is not allowed.
-    /// Clearing every safe tile around a crystal claims one stack of the board's element,
-    /// and every safe flip in a row builds surge. A mine gives nothing, breaks the crystals
-    /// it touches and ends the turn.
-    pub fn reveal(&mut self, i: usize) -> bool {
+    /// The active side mines crystal `i` on its current board, for a pick: a stack of the board's
+    /// element, a step of surge, and a crack in every tile around it. False if `i` is no live crystal.
+    pub fn dig(&mut self, i: usize) -> bool {
         let a = self.active;
-        if self.over() || self.f[a].reveals_left <= 0 {
-            return false;
-        }
         let cur = self.f[a].cur;
-        if i >= N || !self.f[a].boards[cur].open(i) {
+        if self.over() || self.f[a].reveals_left <= 0 || i >= N || !self.f[a].boards[cur].live(i) {
             return false;
         }
-        let board = &mut self.f[a].boards[cur];
-        if board.tiles[i].mine && !board.fresh && self.f[a].sense_left > 0 {
-            // Sixth Sense: the mine is found, not set off, and the reveal is not spent
-            board.tiles[i].flagged = true;
-            self.f[a].sense_left -= 1;
-            self.proc(a, "sense");
-            return true;
-        }
-        if board.tiles[i].mine && !board.fresh && self.f[a].duds > 0 {
-            // Lucky Coin: a dud is found harmlessly, so it breaks no crystal and keeps surge; the reveal is spent
-            board.tiles[i].flagged = true;
-            let f = &mut self.f[a];
-            (f.duds, f.reveals_left, f.used) = (f.duds - 1, f.reveals_left - 1, f.used + 1);
-            let msg = format!("{} hits a dud mine.", f.name);
-            self.log.push(msg);
-            self.events.push(Event::Flip);
-            self.proc(a, "duds");
-            self.tidy(a);
-            return true;
-        }
-        let was: Vec<bool> = self.f[a].boards[cur].tiles.iter().map(|t| t.claimed).collect();
-        let flip = self.f[a].boards[cur].flip(i, &mut self.rng);
-        let tiles: Vec<usize> = (0..N).filter(|&k| self.f[a].boards[cur].tiles[k].claimed && !was[k]).collect();
+        let fell = self.f[a].boards[cur].mine(i).unwrap_or_default();
         let jam = self.surge_cap(a);
         let f = &mut self.f[a];
         f.reveals_left -= 1;
         f.used += 1;
-        let spent = f.boards[cur].spent();
+        f.surge = (f.surge + 1).min(jam);
         let element = f.boards[cur].element;
-        if !flip.mine {
-            f.surge = (f.surge + 1).min(jam);
-            let n = flip.claimed as i32;
-            let gain = flip.claimed * (1 + f.mods.claim_bonus.max(0) as usize);
-            f.stacks.extend(std::iter::repeat(element).take(gain));
-            f.hp = (f.hp + n * f.mods.claim_heal).min(f.max_hp);
-            f.shield += n * f.mods.claim_shield;
-            let zap = n * f.mods.claim_zap;
-            let m = f.mods.clone();
-            self.events.push(if n > 0 { Event::Claim { side: a, element, tiles } } else { Event::Flip });
-            let claimed = n > 0;
-            self.procs(a, &[("claim_bonus", claimed && m.claim_bonus > 0), ("claim_heal", claimed && m.claim_heal > 0), ("claim_shield", claimed && m.claim_shield > 0), ("claim_zap", zap > 0)]);
-            if spent {
-                self.deal_board(a, cur);
+        let gain = CLAIM_GEMS + f.mods.claim_bonus.max(0) as usize;
+        f.stacks.extend(std::iter::repeat(element).take(gain));
+        f.hp = (f.hp + f.mods.claim_heal).min(f.max_hp);
+        f.shield += f.mods.claim_shield;
+        let m = f.mods.clone();
+        self.events.push(Event::Claim { side: a, element, tiles: vec![i] });
+        self.procs(a, &[("claim_bonus", m.claim_bonus > 0), ("claim_heal", m.claim_heal > 0), ("claim_shield", m.claim_shield > 0), ("claim_zap", m.claim_zap > 0)]);
+        if m.claim_zap > 0 {
+            self.hurt(1 - a, m.claim_zap);
+            if self.settle() {
+                return true;
             }
-            if zap > 0 {
-                self.hurt(1 - a, zap);
-                if self.settle() {
-                    return true;
-                }
-            }
-            self.tidy(a);
+        }
+        if self.cave(a, fell.len()) {
             return true;
         }
-        self.events.push(Event::Mine);
-        let name = f.name.clone();
-        let salvaged = f.mods.salvage > 0 && flip.broken > 0;
-        if salvaged {
-            f.stacks.extend(std::iter::repeat(element).take(flip.broken));
-        }
-        f.surge = 0;
-        let d = (MINE_DMG - f.mods.mine_guard).max(0);
-        let (spite, keep_going, guard) = (f.mods.mine_spite, f.mods.mine_no_end > 0, f.mods.mine_guard);
-        self.procs(a, &[("salvage", salvaged)]);
-        if spent {
-            self.deal_board(a, cur);
-        }
-        self.hurt(a, d);
-        self.log.push(format!("{name} hits a mine: -{d}"));
-        self.procs(a, &[("mine_guard", guard > 0)]);
-        // some opponents feed on your mistakes
-        let t = 1 - a;
-        for _ in 0..self.f[t].mods.foe_mine_gift.max(0) {
-            let k = self.rng.below(self.f[t].elements.len());
-            let e = self.f[t].elements[k];
-            self.f[t].stacks.push(e);
-        }
-        if spite > 0 {
-            self.hurt(t, spite);
-            self.proc(a, "mine_spite");
-        }
-        if !self.settle() {
-            if keep_going {
-                self.proc(a, "mine_no_end");
-                self.tidy(a);
-            } else {
-                self.end_turn();
-            }
-        }
+        self.refresh(a);
+        self.tidy(a);
         true
     }
 
-    pub fn toggle_flag(&mut self, i: usize) {
-        let f = &mut self.f[0];
-        if let Some(t) = f.boards[f.cur].tiles.get_mut(i) {
-            if !t.revealed && !t.crystal && !t.rock {
-                t.flagged = !t.flagged;
+    /// The active side digs a vent at tile `i` on its current board, for a pick: it and every tile
+    /// around it lose a crack. False if no vent can go there or it would ease nothing.
+    pub fn vent(&mut self, i: usize) -> bool {
+        let a = self.active;
+        let cur = self.f[a].cur;
+        if self.over() || self.f[a].reveals_left <= 0 || i >= N || !self.f[a].boards[cur].vent(i) {
+            return false;
+        }
+        self.f[a].reveals_left -= 1;
+        self.f[a].used += 1;
+        self.events.push(Event::Flip);
+        self.tidy(a);
+        true
+    }
+
+    /// `n` tiles just caved in on side `s`'s board: each one hurts it, unless a charm softens the
+    /// fall, and feeds whatever charms answer to it. True if the battle moved on (someone fell).
+    fn cave(&mut self, s: usize, n: usize) -> bool {
+        if n > 0 {
+            self.events.push(Event::Cave { side: s });
+        }
+        for _ in 0..n {
+            if self.over() {
+                return true;
+            }
+            let jam = self.surge_cap(s);
+            let f = &mut self.f[s];
+            let element = f.board().element;
+            // Sixth Sense, then Lucky Coin: it comes down harmlessly
+            let (sensed, dud) = (f.sense_left > 0, f.sense_left <= 0 && f.duds > 0);
+            if sensed {
+                f.sense_left -= 1;
+            } else if dud {
+                f.duds -= 1;
+            }
+            let d = if sensed || dud { 0 } else { (CAVE_DMG - f.mods.mine_guard).max(0) };
+            f.stacks.extend(std::iter::repeat(element).take(f.mods.salvage.max(0) as usize));
+            f.surge = (f.surge + f.mods.mine_surge.max(0)).min(jam);
+            let (m, name) = (f.mods.clone(), f.name.clone());
+            self.procs(s, &[("sense", sensed), ("duds", dud), ("salvage", m.salvage > 0), ("mine_surge", m.mine_surge > 0)]);
+            self.hurt(s, d);
+            self.log.push(format!("A tunnel caves in on {name}: -{d}"));
+            self.procs(s, &[("mine_guard", d > 0 && m.mine_guard > 0)]);
+            // some opponents feed on your mistakes
+            let t = 1 - s;
+            for _ in 0..self.f[t].mods.foe_mine_gift.max(0) {
+                let k = self.rng.below(self.f[t].elements.len());
+                let e = self.f[t].elements[k];
+                self.f[t].stacks.push(e);
+            }
+            if m.mine_spite > 0 {
+                self.hurt(t, m.mine_spite);
+                self.proc(s, "mine_spite");
+            }
+            if self.settle() {
+                return true;
+            }
+        }
+        self.over()
+    }
+
+    /// Deals anew every board of side `s` with no crystal left to mine.
+    fn refresh(&mut self, s: usize) {
+        for k in 0..self.f[s].boards.len() {
+            if self.f[s].boards[k].spent() {
+                self.deal_board(s, k);
             }
         }
     }
@@ -867,6 +869,7 @@ impl Battle {
         let pct = 100 + self.f[a].mods.combo_pct;
         let master = lvl >= MAX_LEVEL && !(self.f[a].has(c, Effect::Execute) && self.f[t].hp * 2 > self.f[t].max_hp);
         let (shield, mut leech) = (self.f[a].shield, self.f[a].mods.lifesteal_pct);
+        let mut fell = 0;
         for (e, lvl) in effects {
             let up = |v: i32| at_level(v, lvl);
             match e {
@@ -890,15 +893,16 @@ impl Battle {
                 Effect::SelfDamage(v) => self.f[a].hp = (self.f[a].hp - up(v)).max(1),
                 Effect::Reveal(n) => self.f[a].reveals_left += up(n),
                 Effect::Shatter(n) => self.shatter(t, up(n as i32) as usize),
+                // the cave-ins land after the hit, so a wave cannot change under the rite
                 Effect::Bury(n) => {
                     let cur = self.f[t].cur;
-                    self.f[t].boards[cur].bury(up(n as i32) as usize, &mut self.rng);
+                    fell += self.f[t].boards[cur].quake(up(n as i32) as usize, &mut self.rng).len();
                 }
                 // masteries; the ones that change the hit itself are in hit_damage
                 Effect::Sure | Effect::KeepSurge | Effect::PerShatter(_) | Effect::Execute | Effect::Unused | Effect::KeepHalf => {}
                 Effect::Duds(n) => self.f[a].duds += n,
                 Effect::Lifesteal(p) => leech += p,
-                Effect::Scout(n) => self.f[a].boards.iter_mut().for_each(|b| b.flag_mines(n)),
+                Effect::Scout(n) => self.f[a].boards.iter_mut().for_each(|b| b.ease(n)),
                 Effect::Hold => self.f[a].hold = true,
                 Effect::Steal(n) => {
                     let keep = self.f[t].stacks.len().saturating_sub(n);
@@ -964,22 +968,39 @@ impl Battle {
         }
         let line = if hits { format!("{}: {name} for {dmg}", self.f[a].name) } else { format!("{}: {name}", self.f[a].name) };
         self.log.push(line);
-        if !self.settle() {
-            self.tidy(a);
+        if self.settle() || self.cave(t, fell) {
+            return;
         }
+        self.refresh(t);
+        self.tidy(a);
     }
 
     /// Breaks up to `n` of `s`'s claimable crystals on the board it has up; a board left with none is dealt anew.
     fn shatter(&mut self, s: usize, n: usize) {
         let cur = self.f[s].cur;
         let board = &mut self.f[s].boards[cur];
-        let live: Vec<usize> = (0..N).filter(|&i| board.live(i)).take(n).collect();
-        for &i in &live {
-            board.tiles[i].broken = true;
-        }
-        if !live.is_empty() && board.spent() {
+        if board.shatter(n) > 0 && board.spent() {
             self.deal_board(s, cur);
         }
+    }
+
+    /// The AI's best pick on `f`'s board `k`: (tile, true to mine it or false to vent it, worth).
+    /// A crystal is worth its gem less what mining it would bring down; a vent is worth the tiles it
+    /// eases, most of all those one crack from caving in.
+    fn ai_pick(f: &Fighter, k: usize) -> Option<(usize, bool, f32)> {
+        let b = &f.boards[k];
+        let hurt = (CAVE_DMG - f.mods.mine_guard).max(0) as f32;
+        let mine = (0..N).filter(|&i| b.live(i)).map(|i| {
+            let fell = b.would_cave(i);
+            let lost = fell.iter().filter(|&&j| b.live(j)).count() as f32;
+            (i, true, 1.0 - fell.len() as f32 * (0.5 + hurt / 8.0) - lost * 0.7)
+        });
+        let vent = (0..N).map(|i| {
+            let eased = b.vent_eases(i);
+            let worth = eased.iter().map(|&j| if b.tiles[j].crack + 1 == CAVE { 0.3 } else { 0.06 }).sum::<f32>();
+            (i, false, if eased.is_empty() { f32::MIN } else { worth.min(0.9) })
+        });
+        mine.chain(vent).max_by(|x, y| x.2.total_cmp(&y.2))
     }
 
     /// One move for whoever is active. Drives the enemy, and the player in simulations.
@@ -1002,37 +1023,21 @@ impl Battle {
         let lethal = armed && self.attack_damage(a) >= self.f[1 - a].hp + self.f[1 - a].shield;
         let can_reveal = f.reveals_left > 0;
         if can_reveal && !lethal {
-            // weigh every open tile on every board: progress toward claiming a crystal against
-            // the mine risk (a mine next to a crystal also breaks it), with a nudge toward
-            // elements it does not hold yet (that is how combos happen)
-            let mut best: Option<(usize, usize, f32, f32)> = None;
-            // holding nothing that pays for a rite, more of the same gem never helps: work only the
-            // boards of gems it lacks, even a jammed one, since a mine there clears it for a new deal
-            let lacking = |e: &Element| !f.stacks.contains(e);
-            let only_lacking = !armed && f.boards.iter().any(|b| lacking(&b.element) && (0..N).any(|i| b.open(i)));
-            for (k, board) in f.boards.iter().enumerate().filter(|(_, b)| !only_lacking || lacking(&b.element)) {
-                let fresh = if f.stacks.contains(&board.element) { 1.0 } else if armed { 1.3 } else { 3.0 };
-                for i in (0..N).filter(|&i| board.open(i)) {
-                    let risk = board.risk(i);
-                    let (mut progress, mut at_stake) = (0.3, 0.6);
-                    for c in Board::neighbors(i).filter(|&c| board.live(c)) {
-                        progress += 1.0 / board.left_around(c).max(1) as f32;
-                        at_stake += 0.6;
-                    }
-                    let score = (1.0 - risk) * progress * fresh - risk * at_stake;
-                    if best.is_none_or(|b| score > b.2) {
-                        best = Some((k, i, score, risk));
-                    }
-                }
-            }
-            if let Some((k, i, score, risk)) = best {
-                if !armed || (risk < 0.4 && score > 0.0) {
-                    self.swap(k);
-                    self.reveal(i);
+            // the best pick on any board, leaning toward the element it holds least of; it takes one
+            // cave-in for a gem, never more
+            let held = |k: usize| f.stacks.iter().filter(|&&e| e == f.boards[k].element).count() as f32;
+            let pick = (0..f.boards.len())
+                .filter_map(|k| Self::ai_pick(f, k).map(|(i, mine, worth)| (k, i, mine, worth - 0.05 * held(k))))
+                .max_by(|x, y| x.3.total_cmp(&y.3))
+                .filter(|p| p.3 > -0.4);
+            if let Some((k, i, mine, _)) = pick {
+                self.swap(k);
+                if if mine { self.dig(i) } else { self.vent(i) } {
                     return;
                 }
             }
         }
+        let f = &self.f[a];
         // firing when it declined a risky reveal keeps a cornered fighter from stalling
         if armed && (lethal || n >= f.aggro || can_reveal) && a == 1 {
             // the enemy never fires mid-turn: it loads, and the hero sees it coming
@@ -1050,6 +1055,7 @@ impl Battle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board::Tile;
     use Element::*;
 
     /// Cast every rite the stacks pay for at the current enemy, biggest first.
@@ -1061,7 +1067,10 @@ mod tests {
     fn duel() -> Battle {
         let me = Fighter::new("Me", 0, "", 50, 50, 3, &[Ember, Gale, Stone], Mods::default(), 3);
         let foe = Fighter::new("Foe", 0, "", 100, 100, 1, &[Tide, Spark], Mods::default(), 3);
-        Battle::new(me, vec![foe], Rng::new(1))
+        let mut b = Battle::new(me, vec![foe], Rng::new(1));
+        // uncracked ground, so a turn ending never brings a tile down by chance
+        b.f.iter_mut().flat_map(|f| f.boards.iter_mut()).flat_map(|x| x.tiles.iter_mut()).for_each(|t| t.crack = 0);
+        b
     }
 
     fn combo(name: &str) -> &'static Combo {
@@ -1072,50 +1081,47 @@ mod tests {
     fn stacks_have_no_cap_and_surge_damage_rounds_to_nearest() {
         let mut b = duel();
         b.f[0].stacks = vec![Ember; 20];
-        b.f[0].reveals_left = 9;
-        let open = (0..N).find(|&i| b.f[0].board().open(i)).unwrap();
-        assert!(b.reveal(open), "holding many stacks never blocks a flip");
+        lay_out(&mut b, &[]);
+        assert!(b.dig(7), "holding many stacks never blocks mining");
         b.f[0].surge = 2;
         // Raze: (2 stacks x 3 power + 2) x1.2 = 9.6
         assert_eq!(b.hit_damage(0, combo("Raze")), 10);
     }
 
-    /// Flips every safe tile around the first live crystal of the player's current board.
-    fn clear_a_crystal(b: &mut Battle) {
-        let c = (0..N).find(|&i| b.f[0].board().live(i)).unwrap();
-        loop {
-            let board = b.f[0].board();
-            if !board.live(c) {
-                break;
-            }
-            // the first flip on a board may move mines, so look again every step
-            let Some(j) = Board::neighbors(c).find(|&j| board.open(j) && !board.tiles[j].mine) else { break };
-            b.f[0].reveals_left = 9;
-            b.reveal(j);
+    /// Clears the player's current board, then puts a crystal on tile 7 (and on 35, so mining the
+    /// first never leaves the board spent) and a tile one crack from caving in on each of `weak`.
+    fn lay_out(b: &mut Battle, weak: &[usize]) {
+        let cur = b.f[0].cur;
+        let tiles = &mut b.f[0].boards[cur].tiles;
+        tiles.iter_mut().for_each(|t| *t = Tile::default());
+        (tiles[7].crystal, tiles[35].crystal) = (true, true);
+        for &i in weak {
+            tiles[i].crack = CAVE - 1;
         }
+        b.f[0].reveals_left = 9;
     }
 
     #[test]
-    fn clearing_around_a_crystal_gives_a_stack_and_a_mine_gives_nothing() {
+    fn mining_pays_a_gem_and_cracks_around_and_a_cave_in_only_hurts() {
         let mut b = duel();
         assert_eq!(b.f[0].boards.len(), 3, "one board per element");
         let element = b.f[0].board().element;
-        let crystal = (0..N).find(|&i| b.f[0].board().tiles[i].crystal).unwrap();
-        assert!(!b.reveal(crystal), "crystals cannot be flipped");
-        clear_a_crystal(&mut b);
-        assert!(!b.f[0].stacks.is_empty(), "the cleared crystal pays out");
-        assert!(b.f[0].stacks.iter().all(|&e| e == element));
-        assert!(b.f[0].surge > 0, "safe flips build surge");
-        assert_eq!(b.active, 0);
+        lay_out(&mut b, &[]);
+        assert!(!b.dig(8) && !b.vent(8), "only a crystal can be mined, and a vent needs a crack to ease");
+        assert!(b.dig(7) && !b.dig(7), "a crystal is mined once");
+        assert_eq!(b.f[0].stacks, vec![element; CLAIM_GEMS]);
+        assert_eq!((b.f[0].reveals_left, b.f[0].surge), (8, 1), "a pick, and a step of surge");
+        assert!(Board::around(7).all(|j| b.f[0].board().tiles[j].crack == 1), "every tile around it cracks");
+        assert!(b.vent(14) && b.f[0].board().tiles[8].crack == 0 && b.f[0].reveals_left == 7, "a vent eases around it, for a pick");
+        assert!(b.vent(7), "a mined crystal's tile vents like any other");
 
-        let held = b.f[0].stacks.clone();
-        let hp = b.f[0].hp;
-        b.f[0].reveals_left = 9;
-        let mine = (0..N).find(|&i| b.f[0].board().tiles[i].mine && b.f[0].board().open(i)).unwrap();
-        assert!(b.reveal(mine));
-        assert_eq!(b.f[0].hp, hp - MINE_DMG);
-        assert_eq!(b.f[0].stacks, held, "no stack from a mine, earlier stacks stay");
-        assert_eq!((b.active, b.f[0].surge), (1, 0), "a mine ends the turn and wipes surge");
+        lay_out(&mut b, &[8]);
+        let (held, hp) = (b.f[0].stacks.len(), b.f[0].hp);
+        assert!(b.dig(7));
+        assert!(b.f[0].board().tiles[8].caved);
+        assert_eq!(b.f[0].hp, hp - CAVE_DMG);
+        assert_eq!(b.f[0].stacks.len(), held + CLAIM_GEMS, "the gem still comes");
+        assert_eq!(b.active, 0, "a cave-in only hurts: the turn goes on");
     }
 
     #[test]
@@ -1123,10 +1129,11 @@ mod tests {
         let mut b = duel();
         b.swap(2);
         assert_eq!(b.f[0].board().element, Stone);
-        clear_a_crystal(&mut b);
+        lay_out(&mut b, &[]);
+        assert!(b.dig(7));
         assert_eq!(b.f[0].stacks[0], Stone);
         b.swap(0);
-        assert!(b.f[0].boards[2].tiles.iter().any(|t| t.revealed), "a board keeps its state while you are away");
+        assert!(b.f[0].boards[2].tiles[7].used, "a board keeps its state while you are away");
     }
 
     #[test]
@@ -1161,7 +1168,7 @@ mod tests {
         assert_eq!((b.f[1].hp, b.f[0].stacks.len()), (85, 0));
         assert_eq!(b.f[0].reveals_left, reveals + 2, "steam clears the view: +2 reveals at Lv 2");
         assert!(b.events.iter().any(|e| matches!(e, Event::Cast { name: "Scald Geyser", .. })));
-        assert_eq!(rite_text(steam, 3, None), "+8 damage, +3 reveals, your next 3 mines are duds");
+        assert_eq!(rite_text(steam, 3, None), "+8 damage, +3 picks, your next 3 cave-ins do no harm");
     }
 
     #[test]
@@ -1235,9 +1242,10 @@ mod tests {
 
         let mut b = duel();
         b.f[1].mods.foe_surge_cap = 2;
-        b.f[0].surge = 0;
-        clear_a_crystal(&mut b);
-        assert!(b.f[0].surge <= 2, "surge is jammed");
+        b.f[0].surge = 2;
+        lay_out(&mut b, &[]);
+        b.dig(7);
+        assert_eq!(b.f[0].surge, 2, "surge is jammed");
     }
 
     #[test]
@@ -1260,7 +1268,8 @@ mod tests {
 
         let mut b = duel();
         b.f[0].mods.claim_zap = 2;
-        clear_a_crystal(&mut b);
+        lay_out(&mut b, &[]);
+        b.dig(7);
         assert!(b.f[1].hp < 100, "claiming a crystal zaps the enemy");
     }
 
@@ -1312,45 +1321,38 @@ mod tests {
     }
 
     #[test]
-    fn mine_charms() {
-        // Powder Keg: a mine hurts but the turn goes on
+    fn cave_in_charms() {
+        // Powder Keg: a cave-in gives surge, on top of the step for the crystal
         let mut b = duel();
-        b.f[0].mods.mine_no_end = 1;
-        clear_a_crystal(&mut b);
+        (b.f[0].mods.mine_surge, b.f[0].surge) = (3, 2);
         let hp = b.f[0].hp;
-        b.f[0].reveals_left = 9;
-        let mine = (0..N).find(|&i| b.f[0].board().tiles[i].mine && b.f[0].board().open(i)).unwrap();
-        assert!(b.reveal(mine));
-        assert_eq!((b.active, b.f[0].hp, b.f[0].surge), (0, hp - MINE_DMG, 0));
+        lay_out(&mut b, &[8]);
+        b.dig(7);
+        assert_eq!((b.active, b.f[0].hp, b.f[0].surge), (0, hp - CAVE_DMG, 6));
 
-        // Sixth Sense: the first mine each turn is flagged instead, and costs no reveal
+        // Sixth Sense: the first cave-in each turn does no harm
         let mut b = duel();
         b.f[0].sense_left = 1;
-        clear_a_crystal(&mut b);
-        let (hp, reveals) = (b.f[0].hp, b.f[0].reveals_left);
-        let mine = (0..N).find(|&i| b.f[0].board().tiles[i].mine && b.f[0].board().open(i)).unwrap();
-        assert!(b.reveal(mine));
-        assert!(b.f[0].board().tiles[mine].flagged && !b.f[0].board().tiles[mine].revealed);
-        assert_eq!((b.f[0].hp, b.f[0].reveals_left, b.active), (hp, reveals, 0));
+        let hp = b.f[0].hp;
+        lay_out(&mut b, &[8]);
+        b.dig(7);
+        assert_eq!((b.f[0].hp, b.f[0].sense_left), (hp, 0));
 
-        // Lucky Coin: a dud costs the reveal but no HP, no surge, no turn, and breaks no crystal
-        for seed in 0..200 {
-            let me = Fighter::new("Me", 0, "", 50, 50, 3, &[Ember], Mods::default(), 3);
-            let foe = Fighter::new("Foe", 0, "", 100, 100, 1, &[Tide], Mods::default(), 3);
-            let mut b = Battle::new(me, vec![foe], Rng::new(seed));
-            b.f[0].boards[0].fresh = false;
-            b.f[0].duds = 1;
-            b.f[0].surge = 2;
-            let board = b.f[0].board();
-            let Some(mine) = (0..N).find(|&i| board.tiles[i].mine && board.open(i) && Board::neighbors(i).any(|j| board.live(j))) else { continue };
-            let (hp, reveals) = (b.f[0].hp, b.f[0].reveals_left);
-            assert!(b.reveal(mine));
-            let board = b.f[0].board();
-            assert!(board.tiles[mine].flagged && Board::neighbors(mine).all(|j| !board.tiles[j].broken));
-            assert_eq!((b.f[0].hp, b.f[0].reveals_left, b.f[0].surge, b.f[0].duds, b.active), (hp, reveals - 1, 2, 0, 0));
-            return;
-        }
-        panic!("no seed put a mine next to a crystal");
+        // Lucky Coin: a dud does no harm
+        let mut b = duel();
+        b.f[0].duds = 1;
+        let hp = b.f[0].hp;
+        lay_out(&mut b, &[8]);
+        b.dig(7);
+        assert_eq!((b.f[0].hp, b.f[0].duds, b.active), (hp, 0, 0));
+
+        // Salvager: a cave-in gives a stack of its board's element
+        let mut b = duel();
+        b.f[0].mods.salvage = 1;
+        let element = b.f[0].board().element;
+        lay_out(&mut b, &[8]);
+        b.dig(7);
+        assert_eq!(b.f[0].stacks, vec![element; CLAIM_GEMS + 1]);
     }
 
     #[test]
@@ -1361,6 +1363,10 @@ mod tests {
         assert_eq!(b.f[0].shield, 10, "shield holds through the enemy's turn");
         b.end_turn();
         assert_eq!(b.f[0].shield, 5, "and is half gone when yours comes round");
+        b.f[0].mods.keep_shield = 1;
+        b.end_turn();
+        b.end_turn();
+        assert_eq!(b.f[0].shield, 5, "unless it is kept (Deepforger)");
 
         let mut b = duel();
         b.f[0].mods.reveals = -3;
@@ -1415,13 +1421,13 @@ mod tests {
         assert!(b.cast(combo("Thunderclap")));
         assert_eq!(live(&b), before - 1);
 
-        // Sandstorm buries 2 more mines in it, away from the numbers already read
+        // Sandstorm cracks 2 tiles of it
         let mut b = duel();
         b.f[0].stacks = vec![Gale, Stone];
-        let mines = |b: &Battle| b.f[1].board().tiles.iter().filter(|t| t.mine).count();
-        let before = mines(&b);
+        let cracks = |b: &Battle| b.f[1].board().tiles.iter().map(|t| t.crack as usize).sum::<usize>();
+        let before = cracks(&b);
         assert!(b.cast(combo("Sandstorm")));
-        assert_eq!((mines(&b), b.f[1].board().mines), (before + 2, before + 2));
+        assert!(cracks(&b) >= before + 2);
     }
 
     #[test]
@@ -1517,7 +1523,7 @@ mod tests {
         b.f[0].elements = vec![Tide, Gale, Spark];
         b.f[0].ups = vec![combo_id(tempest); 2];
         let reveals = b.f[0].reveals_left;
-        assert!(b.hit_steps(0, tempest).1.iter().any(|s| s.0 == format!("{reveals} reveals")), "Eye of the Storm counts unused reveals");
+        assert!(b.hit_steps(0, tempest).1.iter().any(|s| s.0 == format!("{reveals} picks")), "Eye of the Storm counts unused reveals");
 
         // echoed Geode Surge throws the shield once: the second cast finds it gone
         let mut b = duel();
