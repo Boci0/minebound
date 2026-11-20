@@ -196,6 +196,8 @@ thread_local! {
     static SETTINGS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// the rules sheet is up over the first battle
     static RULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// the rules sheet, reopened from settings over any screen
+    static HOWTO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// game time and this frame's step: real time, slowed for a kill and stopped for a hit-stop
     static CLOCK: std::cell::Cell<(f64, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
     /// real times until which (slow motion, hit-stop) last
@@ -536,7 +538,7 @@ fn mouse() -> Vec2 {
 
 /// True while a panel (settings, retreat) is open over the screen.
 fn modal() -> bool {
-    SETTINGS.with(|s| s.get()) || RETREAT.with(|r| r.get()) || RULES.with(|r| r.get())
+    SETTINGS.with(|s| s.get()) || RETREAT.with(|r| r.get()) || RULES.with(|r| r.get()) || HOWTO.with(|h| h.get())
 }
 
 /// A left click meant for the screen. While a panel is open it swallows every click.
@@ -1200,8 +1202,8 @@ fn sign_strokes(e: Element) -> Vec<Vec<(f32, f32)>> {
     match e {
         Element::Ember => vec![up, vec![(10.0, 11.5), (10.0, 13.0)]],
         Element::Tide => vec![down, vec![(10.0, 7.0), (10.0, 8.5)]],
-        Element::Gale => vec![up, vec![(-2.5, 12.0), (22.5, 12.0)]],
-        Element::Stone => vec![down, vec![(-2.5, 8.0), (22.5, 8.0)]],
+        Element::Gale => vec![up, vec![(0.5, 12.0), (19.5, 12.0)]],
+        Element::Stone => vec![down, vec![(0.5, 8.0), (19.5, 8.0)]],
         Element::Spark => vec![vec![(12.0, 2.0), (5.0, 11.0), (10.0, 11.0), (8.0, 18.0), (15.0, 9.0), (10.0, 9.0), (12.0, 2.0)]],
     }
 }
@@ -1245,12 +1247,24 @@ fn gem(e: Element, p: Vec2, r: f32) {
 fn sign(e: Element, p: Vec2, r: f32, c: Color) {
     let k = r / 9.0;
     if c.a > 0.05 {
-        // the strokes' own extent: Gale's and Stone's bars reach past the 20 x 20 box
+        // the strokes' own extent, inside the 20 x 20 box (Gale's and Stone's bars stop at its edges, so signs in a row never touch)
         let pts: Vec<(f32, f32)> = sign_strokes(e).concat();
         let (x0, x1) = pts.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
         let (y0, y1) = pts.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
         drawn(Rect::new(p.x + (x0 - 10.0) * k, p.y + (y0 - 10.0) * k, (x1 - x0) * k, (y1 - y0) * k), || format!("{e:?} sign"));
     }
+    // a lit sign takes its element's hue, so Tide and Stone, Ember and Gale tell apart when small
+    let c = if c == INK {
+        match e {
+            Element::Ember => rgb(0xff8a4c),
+            Element::Tide => rgb(0x6fb6ff),
+            Element::Gale => rgb(0x5fe0c8),
+            Element::Stone => rgb(0xc9a77c),
+            Element::Spark => rgb(0xffe066),
+        }
+    } else {
+        c
+    };
     let w = (1.8 * k).max(1.5);
     let at = |(x, y): (f32, f32)| p + vec2(x - 10.0, y - 10.0) * k;
     for line in sign_strokes(e) {
@@ -2562,7 +2576,9 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     let (mut dig_at, mut vent_at, mut swap, mut cast) = (None, None, None, None);
 
     // where the run stands, top left, above your pacts
-    label(&format!("FLOOR {}  ·  WAVE {}/{}  ·  TURN {}", floor + 1, b.wave, b.waves, b.turn), 56.0, 40.0);
+    // the counter moves on with the takeover, not while the last wave's enemy is still dying
+    let wave = b.wave - usize::from(fallen.is_some() && b.wave > 1);
+    label(&format!("FLOOR {}  ·  WAVE {}/{}  ·  TURN {}", floor + 1, wave, b.waves, b.turn), 56.0, 40.0);
     let note = if b.pressure() > 0 { format!("Overpressure: every rite +{}", b.pressure()) } else { format!("Overpressure after turn {PRESSURE_TURN}") };
     rich(&note, 56.0, 116.0, 15.0, if b.pressure() > 0 { INK } else { MUTED });
 
@@ -2610,8 +2626,10 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         // its board, shrunk to a preview, and its stacks
         let fb = foe.board();
         label("ITS BOARD", PEEK.x, PEEK.y - 12.0);
+        // its board signs follow the label, clear of the settings gear in the corner
+        let x0 = PEEK.x + measure("ITS BOARD", 15.0).width + 18.0;
         for (k, bd) in foe.boards.iter().enumerate() {
-            let at = vec2(PEEK.x + 142.0 - (foe.boards.len() - 1 - k) as f32 * 20.0, PEEK.y - 17.0);
+            let at = vec2(x0 + k as f32 * 20.0, PEEK.y - 17.0);
             sign(bd.element, at, 7.0, if k == foe.cur { INK } else { FAINT });
         }
         let peek = |i: usize| Rect::new(PEEK.x + (i % W) as f32 * 25.0, PEEK.y + (i / W) as f32 * 25.0, 23.0, 23.0);
@@ -4036,11 +4054,19 @@ pub fn settings() {
         }
         VOLUME.with(|v| v.set((music, sound)));
         centered("M mutes everything.  N skips to the next song.", 640.0, 440.0, 15.0, MUTED);
-        toggle |= panel_button(Rect::new(560.0, 456.0, 160.0, 36.0), "Close", true, press);
+        if panel_button(Rect::new(450.0, 456.0, 180.0, 36.0), "How to play", false, press) {
+            HOWTO.with(|h| h.set(true));
+            SETTINGS.with(|s| s.set(false));
+            return;
+        }
+        toggle |= panel_button(Rect::new(650.0, 456.0, 180.0, 36.0), "Close", true, press);
     }
     if toggle {
         play(Sfx::Click);
         SETTINGS.with(|s| s.set(!open));
+    }
+    if !open && HOWTO.with(|h| h.get()) && rules() {
+        HOWTO.with(|h| h.set(false));
     }
 }
 
