@@ -442,7 +442,8 @@ pub fn end_frame() {
     draw_tip();
     let a = fx(|fx| 1.0 - (now() - fx.fade) / 0.25) as f32;
     if a > 0.0 {
-        draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(BG, a));
+        overlay();
+    draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(BG, a));
     }
 }
 
@@ -519,6 +520,9 @@ pub fn begin_frame() {
     let z = if (0.0..0.28).contains(&since) { 1.0 + 0.035 * (1.0 - since / 0.28).powi(2) } else { 1.0 };
     CAM.with(|c| c.set(VIEW / 2.0 + jolt));
     set_camera(&Camera2D { target: VIEW / 2.0 + jolt, zoom: vec2(2.0 * k / w, 2.0 * k / h) * z, ..Default::default() });
+    // a fresh frame: nothing drawn yet to clash with
+    DRAWN.with(|v| v.borrow_mut().clear());
+    DRAWN_LAYER.with(|l| l.set(0));
     draw_rectangle(-2000.0, -2000.0, 5280.0, 4720.0, BG);
 }
 
@@ -576,6 +580,10 @@ fn snap(p: Vec2) -> Vec2 {
 }
 
 fn text(s: &str, x: f32, y: f32, size: f32, c: Color) {
+    if crate::ctl::on() && c.a > 0.05 && !s.trim().is_empty() {
+        let d = measure(s, size);
+        drawn(Rect::new(x + 1.0, y - d.offset_y + 1.0, d.width - 2.0, d.height - 2.0), || s.to_string());
+    }
     text_in(face(size), s, x, y, c);
 }
 
@@ -625,6 +633,219 @@ fn wrapped(s: &str, x: f32, mut y: f32, w: f32, size: f32, c: Color) -> f32 {
     y
 }
 
+/// One block of a `Column`: an optional label over one or more paragraphs.
+struct Block {
+    /// how long it holds its room when the column runs short: the lowest gives way first
+    keep: u8,
+    head: Option<String>,
+    paras: Vec<String>,
+    /// said instead of `paras` when room runs short; the full text then shows on hover
+    short: Option<String>,
+    color: Color,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Fit {
+    Full,
+    Short,
+    Folded,
+}
+
+/// Text laid out from what it says rather than at fixed rows. Blocks stack from `y` (a baseline);
+/// when they would run past `bottom` (the lowest baseline allowed), the block with the lowest `keep`
+/// first falls back to its `short` form, then folds into one "More" line at the end that shows it
+/// on hover. So a longer text never lands on whatever sits below the column.
+struct Column {
+    x: f32,
+    y: f32,
+    w: f32,
+    bottom: f32,
+    size: f32,
+    blocks: Vec<Block>,
+}
+
+const HEAD_GAP: f32 = 20.0;
+const PARA_GAP: f32 = 7.0;
+const BLOCK_GAP: f32 = 16.0;
+
+impl Column {
+    fn new(x: f32, y: f32, w: f32, bottom: f32, size: f32) -> Column {
+        Column { x, y, w, bottom, size, blocks: vec![] }
+    }
+
+    /// Adds a block; `.short()` right after gives it a short form.
+    fn block<S: Into<String>>(&mut self, keep: u8, head: Option<&str>, paras: impl IntoIterator<Item = S>, color: Color) -> &mut Self {
+        let paras: Vec<String> = paras.into_iter().map(Into::into).collect();
+        if head.is_some() || !paras.is_empty() {
+            self.blocks.push(Block { keep, head: head.map(str::to_string), paras, short: None, color });
+        }
+        self
+    }
+
+    fn short(&mut self, s: impl Into<String>) -> &mut Self {
+        if let Some(b) = self.blocks.last_mut() {
+            b.short = Some(s.into());
+        }
+        self
+    }
+
+    fn pitch(&self) -> f32 {
+        self.size * 1.25
+    }
+
+    /// The paragraphs a block shows at `fit`.
+    fn said<'a>(b: &'a Block, fit: Fit) -> Vec<&'a str> {
+        match (fit, &b.short) {
+            (Fit::Short, Some(s)) => vec![s.as_str()],
+            _ => b.paras.iter().map(String::as_str).collect(),
+        }
+    }
+
+    /// From one block's first baseline to the next block's.
+    fn height(&self, b: &Block, fit: Fit) -> f32 {
+        let paras = Column::said(b, fit);
+        let lines: usize = paras.iter().map(|p| wrap(p, self.w, self.size).len()).sum();
+        let head = if b.head.is_some() { if paras.is_empty() { self.pitch() } else { HEAD_GAP } } else { 0.0 };
+        head + lines as f32 * self.pitch() + paras.len().saturating_sub(1) as f32 * PARA_GAP + BLOCK_GAP
+    }
+
+    /// The room every block takes in full, from the first baseline to below the last line.
+    fn needed(&self) -> f32 {
+        self.blocks.iter().map(|b| self.height(b, Fit::Full)).sum::<f32>() - BLOCK_GAP
+    }
+
+    /// How each block is shown so that the column ends by `bottom`.
+    fn fits(&self) -> Vec<Fit> {
+        let mut fit = vec![Fit::Full; self.blocks.len()];
+        loop {
+            let folded = fit.contains(&Fit::Folded);
+            let used: f32 = self.blocks.iter().zip(&fit).filter(|(_, f)| **f != Fit::Folded).map(|(b, &f)| self.height(b, f)).sum();
+            let last = self.y + used - BLOCK_GAP - self.pitch() + if folded { self.pitch() } else { 0.0 };
+            if last <= self.bottom {
+                return fit;
+            }
+            // the least kept block still shown gives way; on a tie the lower one goes first
+            let Some(k) = (0..self.blocks.len()).filter(|&k| fit[k] != Fit::Folded).min_by_key(|&k| (self.blocks[k].keep, std::cmp::Reverse(k))) else {
+                return fit;
+            };
+            fit[k] = if fit[k] == Fit::Full && self.blocks[k].short.is_some() { Fit::Short } else { Fit::Folded };
+        }
+    }
+
+    /// Draws the column; returns the baseline after it.
+    fn draw(&self) -> f32 {
+        let fit = self.fits();
+        let mut y = self.y;
+        let mut folded = vec![];
+        for (b, &f) in self.blocks.iter().zip(&fit) {
+            if f == Fit::Folded {
+                folded.push(b);
+                continue;
+            }
+            let top = y;
+            if let Some(h) = &b.head {
+                label(h, self.x, y);
+                y += if b.paras.is_empty() { self.pitch() } else { HEAD_GAP };
+            }
+            for p in Column::said(b, f) {
+                y = wrapped(p, self.x, y, self.w, self.size, b.color) + PARA_GAP;
+            }
+            if f == Fit::Short && Rect::new(self.x, top - self.size, self.w, y - top).contains(mouse()) {
+                tip_text(b.head.as_deref().unwrap_or("In full"), b.paras.join("\n"));
+            }
+            y += BLOCK_GAP - PARA_GAP;
+        }
+        if !folded.is_empty() {
+            let more = "More...";
+            let hot = Rect::new(self.x, y - self.size, measure(more, self.size).width + 8.0, self.size * 1.3).contains(mouse());
+            text(more, self.x, y, self.size, if hot { INK } else { MUTED });
+            if hot {
+                let body = folded.iter().map(|b| match &b.head {
+                    Some(h) => format!("{}: {}", h, b.paras.join(" ")),
+                    None => b.paras.join(" "),
+                });
+                tip_text("More", body.collect::<Vec<_>>().join("\n"));
+            }
+            y += self.pitch();
+        }
+        y
+    }
+}
+
+/// Debug builds driven by `ctl` only: where text, signs and sprites landed this frame, so a
+/// screenshot comes with a list of the ones that overlap.
+struct Drawn {
+    r: Rect,
+    layer: u32,
+    group: u32,
+    what: String,
+}
+
+thread_local! {
+    static DRAWN: std::cell::RefCell<Vec<Drawn>> = const { std::cell::RefCell::new(vec![]) };
+    static DRAWN_LAYER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static DRAWN_GROUP: std::cell::Cell<(u32, bool)> = const { std::cell::Cell::new((0, false)) };
+}
+
+fn drawn(r: Rect, what: impl FnOnce() -> String) {
+    if !crate::ctl::on() || r.w < 1.0 || r.h < 1.0 {
+        return;
+    }
+    let layer = DRAWN_LAYER.with(|l| l.get());
+    let group = DRAWN_GROUP.with(|g| {
+        let (id, held) = g.get();
+        if !held {
+            g.set((id + 1, false));
+        }
+        id
+    });
+    DRAWN.with(|v| v.borrow_mut().push(Drawn { r, layer, group, what: what() }));
+}
+
+/// Everything drawn inside `f` counts as one piece (a line drawn word by word, or letter by letter).
+fn one_piece<T>(f: impl FnOnce() -> T) -> T {
+    let outer = DRAWN_GROUP.with(|g| {
+        let (id, held) = g.get();
+        if !held {
+            g.set((id, true));
+        }
+        held
+    });
+    let out = f();
+    if !outer {
+        DRAWN_GROUP.with(|g| g.set((g.get().0 + 1, false)));
+    }
+    out
+}
+
+/// What is drawn after this sits over what came before (a dimmed panel, a tooltip): no clash.
+fn overlay() {
+    DRAWN_LAYER.with(|l| l.set(l.get() + 1));
+}
+
+/// The pieces drawn this frame that overlap, one line each, for `ctl` to save beside a screenshot.
+pub fn overlaps() -> Vec<String> {
+    DRAWN.with(|v| {
+        let v = v.borrow();
+        let mut out = vec![];
+        for (i, a) in v.iter().enumerate() {
+            for b in &v[i + 1..] {
+                if a.layer != b.layer || a.group == b.group {
+                    continue;
+                }
+                let (w, h) = (a.r.right().min(b.r.right()) - a.r.x.max(b.r.x), a.r.bottom().min(b.r.bottom()) - a.r.y.max(b.r.y));
+                if w > 1.5 && h > 1.5 {
+                    let line = format!("{:?} at ({:.0}, {:.0}) x {:?} at ({:.0}, {:.0})", a.what, a.r.x, a.r.y, b.what, b.r.x, b.r.y);
+                    if !out.contains(&line) {
+                        out.push(line);
+                    }
+                }
+            }
+        }
+        out
+    })
+}
+
 // Colour, used sparingly against the grey: rules keywords, and the few names that move.
 const BLOOD: Color = rgb(0xff5d5d);
 const GOLD: Color = rgb(0xf0c75e);
@@ -671,37 +892,37 @@ fn keyword(word: &str) -> Option<(Color, Option<Motion>)> {
 fn glossary(word: &str) -> Option<(&'static str, &'static str)> {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
     Some(match w.as_str() {
-        "burn" | "burns" | "burning" => ("Burn", "Loses 1 HP for each burn on it as its turn starts, straight through shield. Then the burn halves. New burn adds to what is there."),
-        "detonate" => ("Detonate", "All the burn on the foe goes off at once, 3 damage for each. Then the burn is gone."),
+        "burn" | "burns" | "burning" => ("Burn", "Loses 1 HP per burn as its turn starts, through shield. Then the burn halves."),
+        "detonate" => ("Detonate", "All burn on the foe goes off: 3 damage each. Then it is gone."),
         "weak" | "weaken" | "halved" => ("Weak", "Its rites deal half damage for the turns shown."),
-        "shield" => ("Shield", "Soaks damage before HP does. Half of it wears off at the start of its owner's next turn. Burn goes straight through."),
+        "shield" => ("Shield", "Soaks damage before HP. Half wears off as its owner's turn starts. Burn goes through."),
         "armor" => ("Armor", "Every hit on it deals this much less, down to 1."),
-        "evade" => ("Evade", "The first rite cast at it each turn misses: no damage, no effects, and the gems are still spent."),
-        "grazes" | "graze" => ("Graze", "The first rite cast at it each turn deals half damage. Everything else the rite does still lands."),
-        "surge" => ("Surge", "Each crystal you mine adds a step, +10% rite damage, up to 10. Every rite you cast spends a step."),
-        "overpressure" => ("Overpressure", "From turn 13 on, every rite deals 2 more each turn, so no fight can stall forever."),
+        "evade" => ("Evade", "The first rite at it each turn misses. The gems are still spent."),
+        "grazes" | "graze" => ("Graze", "The first rite at it each turn deals half damage."),
+        "surge" => ("Surge", "+10% rite damage per step, up to 10. Mining adds a step; each rite spends one."),
+        "overpressure" => ("Overpressure", "From turn 13, every rite deals 2 more each turn."),
         "power" => ("Power", "Damage for each gem a rite spends, before its bonus and surge."),
-        "duds" => ("Duds", "Cave-ins on your boards that will do you no harm this wave."),
-        "pick" | "picks" => ("Picks", "Moves you have this turn: each mines a crystal or digs a vent. Penalties never leave you fewer than 3."),
-        "cave-in" | "cave-ins" => ("Cave-in", "A tile with 3 cracks gives way: 6 damage to whoever's board it is on, and a crystal there is lost. It takes nothing else down with it."),
-        "vent" | "vents" => ("Vent", "Dug on any tile without a crystal, for a pick: it and every tile around it lose a crack."),
+        "duds" => ("Duds", "Cave-ins that do you no harm this wave."),
+        "pick" | "picks" => ("Picks", "Each mines a crystal or digs a vent. Never fewer than 3."),
+        "cave-in" | "cave-ins" => ("Cave-in", "A tile at 3 cracks falls: 6 damage to its board's owner. A crystal there is lost."),
+        "vent" | "vents" => ("Vent", "A pick on a tile without a crystal: it and the tiles touching it lose a crack."),
         "fault" | "faults" => ("Fault", "A tile dealt with 2 cracks: one more and it caves in."),
-        "crystal" | "crystals" => ("Crystal", "Mine it for a gem of its board's element. Every tile around it takes a crack."),
-        "rare" => ("Rare", "Changes how a turn plays. Offered less often than Common pacts; 45 shards in a shop."),
-        "legendary" => ("Legendary", "Bends a core rule. Offered rarely; 65 shards in a shop."),
-        "mark" => ("Mark", "The elements of the last rite that hit a fighter. A rite bringing any other element reacts."),
+        "crystal" | "crystals" => ("Crystal", "Mine it for a gem. The tiles touching it crack."),
+        "rare" => ("Rare", "Offered less often than Common. 45 shards in a shop."),
+        "legendary" => ("Legendary", "Offered rarely. 65 shards in a shop."),
+        "mark" => ("Mark", "Elements of the last rite that hit it. A new element reacts."),
         "ignite" => ("Ignite", "Ember reacts: +3 burn on the target."),
         "douse" => ("Douse", "Tide reacts: +4 shield for the caster."),
         "gust" => ("Gust", "Gale reacts: +1 pick for the caster."),
         "crush" => ("Crush", "Stone reacts: +4 damage, before surge."),
         "arc" => ("Arc", "Spark reacts: +2 surge for the caster."),
-        "brittle" => ("Brittle", "The next rite that hits this shield is blocked, then all of the shield shatters and the attacker takes that much damage."),
-        "break" | "broken" => ("Break", "The enemy loads its rites at the end of its turn and fires them as its next turn starts. Deal this much rite damage in your turn and they shatter."),
+        "brittle" => ("Brittle", "Blocks the next rite, then shatters: the attacker takes that much damage."),
+        "break" | "broken" => ("Break", "Deal this much rite damage in your turn and its loaded rites shatter."),
         _ => return None,
     })
 }
 
-thread_local!(static TIP: std::cell::Cell<Option<(&'static str, &'static str)>> = const { std::cell::Cell::new(None) });
+thread_local!(static TIP: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) });
 
 thread_local!(static MARK_TIP: std::cell::RefCell<Option<Vec<Element>>> = const { std::cell::RefCell::new(None) });
 
@@ -717,8 +938,13 @@ fn steps_tip(mut steps: Vec<(String, String)>, total: i32) {
 
 /// Asks for `tip` to be shown by the mouse this frame, over everything else.
 fn tip(t: (&'static str, &'static str)) {
+    tip_text(t.0, t.1.to_string());
+}
+
+/// A tooltip of any text; a newline in `body` starts a new paragraph.
+fn tip_text(head: &str, body: String) {
     if !modal() {
-        TIP.with(|c| c.set(Some(t)));
+        TIP.with(|c| *c.borrow_mut() = Some((head.to_string(), body)));
     }
 }
 
@@ -739,6 +965,7 @@ fn wrap(s: &str, w: f32, size: f32) -> Vec<String> {
 
 /// The tooltip asked for this frame, in a plate beside the mouse and kept on screen.
 fn draw_tip() {
+    overlay();
     let steps = STEPS.with(|c| std::mem::take(&mut *c.borrow_mut()));
     if !steps.is_empty() {
         // how the number is made, one step a line, the total last
@@ -757,7 +984,7 @@ fn draw_tip() {
             right(v, r.x + r.w - 14.0, y, 15.0, c);
         }
     }
-    let tip = TIP.with(|c| c.take());
+    let tip = TIP.with(|c| c.borrow_mut().take());
     if let Some(mark) = MARK_TIP.with(|c| c.borrow_mut().take()) {
         // every element by its sign: the ones in the mark set off nothing, the rest react
         let all = [Element::Ember, Element::Tide, Element::Gale, Element::Stone, Element::Spark];
@@ -781,12 +1008,12 @@ fn draw_tip() {
         return;
     }
     let Some((head, body)) = tip else { return };
-    let lines = wrap(body, 290.0, 15.0);
+    let lines: Vec<String> = body.split('\n').flat_map(|p| wrap(p, 290.0, 15.0)).collect();
     let h = 44.0 + lines.len() as f32 * 19.0;
     let m = mouse();
     let r = Rect::new((m.x + 16.0).min(VIEW.x - 330.0), if m.y + 20.0 + h > VIEW.y { m.y - 12.0 - h } else { m.y + 20.0 }, 318.0, h);
     plate(r, CARD);
-    text(head, r.x + 14.0, r.y + 24.0, 16.0, INK);
+    text(&head, r.x + 14.0, r.y + 24.0, 16.0, INK);
     for (k, line) in lines.iter().enumerate() {
         text(line, r.x + 14.0, r.y + 46.0 + k as f32 * 19.0, 15.0, MUTED);
     }
@@ -795,6 +1022,10 @@ fn draw_tip() {
 /// One line of text with its keywords in colour (and the line's own alpha). Words with a
 /// tooltip float and explain themselves when hovered.
 fn rich(s: &str, x: f32, y: f32, size: f32, c: Color) {
+    one_piece(|| rich_words(s, x, y, size, c));
+}
+
+fn rich_words(s: &str, x: f32, y: f32, size: f32, c: Color) {
     let space = measure("a a", size).width - measure("aa", size).width;
     let mut at = x;
     for word in s.split(' ') {
@@ -832,6 +1063,10 @@ enum Motion {
 
 /// Text from `x` whose letters move by `m`, a few percent of its size.
 fn lively(s: &str, x: f32, y: f32, size: f32, c: Color, m: Motion) {
+    one_piece(|| lively_letters(s, x, y, size, c, m));
+}
+
+fn lively_letters(s: &str, x: f32, y: f32, size: f32, c: Color, m: Motion) {
     let t = now() as f32;
     for (i, (b, ch)) in s.char_indices().enumerate() {
         let (f, at) = (i as f32, x + measure(&s[..b], size).width);
@@ -933,6 +1168,9 @@ fn sprite(idx: usize, x: f32, y: f32, size: f32, tint: Color) {
 
 /// Draws sprite `idx` stretched over `r`: a Tiny Dungeon tile, or from `HD` up a character.
 fn sprite_rect(idx: usize, r: Rect, tint: Color) {
+    if tint.a > 0.05 {
+        drawn(grow(r, -2.0), || format!("sprite {idx}"));
+    }
     // sample a hair inside the tile: at fractional positions (the idle bob, window scaling,
     // anti-aliased edges) the exact border would pick up a row of the neighbouring tile
     const INSET: f32 = 0.1;
@@ -1006,6 +1244,13 @@ fn gem(e: Element, p: Vec2, r: f32) {
 /// The same sign in colour `c`, for greyed-out and highlighted ones.
 fn sign(e: Element, p: Vec2, r: f32, c: Color) {
     let k = r / 9.0;
+    if c.a > 0.05 {
+        // the strokes' own extent: Gale's and Stone's bars reach past the 20 x 20 box
+        let pts: Vec<(f32, f32)> = sign_strokes(e).concat();
+        let (x0, x1) = pts.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
+        let (y0, y1) = pts.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
+        drawn(Rect::new(p.x + (x0 - 10.0) * k, p.y + (y0 - 10.0) * k, (x1 - x0) * k, (y1 - y0) * k), || format!("{e:?} sign"));
+    }
     let w = (1.8 * k).max(1.5);
     let at = |(x, y): (f32, f32)| p + vec2(x - 10.0, y - 10.0) * k;
     for line in sign_strokes(e) {
@@ -1181,7 +1426,7 @@ pub fn title() -> Option<Go> {
     // the name drops in once, as the game opens; coming back from the map it is simply there
     let rise = if fx(|fx| fx.fade) > 0.0 { 0.0 } else { 1.0 - ((now() / 0.6) as f32).min(1.0) };
     lively_centered("MINEBOUND", 640.0, 140.0 - rise * 30.0, 92.0, INK, Motion::Wave);
-    centered("Sweep your boards for power. Spend it before theirs spends you.", 640.0, 184.0, 20.0, MUTED);
+    centered("Mine your boards for power. Spend it before theirs spends you.", 640.0, 184.0, 20.0, MUTED);
     let mut go = None;
     if button(Rect::new(540.0, 222.0, 200.0, 48.0), "Play", true, true) {
         go = Some(Go::Play);
@@ -1191,17 +1436,6 @@ pub fn title() -> Option<Go> {
     }
     if button(Rect::new(540.0, 342.0, 200.0, 44.0), "Quit", true, false) {
         go = Some(Go::Back);
-    }
-    for (k, line) in [
-        // the rules, as the Below would say them
-        "Take a crystal and the ground around it groans. Take them one after another, and the surge rises.",
-        "Feed the sockets and the rite is spoken. What you cannot spend, throw at their face.",
-        "Mind the cracks. What falls on you remembers your name.",
-    ]
-    .iter()
-    .enumerate()
-    {
-        rich_centered(line, 640.0, 424.0 + k as f32 * 22.0, 16.0, fade(MUTED, 0.8));
     }
     go
 }
@@ -1260,7 +1494,8 @@ fn land(unlocked: usize) -> Vec<Vec<u8>> {
 /// Draws land from `terrain`: unexplored tiles raised grey, explored ones turned over with their edge
 /// numbered like a half-solved board (about one hidden tile in five counts as a mine). `seed` picks
 /// which tiles are mines and their shades, so each map has its own.
-fn draw_land(kind: &[Vec<u8>], grid: Grid, seed: usize) {
+/// `clear`: where rooms and their labels sit, kept free of numbers so a label never reads as "Battle 1".
+fn draw_land(kind: &[Vec<u8>], grid: Grid, seed: usize, clear: &[Rect]) {
     let (x0, y0, cell, cols, rows) = grid;
     let at = |c: usize, r: usize| kind.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0);
     let mine = |c: usize, r: usize| at(c, r) == 1 && noise(c + 50 + seed, r + 50) < 0.22;
@@ -1275,7 +1510,7 @@ fn draw_land(kind: &[Vec<u8>], grid: Grid, seed: usize) {
                 2 => {
                     draw_rectangle_lines(t.x, t.y, t.w, t.h, 1.0, rgb(0x262626));
                     let n = (0..9).filter(|k| mine((c + k % 3).wrapping_sub(1), (r + k / 3).wrapping_sub(1))).count();
-                    if n > 0 {
+                    if n > 0 && !clear.iter().any(|c| c.overlaps(&t)) {
                         numbers.push((n, t));
                     }
                 }
@@ -1288,6 +1523,8 @@ fn draw_land(kind: &[Vec<u8>], grid: Grid, seed: usize) {
     for (n, t) in numbers {
         centered(&n.to_string(), t.center().x, t.y + cell * 15.0 / 22.0, size, if n > 1 { INK } else { MUTED });
     }
+    // the land is backdrop: nodes, labels and the medallion are meant to sit on it
+    overlay();
 }
 
 /// A dotted line, like the route on The Below.
@@ -1322,7 +1559,7 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
         }
         l.1.clone()
     });
-    draw_land(&kind, LAND, 0);
+    draw_land(&kind, LAND, 0, &[]);
     // the route between places, dotted
     for w in PLACES.windows(2) {
         dotted(w[0], w[1], 9.0, 1.0, INK);
@@ -1403,33 +1640,27 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     let size = 36.0f32.min(36.0 * w / measure(&title, 36.0).width);
     text(&title, lx, 112.0, size, if open { INK } else { MUTED });
     let blurb = if show_daily {
-        format!("Down through {}. The same run for everyone today. Tomorrow brings another.", x.name.replace(' ', "\u{a0}"))
+        format!("Down through {}. The same run for everyone today.", x.name.replace(' ', "\u{a0}"))
     } else {
         x.text.to_string()
     };
-    let mut y = wrapped(&blurb, lx, 140.0, w, 15.0, MUTED) + 14.0;
-    label("ITS LAW", lx, y);
+    // flavour gives way first, then who waits below; the law and how to open the way always stay
+    let mut col = Column::new(lx, 140.0, w, 440.0, 15.0);
+    col.block(0, None, [blurb], MUTED);
     let daily_law = ["Every floor is cursed."];
     let rules = x.rules.iter().filter(|r| !(show_daily && r.starts_with("No extra")));
-    for rule in daily_law.iter().filter(|_| show_daily).chain(rules) {
-        y = wrapped(rule, lx, y + 20.0, w, 15.0, INK) - 6.0;
-    }
-    y += 22.0;
+    let laws: Vec<&str> = daily_law.iter().filter(|_| show_daily).chain(rules).copied().collect();
+    let n = laws.len();
+    col.block(3, Some("ITS LAW"), laws, INK).short(format!("{n} laws. Point here to read them."));
     if !open {
         // no-break spaces keep a place name whole, so "Ember" or "Mines" in it is not read as a rules word
         let prev = EXPEDITIONS[shown - 1].name.replace(' ', "\u{a0}");
-        y = wrapped(&format!("Win {prev} to open the way here."), lx, y, w, 15.0, INK) + 14.0;
+        col.block(2, None, [format!("Win {prev} to open the way here.")], INK);
+    } else {
+        let lords = BOSSES.iter().map(|pair| pair.iter().map(|d| d.name).collect::<Vec<_>>().join(" or "));
+        col.block(1, Some("LORDS BELOW"), lords, INK);
     }
-    // who waits at the bottom of each floor; a sealed descent keeps them to one line, so its longer law still fits
-    label("LORDS BELOW", lx, y);
-    y += 8.0;
-    if !open {
-        wrapped("Unseen until the way opens.", lx, y + 20.0, w, 15.0, MUTED);
-    }
-    for pair in BOSSES.iter().filter(|_| open) {
-        let names: Vec<&str> = pair.iter().map(|d| d.name).collect();
-        y = wrapped(&names.join(" or "), lx, y + 20.0, w, 15.0, INK) - 6.0;
-    }
+    col.draw();
 
     // the bearer: one sigil per hero; the chosen one is outlined, with its numbers below. The daily's
     // bearer is set for the day.
@@ -1553,11 +1784,11 @@ fn reaction_text(e: Element) -> &'static str {
 /// An element's name and the reaction it sets off, for its gem sign.
 fn element_tip(e: Element) -> (&'static str, &'static str) {
     match e {
-        Element::Ember => ("Ember", "Reacts as ignite: an Ember rite on a target whose mark lacks Ember puts 3 more burn on it."),
-        Element::Tide => ("Tide", "Reacts as douse: a Tide rite on a target whose mark lacks Tide gives you 4 shield."),
-        Element::Gale => ("Gale", "Reacts as gust: a Gale rite on a target whose mark lacks Gale gives you 1 more pick."),
-        Element::Stone => ("Stone", "Reacts as crush: a Stone rite on a target whose mark lacks Stone deals 4 more damage."),
-        Element::Spark => ("Spark", "Reacts as arc: a Spark rite on a target whose mark lacks Spark gives you 2 surge."),
+        Element::Ember => ("Ember", "Ignite: +3 burn on a target not marked with Ember."),
+        Element::Tide => ("Tide", "Douse: +4 shield for you, on a target not marked with Tide."),
+        Element::Gale => ("Gale", "Gust: +1 pick for you, on a target not marked with Gale."),
+        Element::Stone => ("Stone", "Crush: +4 damage on a target not marked with Stone."),
+        Element::Spark => ("Spark", "Arc: +2 surge for you, on a target not marked with Spark."),
     }
 }
 
@@ -1931,7 +2162,8 @@ fn mastery_fx(m: Option<Effect>, a: Vec2, z: Vec2, t: f32, now: f32) {
         }
         // the lights go out round the foe
         Some(Effect::DrainAll) => {
-            draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.5 * t));
+            overlay();
+    draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.5 * t));
             if chance(0.8) {
                 burst(z, 3, 260.0, 6.0, INK);
             }
@@ -2568,7 +2800,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     right(&format!("{} picks left", me.reveals_left), BOARD.x + 6.0 * STEP - 2.0, 694.0, 15.0, MUTED);
 
     // your stacks: drag a chip onto a rite's sockets
-    label("STACKS", hx, 584.0);
+    label("GEMS", hx, 584.0);
     for (j, &(e, n)) in held.iter().enumerate() {
         let r = chip(j);
         let n = n - usize::from(drag.is_some_and(|k| me.stacks[k] == e));
@@ -2887,10 +3119,12 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         let slide = (1.0 - settle) * 620.0 * dir - (1.0 - a) * 140.0 * dir;
         let (size, band) = if lvl == 0 { (46.0, 64.0) } else { (62.0 + 8.0 * up, 86.0 + 10.0 * up) };
         let cx = BOARD.x + W as f32 * STEP / 2.0 - 1.0;
-        let mid = BOARD.y - 20.0;
+        // a turn banner crosses the board itself (no picks until it clears), so NEXT and SURGE stay readable
+        let mid = if lvl == 0 { BOARD.y + W as f32 * STEP / 2.0 } else { BOARD.y - 20.0 };
         let top = mid - band / 2.0;
         let wide = (measure(name, size).width + 120.0).max(W as f32 * STEP + 80.0);
         let bx = Rect::new(cx + slide - wide / 2.0, top, wide, band);
+        overlay();
         // the band flares in the rite's colour as it arrives, then darkens to let the name read
         draw_rectangle(bx.x, bx.y, bx.w, bx.h, fade(mix(OUT, c, 0.45 * (1.0 - e)), 0.92 * a));
         draw_line(bx.x, bx.y, bx.right(), bx.y, 2.0, fade(c, 0.8 * a));
@@ -2903,7 +3137,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     if let Some((c, t0)) = flashed {
         let p = (now - t0) as f32 / 0.18;
         if p < 1.0 {
-            draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(c, 0.32 * (1.0 - p)));
+            overlay();
+    draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(c, 0.32 * (1.0 - p)));
         }
     }
     // a hit of HUGE or more: the game stops dead on two impact frames, black then inverted
@@ -2919,7 +3154,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             fx(|fx| fx.impact = None);
         } else {
             let (bg, ink) = if el < IMPACT { (BLACK, WHITE) } else { (WHITE, BLACK) };
-            draw_rectangle(-2000.0, -2000.0, VIEW.x + 4000.0, VIEW.y + 4000.0, bg);
+            overlay();
+    draw_rectangle(-2000.0, -2000.0, VIEW.x + 4000.0, VIEW.y + 4000.0, bg);
             // speed lines bursting out of whoever was hit
             for _ in 0..36 {
                 let dir = Vec2::from_angle(gen_range(0.0, std::f32::consts::TAU));
@@ -2971,7 +3207,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     // the result waits until the final blow has played out in slow motion, then pops in
     let shown = get_time() - fx(|fx| fx.ended_at) - 1.0;
     if over && shown > 0.0 {
-        draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, (shown as f32 * 2.0).min(if ending.is_some() { 0.7 } else { 0.45 })));
+        overlay();
+    draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, (shown as f32 * 2.0).min(if ending.is_some() { 0.7 } else { 0.45 })));
         if let Some(opened) = ending {
             return summary(run, Some(b), b.won(), opened);
         }
@@ -3088,7 +3325,15 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     text(&run.note, 48.0, 92.0, 18.0, GOLD_C);
     let open = run.choices();
     let mut chosen = None;
-    draw_land(&floor_land(run), FLOOR_LAND, run.floor * 7 + run.seed as usize % 97);
+    // each room's diamond and the label under it (a boss's name runs wider)
+    let rooms: Vec<Rect> = (run.map.iter().enumerate())
+        .flat_map(|(c, col)| col.iter().enumerate().map(move |(r, node)| (node_at(run, c, r), node.kind == NodeKind::Boss)))
+        .map(|(p, boss)| {
+            let (half, rad) = if boss { (90.0, 44.0) } else { (50.0, 32.0) };
+            Rect::new(p.x - half, p.y - rad, half * 2.0, rad * 2.0 + 34.0)
+        })
+        .collect();
+    draw_land(&floor_land(run), FLOOR_LAND, run.floor * 7 + run.seed as usize % 97, &rooms);
     let walked = |a: (usize, usize), b: (usize, usize)| run.trail.windows(2).any(|w| w[0] == a && w[1] == b);
     // the route: the way you came bold, the ways on from here plain, the rest faint
     for (c, col) in run.map.iter().enumerate() {
@@ -3702,6 +3947,7 @@ fn give_up(at: Rect, word: &str, lines: [&str; 2]) -> bool {
         return false;
     }
     let press = is_mouse_button_pressed(MouseButton::Left) && !SETTINGS.with(|s| s.get());
+    overlay();
     draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.6));
     let panel = Rect::new(390.0, 240.0, 500.0, 220.0);
     plate(panel, CARD);
@@ -3725,23 +3971,26 @@ pub fn hold_for_rules(on: bool) {
 /// How to play, on one sheet over the first battle. True once the player has read it.
 pub fn rules() -> bool {
     let press = is_mouse_button_pressed(MouseButton::Left) && !SETTINGS.with(|s| s.get());
+    overlay();
     draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.7));
-    let panel = Rect::new(280.0, 40.0, 720.0, 640.0);
-    plate(panel, CARD);
-    stamped("How to play", 640.0, 94.0, 38.0, INK);
-    let mut y = 136.0;
+    // the sheet is as tall as what it says, centred on the screen
+    let mut col = Column::new(320.0, 0.0, 640.0, VIEW.y, 17.0);
     for line in [
-        "Each board holds crystals of one element, all in view. You get 4 picks a turn: spend one on a crystal to mine it for a gem of that element.",
-        "Mining cracks every tile touching the crystal. The redder a tile, the more cracks it holds: at 3 it caves in, for 6 damage, and a crystal there is lost.",
-        "Spend a pick on a vent to ease the pressure: click a tile without a crystal, and it and every tile touching it lose a crack. Hover any tile to see what it would do.",
-        "Every crystal mined builds surge: +10% rite damage per step, up to 10. Every rite you cast spends a step, so think about when to fire.",
-        "Drag gems into a rite's sockets to cast it, or right-click to pick a rite and click gems in. Unused gems wait in your stacks.",
-        "Swap boards with the tabs under yours or keys 1 to 3; it is free. Some rites reach into the enemy's board.",
-        "The enemy loads its rites at the end of its turn and fires them when its next turn starts. Deal the break damage first and they shatter.",
-        "A rite marks its target with its elements. The next rite bringing a new element reacts. Words that float can be hovered.",
+        "Mine a crystal for a gem of its element. You get 4 picks a turn.",
+        "Mining cracks the tiles touching it. A tile with 3 cracks caves in: 6 damage to you.",
+        "Click a tile without a crystal to vent: it and the tiles touching it lose a crack.",
+        "Drag gems into a rite to cast it. Each crystal mined adds surge: +10% damage.",
+        "NEXT shows the enemy's loaded rite. Deal its break damage first and it shatters.",
+        "Tabs or keys 1 to 3 swap boards. Hover a tile or a floating word to learn more.",
     ] {
-        y = wrapped(line, panel.x + 40.0, y, panel.w - 80.0, 17.0, INK) + 12.0;
+        col.block(1, None, [line], INK);
     }
+    let h = 96.0 + col.needed() + 84.0;
+    let panel = Rect::new(280.0, ((VIEW.y - h) / 2.0).max(20.0), 720.0, h);
+    plate(panel, CARD);
+    stamped("How to play", 640.0, panel.y + 54.0, 38.0, INK);
+    col.y = panel.y + 96.0;
+    col.draw();
     let ok = panel_button(Rect::new(540.0, panel.bottom() - 64.0, 200.0, 40.0), "Got it", true, press);
     if ok {
         RULES.with(|r| r.set(false));
@@ -3757,6 +4006,7 @@ pub fn settings() {
     let hot = gear.contains(mouse());
     block(grow(gear, 3.0), OUT);
     block(gear, if hot || open { ACCENT } else { CARD_HI });
+    drawn(grow(gear, 3.0), || "gear".into());
     // a gear, pixel style: a ring with four teeth
     let (c, ink) = (gear.center(), if hot || open { OUT } else { INK });
     draw_rectangle(c.x - 8.0, c.y - 8.0, 16.0, 16.0, ink);
@@ -3765,7 +4015,8 @@ pub fn settings() {
     draw_rectangle(c.x - 4.0, c.y - 4.0, 8.0, 8.0, if hot || open { ACCENT } else { CARD_HI });
     let mut toggle = (hot && press) || is_key_pressed(KeyCode::Escape);
     if open {
-        draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.6));
+        overlay();
+    draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.6));
         let panel = Rect::new(400.0, 210.0, 480.0, 300.0);
         plate(panel, CARD);
         stamped("Settings", 640.0, 262.0, 34.0, INK);

@@ -45,7 +45,7 @@ full view.
 - **12 brands**: beat an elite to burn one onto a rite and give it an extra effect.
 - **10 blessings**: win a shrine fight to take one. You hold one at a time, and each lifts a single
   stat such as damage, shield, healing or burn.
-- **14 enemies**, each breaking one rule: armour, dodging, lifesteal, surge jamming, stack theft
+- **14 enemies**, each breaking one rule: armour, dodging, lifesteal, surge jamming, gem theft
   and more.
 - **Six expeditions**, from Shallow Mines to The Null, each harder than the last.
 - **Drag or click**: drag gems into a rite, or right click to pick a rite and click gems into it.
@@ -92,7 +92,7 @@ same rules, and you can watch its board the whole time.
 | Mine a crystal | Left click a crystal |
 | Dig a vent | Left click a tile without a crystal |
 | Switch board | Click a board tab under the board, or press 1 to 3 (free, any time in your turn) |
-| Socket a gem by dragging | Drag a gem from your stacks onto a rite; it fills the matching socket |
+| Socket a gem by dragging | Drag a gem from your GEMS row onto a rite; it fills the matching socket |
 | Socket a gem by clicking | Right click anywhere off the board to pick a rite, then left click a gem (see below) |
 | Take a gem back | Click the filled socket |
 | End your turn (unspent gems are kept) | End turn, or Space |
@@ -111,7 +111,7 @@ You don't have to drag gems:
    frame and a pointer at its left edge.
 2. Each further right click moves the pick one rite down, and wraps back to the top after the
    last.
-3. **Left click a gem** in your stacks. It goes into the picked rite's matching socket. Keep
+3. **Left click a gem** in your GEMS row. It goes into the picked rite's matching socket. Keep
    clicking gems until the rite is full and fires.
 
 Dragging still works, and dropping a gem on a rite always sends it there, whichever rite is picked. If you click a gem before picking a rite, the
@@ -124,7 +124,8 @@ game reminds you to right click first.
 - Each board is 6 × 6. It holds 8 to 11 crystals and up to 4 tiles of solid rock (hatched), which
   never crack. Every tile is in view.
 - A tile's colour shows its cracks: the redder it is, the closer it is to caving in. A third of the
-  ground starts with one crack, and 8 **faults** start one crack from going.
+  ground starts with one crack, and about 8 **faults** (one more or one fewer per board) start one
+  crack from going. From Ember Depths down, your own boards hold more.
 - **Mining** a crystal costs a pick, pays a gem and cracks every tile touching it (up, down, left
   and right). Hover a crystal to see what mining it would bring down.
 - A tile with 3 cracks **caves in**: 6 damage to you, and a crystal there is lost. It takes nothing
@@ -135,7 +136,7 @@ game reminds you to right click first.
 - You have one board per element, and switching boards is free. A board keeps its state while you
   are on another one. A board with no crystal left to claim is dealt again, and every board is
   dealt fresh at the start of each wave.
-- You can hold any number of gems. Gems no rite can use yet wait in your stacks.
+- You can hold any number of gems. Gems no rite can use yet wait in your GEMS row.
 
 ### Rites and damage
 
@@ -182,7 +183,7 @@ gains a trick of its own (last column), with its own look when cast.
 | Plasma | Ember, Spark | +3 damage, +1 damage per surge | Spends no surge |
 | Mistveil | Tide, Gale | Heal 8, +2 picks (no damage) | Prop up 3 tiles on each of your boards |
 | Bulwark | Tide, Stone | Gain 12 shield (no damage) | Your shield won't wear off next turn |
-| Conduction | Tide, Spark | +3 damage, then +4 surge | Steal 2 foe stacks |
+| Conduction | Tide, Spark | +3 damage, then +4 surge | Steal 2 foe gems |
 | Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, crack 2 foe tiles (no damage) | Foe gets 2 fewer picks next turn |
 | Thunderclap | Gale, Spark | Break 1 foe crystal, +2 damage | +8 damage per crystal broken |
 | Lodestone | Stone, Spark | Double your shield (adding at most 12, 24 at level 2; no damage), and it turns brittle: the next rite that hits you is blocked, then all of the shield shatters onto the attacker as damage | No limit on the doubling |
@@ -191,7 +192,7 @@ gains a trick of its own (last column), with its own look when cast.
 | Geode Surge | Tide, Stone, Spark | +6 damage, and your shield becomes 150% damage, then it's gone | Keep half your shield |
 | Forgefire | Ember, Stone, Spark | +8 damage | +2 power for the rest of the battle |
 | Maelstrom | Tide, Gale, Stone | Gain 6 shield, heal 4 | Clear your burn and weaken |
-| Short Circuit | Ember, Gale, Spark | +6 damage, foe loses 1 stack | Foe loses all its stacks |
+| Short Circuit | Ember, Gale, Spark | +6 damage, foe loses 1 gem | Foe loses all its gems |
 | Boilover | Ember, Tide, Spark | Burn 3 on foe, +1 damage per burn on the foe | The foe's burn stops fading |
 
 **Burn** stacks. At the start of its turn, the burning side loses 1 HP per burn, straight through
@@ -266,7 +267,7 @@ when you hover it.
 | Ward Stone | Common | Gain 10 shield at the start of each wave |
 | Field Rations | Common | Heal 10 whenever a new wave steps in |
 | Magpie Purse | Common | +50% shards from battles |
-| Head Start | Common | Begin each battle with 3 random stacks |
+| Head Start | Common | Begin each battle with 3 random gems |
 | Bramble Coat | Common | Enemy rites that hit you cost them 4 HP |
 | Saboteur Kit | Common | +2 faults on every enemy board |
 | Sweeper's Map | Common | 1 fewer fault on each of your boards |
@@ -287,13 +288,13 @@ when you hover it.
 | Steady Hands | Rare | Surge carries over between your turns |
 | Opening Gambit | Rare | Your first rite each turn deals +100% |
 | Resonant Shards | Rare | Each crystal you mine zaps the enemy for 3 |
-| Salvager | Rare | Each cave-in on your boards gives a stack of its element |
+| Salvager | Rare | Each cave-in on your boards gives a gem of its element |
 | Spite Fuse | Rare | Each cave-in on your boards also deals 6 damage to the enemy |
 | Hourglass | Rare | Each pick left unused at turn end becomes 3 shield |
-| Hoarder's Sack | Rare | End your turn holding 3+ stacks: gain 6 shield |
+| Hoarder's Sack | Rare | End your turn holding 3+ gems: gain 6 shield |
 | Chain Lightning | Rare | Each rite after your first in a turn deals +5 more than the one before |
 | Powder Keg | Rare | Each cave-in on your boards gives 3 surge |
-| Twin Vein | Legendary | Crystals give 2 stacks, but your boards hold 2 more faults |
+| Twin Vein | Legendary | Crystals give 2 gems, but your boards hold 2 more faults |
 | Glass Blade | Legendary | +2 power, but cave-ins deal 2 more damage to you |
 | Smoke Bomb | Legendary | The first enemy rite each turn misses you |
 | Sixth Sense | Legendary | The first cave-in on your boards each turn does no harm |
@@ -318,7 +319,7 @@ its own.
 | Ward | Gain 5 shield |
 | Mend | Heal 4 |
 | Hex | Foe's attacks halved for 1 turn |
-| Pilfer | Foe loses 1 stack |
+| Pilfer | Foe loses 1 gem |
 | Breach | Shatter foe's shield |
 | Tempo | +1 damage per surge |
 | Fuse | Detonate foe's burn |
@@ -354,19 +355,19 @@ details.
 | Enemy | Kind | Rule |
 | --- | --- | --- |
 | Mire Hound | Normal | +1 power every turn |
-| Cinder Imp | Normal | Gains a stack whenever your ground caves in |
+| Cinder Imp | Normal | Gains a gem whenever your ground caves in |
 | Gust Wisp | Normal | The first rite each turn only grazes it, for half damage |
 | Pebble Golem | Normal | Every hit deals 2 less |
 | Brine Leech | Normal | Heals for half the damage it deals |
 | Static Moth | Normal | Jams your surge at 4 |
 | Thorn Creeper | Normal | Every rite that hits it deals 2 back |
-| Ash Rat | Normal, from floor 2 | Snatches one of your stacks as its turn starts |
+| Ash Rat | Normal, from floor 2 | Snatches one of your gems as its turn starts |
 | The Quarrymaster | Elite | Starts with 8 shield; every hit deals 1 less |
 | Gale Duchess | Elite | One extra pick; the first rite each turn only grazes her |
 | Kiln Tyrant | Elite | Its rites set you burning, and +1 power every turn |
-| Minelayer Queen | Boss, floor 1 | 1 more fault in your boards; gains a stack whenever your ground caves in |
+| Minelayer Queen | Boss, floor 1 | 1 more fault in your boards; gains a gem whenever your ground caves in |
 | The Undertow | Boss, floor 1 | Heals 2 and gains 2 shield each turn |
-| The Sapper King | Boss, floor 2 | Starts with 12 shield; snatches one of your stacks each turn |
+| The Sapper King | Boss, floor 2 | Starts with 12 shield; snatches one of your gems each turn |
 | The Tidecaller | Boss, floor 2 | The first rite each turn only grazes her; heals for 30% of damage dealt |
 | Null Cartographer | Boss, floor 3 | One extra pick, 3 of its cracks propped up; jams your surge at 6 |
 | The Deep Engine | Boss, floor 3 | Every hit deals 2 less; +1 power every turn |
@@ -381,10 +382,10 @@ Six descents, each harder than the last. Clearing one opens the next.
 | --- | --- |
 | Shallow Mines | No extra rules |
 | Flooded Caverns | Enemies have 10% more HP |
-| Ember Depths | Enemies have 10% more HP; bosses gain +1 power every 2 turns |
-| Crystal Hollows | Enemies have 15% more HP; bosses gain +1 power every 2 turns; 1 fewer pick each turn |
-| The Rift | Every law of Crystal Hollows; every floor's twist is a curse; every rite costs 1 more gem, of any element |
-| The Null | Every law of The Rift; enemies have 25% more HP and +1 power |
+| Ember Depths | Enemies have 10% more HP; bosses gain +1 power every 2 turns; your boards start with about 9 faults |
+| Crystal Hollows | Enemies have 15% more HP; bosses gain +1 power every 2 turns; 1 fewer pick each turn; your boards start with about 10 faults |
+| The Rift | Every law of Crystal Hollows; every floor's twist is a curse; every rite costs 1 more gem, of any element; your boards start with about 11 faults |
+| The Null | Every law of The Rift; enemies have 25% more HP and +1 power; your boards start with about 12 faults |
 
 On The Rift and The Null, the extra gem shows as its own socket on each rite, marked with a ring
 cut by a bar. Any element fills it.

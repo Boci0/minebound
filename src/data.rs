@@ -215,7 +215,7 @@ impl Effect {
             }
             Drain(n) => {
                 let k = at_level(n as i32, lvl);
-                format!("foe loses {k} stack{}", if k == 1 { "" } else { "s" })
+                format!("foe loses {k} gem{}", if k == 1 { "" } else { "s" })
             }
             Pierce => "shatter foe's shield".into(),
             PerSurge(v) => format!("+{} damage per surge", at_level(v, lvl)),
@@ -252,7 +252,7 @@ impl Effect {
             KeepSurge => "spends no surge".into(),
             Scout(n) => format!("prop up {n} tiles on each board"),
             Hold => "shield won't wear off next turn".into(),
-            Steal(n) => format!("steal {n} foe stacks"),
+            Steal(n) => format!("steal {n} foe gems"),
             Blind(n) => format!("foe gets {n} fewer picks"),
             PerShatter(v) => format!("+{v} damage per crystal broken"),
             Execute => "x2 damage if foe is at half HP".into(),
@@ -260,7 +260,7 @@ impl Effect {
             KeepHalf => "keep half your shield".into(),
             Stoke(n) => format!("+{n} power this battle"),
             Cleanse => "clear your burn and weaken".into(),
-            DrainAll => "foe loses all its stacks".into(),
+            DrainAll => "foe loses all its gems".into(),
             Simmer => "foe's burn stops fading".into(),
         }
     }
@@ -372,7 +372,7 @@ pub static HEROES: &[Hero] = &[
             m.mine_guard += 1;
             m.armor += 3;
         },
-        passive_desc: "Ashen hide: cave-ins deal 1 less damage, and every hit on you 3 less.",
+        passive_desc: "Ashen hide: cave-ins deal 1 less, every hit on you 3 less.",
     },
     Hero {
         name: "Stormreader",
@@ -384,7 +384,7 @@ pub static HEROES: &[Hero] = &[
             m.reveals += 1;
             m.reveal_shield += 3;
         },
-        passive_desc: "Quick read: +1 pick each turn, and each pick left unused at turn end becomes 3 shield.",
+        passive_desc: "Quick read: +1 pick a turn; each unused pick becomes 3 shield.",
     },
     Hero {
         name: "Deepforger",
@@ -396,7 +396,7 @@ pub static HEROES: &[Hero] = &[
             m.shield_block += 1;
             m.keep_shield += 1;
         },
-        passive_desc: "Plated: your shield never wears off, and each point of it stops 2 damage.",
+        passive_desc: "Plated: shield never wears off and stops 2 damage a point.",
     },
     Hero {
         name: "Scaldwright",
@@ -408,7 +408,7 @@ pub static HEROES: &[Hero] = &[
             m.rite_burn += 1;
             m.lifesteal_pct += 15;
         },
-        passive_desc: "Searing touch: every rite adds 1 burn on the foe and heals you for 15% of its damage.",
+        passive_desc: "Searing touch: rites add 1 burn and heal 15% of their damage.",
     },
 ];
 
@@ -456,7 +456,7 @@ pub static CHARMS: &[Charm] = &[
     charm("Ward Stone", Common, (HD + 30, PLAIN), "start_shield", "Gain 10 shield at the start of each wave.", |m| m.start_shield += 10),
     charm("Field Rations", Common, (HD + 31, PLAIN), "heal_after", "Heal 10 whenever a new wave steps in.", |m| m.heal_after += 10),
     charm("Magpie Purse", Common, (HD + 32, PLAIN), "shard_pct", "+50% shards from battles.", |m| m.shard_pct += 50),
-    charm("Head Start", Common, (HD + 33, PLAIN), "start_stacks", "Begin each battle with 3 random stacks.", |m| m.start_stacks += 3),
+    charm("Head Start", Common, (HD + 33, PLAIN), "start_stacks", "Begin each battle with 3 random gems.", |m| m.start_stacks += 3),
     charm("Bramble Coat", Common, (HD + 34, PLAIN), "thorns", "Enemy rites that hit you cost them 4 HP.", |m| m.thorns += 4),
     charm("Saboteur Kit", Common, (HD + 35, PLAIN), "foe_mines", "+2 faults on every enemy board.", |m| m.foe_mines += 2),
     charm("Sweeper's Map", Common, (HD + 36, PLAIN), "fewer_mines", "1 fewer fault on each of your boards.", |m| m.fewer_mines += 1),
@@ -478,14 +478,14 @@ pub static CHARMS: &[Charm] = &[
     charm("Steady Hands", Rare, (HD + 51, PLAIN), "keep_surge", "Surge carries over between your turns.", |m| m.keep_surge += 1),
     charm("Opening Gambit", Rare, (HD + 52, PLAIN), "first_pct", "Your first rite each turn deals +100%.", |m| m.first_pct += 100),
     charm("Resonant Shards", Rare, (HD + 53, PLAIN), "claim_zap", "Each crystal you mine zaps the enemy for 3.", |m| m.claim_zap += 3),
-    charm("Salvager", Rare, (HD + 54, PLAIN), "salvage", "Each cave-in on your boards gives a stack of its element.", |m| m.salvage += 1),
+    charm("Salvager", Rare, (HD + 54, PLAIN), "salvage", "Each cave-in on your boards gives a gem of its element.", |m| m.salvage += 1),
     charm("Spite Fuse", Rare, (HD + 55, PLAIN), "mine_spite", "Each cave-in on your boards also deals 6 damage to the enemy.", |m| m.mine_spite += 6),
     charm("Hourglass", Rare, (HD + 56, PLAIN), "reveal_shield", "Each pick you leave unused when your turn ends becomes 3 shield.", |m| m.reveal_shield += 3),
-    charm("Hoarder's Sack", Rare, (HD + 57, PLAIN), "hoard_shield", "End your turn holding 3 or more stacks: gain 6 shield.", |m| m.hoard_shield += 6),
+    charm("Hoarder's Sack", Rare, (HD + 57, PLAIN), "hoard_shield", "End your turn holding 3 or more gems: gain 6 shield.", |m| m.hoard_shield += 6),
     charm("Chain Lightning", Rare, (HD + 58, PLAIN), "chain", "Each rite after your first in a turn deals +5 more than the one before.", |m| m.chain += 5),
     charm("Powder Keg", Rare, (HD + 59, PLAIN), "mine_surge", "Each cave-in on your boards gives 3 surge.", |m| m.mine_surge += 3),
     // legendaries bend a core rule
-    charm("Twin Vein", Legendary, (HD + 60, PLAIN), "claim_bonus", "Crystals give 2 stacks, but your boards hold 2 more faults.", |m| {
+    charm("Twin Vein", Legendary, (HD + 60, PLAIN), "claim_bonus", "Crystals give 2 gems, but your boards hold 2 more faults.", |m| {
         m.claim_bonus += 1;
         m.fewer_mines -= 2
     }),
@@ -523,7 +523,7 @@ const fn foe(name: &'static str, sprite: usize, desc: &'static str, hp: i32, pow
 // Every enemy bends one rule, so each asks for a different answer.
 pub static NORMALS: &[EnemyDef] = &[
     foe("Mire Hound", HD + 3, "Grows fiercer: +1 power every turn.", 16, 1, &[Tide, Stone], 2, |m| m.enrage = 1),
-    foe("Cinder Imp", HD + 4, "Gains a stack whenever your ground caves in.", 12, 2, &[Ember, Spark], 2, |m| m.foe_mine_gift = 1),
+    foe("Cinder Imp", HD + 4, "Gains a gem whenever your ground caves in.", 12, 2, &[Ember, Spark], 2, |m| m.foe_mine_gift = 1),
     foe("Gust Wisp", HD + 5, "Slippery: the first rite each turn only grazes it, for half damage.", 12, 1, &[Gale, Spark], 3, |m| {
         m.evade = 1;
         m.graze = 1
@@ -532,7 +532,7 @@ pub static NORMALS: &[EnemyDef] = &[
     foe("Brine Leech", HD + 7, "Heals for half the damage it deals.", 16, 1, &[Tide, Gale], 2, |m| m.lifesteal_pct = 50),
     foe("Static Moth", HD + 8, "Jams your surge at 4.", 12, 2, &[Spark, Tide], 3, |m| m.foe_surge_cap = 4),
     foe("Thorn Creeper", HD + 9, "Every rite that hits it deals 2 back.", 18, 1, &[Stone, Gale], 3, |m| m.thorns = 2),
-    foe("Ash Rat", HD + 10, "Snatches one of your stacks as its turn starts.", 10, 2, &[Ember, Gale], 2, |m| m.pilfer = 1),
+    foe("Ash Rat", HD + 10, "Snatches one of your gems as its turn starts.", 10, 2, &[Ember, Gale], 2, |m| m.pilfer = 1),
 ];
 
 pub static ELITES: &[EnemyDef] = &[
@@ -555,7 +555,7 @@ pub static ELITES: &[EnemyDef] = &[
 /// Two per floor; each map rolls which one waits at the end.
 pub static BOSSES: &[[EnemyDef; 2]] = &[
     [
-        foe("Minelayer Queen", HD + 14, "1 more fault in your boards. Gains a stack whenever your ground caves in.", 50, 2, &[Ember, Stone, Spark], 4, |m| {
+        foe("Minelayer Queen", HD + 14, "1 more fault in your boards. Gains a gem whenever your ground caves in.", 50, 2, &[Ember, Stone, Spark], 4, |m| {
             m.foe_mines = 1;
             m.foe_mine_gift = 1
         }),
@@ -566,7 +566,7 @@ pub static BOSSES: &[[EnemyDef; 2]] = &[
         }),
     ],
     [
-        foe("The Sapper King", HD + 15, "Starts with 12 shield. Snatches one of your stacks each turn.", 105, 3, &[Ember, Gale, Spark], 4, |m| {
+        foe("The Sapper King", HD + 15, "Starts with 12 shield. Snatches one of your gems each turn.", 105, 3, &[Ember, Gale, Spark], 4, |m| {
             m.start_shield = 12;
             m.pilfer = 1
         }),
@@ -622,12 +622,12 @@ pub static ENDINGS: &[Ending] = &[
         price_pct: 100,
         offer: Encounter {
             title: "Brine Lantern",
-            text: "At the bottom of the flooded stair a lantern burns under the water, lighting a door no map shows. \
-                   Carry it: +1 reveal each turn, but enemies have 15% more HP. Past the last boss, the door opens.",
+            text: "A lantern burns under the flooded stair, lighting a door no map shows. \
+                   Carry it: +1 pick a turn, but enemies +15% HP. Past the last boss, the door opens.",
             choices: &[pick("Take the lantern.", &[Key(0)]), pick("Leave it burning.", &[Text("The light goes out behind you.")])],
         },
         normals: &[
-            foe("Lamprey", HD + 67, "Snatches one of your stacks as its turn starts, and heals for half the damage it deals.", 18, 2, &[Tide, Gale], 2, |m| {
+            foe("Lamprey", HD + 67, "Snatches one of your gems as its turn starts, and heals for half the damage it deals.", 18, 2, &[Tide, Gale], 2, |m| {
                 m.pilfer = 1;
                 m.lifesteal_pct = 50
             }),
@@ -645,7 +645,7 @@ pub static ENDINGS: &[Ending] = &[
             m.evade = 1;
             m.graze = 1
         }),
-        boss: foe("The Archivist Below", HD + 71, "Snatches two of your stacks as its turn starts. Heals 3 each turn.", 200, 5, &[Tide, Stone, Spark], 5, |m| {
+        boss: foe("The Archivist Below", HD + 71, "Snatches two of your gems as its turn starts. Heals 3 each turn.", 200, 5, &[Tide, Stone, Spark], 5, |m| {
             m.pilfer = 2;
             m.regen = 3
         }),
@@ -664,8 +664,8 @@ pub static ENDINGS: &[Ending] = &[
         price_pct: 100,
         offer: Encounter {
             title: "Cinder Seal",
-            text: "The forge you stoked kept burning while you fought. In its ashes lies a seal, still red and still warm. \
-                   Carry it: your rites deal 25% more damage, but you start every wave with 4 burn. Past the last boss, the heat leads down.",
+            text: "The forge you stoked left a seal in its ashes, still red. \
+                   Carry it: rites +25% damage, but every wave starts you on 4 burn. Past the last boss, the heat leads down.",
             choices: &[pick("Take the seal.", &[Key(1)]), pick("Let it cool.", &[Text("It hisses into grey ash.")])],
         },
         normals: &[
@@ -693,19 +693,19 @@ pub static ENDINGS: &[Ending] = &[
         name: "The Silent Engine",
         key: "Clockwork Eye",
         key_sprite: HD + 84,
-        boon: "Begin each battle with 4 random stacks.",
+        boon: "Begin each battle with 4 random gems.",
         curse: "Shop prices are 25% higher.",
         me: |m| m.start_stacks += 4,
         hp_pct: 100,
         price_pct: 125,
         offer: Encounter {
             title: "Clockwork Eye",
-            text: "Two keepers watched you leave with your purse full. On the way out, a brass eye on the wall turns to follow you, ticking. \
-                   Carry it: begin each battle with 4 random stacks, but shop prices are 25% higher. Past the last boss, something is still running.",
+            text: "A brass eye on the shop wall turns to follow you, ticking. \
+                   Carry it: begin each battle with 4 random gems, but shop prices +25%. Past the last boss, something is still running.",
             choices: &[pick("Pry the eye loose.", &[Key(2)]), pick("Walk past it.", &[Text("It keeps watching.")])],
         },
         normals: &[
-            foe("Spindle Crawler", HD + 77, "Leaves 1 more fault in your boards, and gains a stack whenever your ground caves in.", 16, 2, &[Spark, Stone], 2, |m| {
+            foe("Spindle Crawler", HD + 77, "Leaves 1 more fault in your boards, and gains a gem whenever your ground caves in.", 16, 2, &[Spark, Stone], 2, |m| {
                 m.foe_mines = 1;
                 m.foe_mine_gift = 1
             }),
@@ -756,7 +756,7 @@ pub struct Expedition {
 pub static EXPEDITIONS: &[Expedition] = &[
     Expedition {
         name: "Shallow Mines",
-        text: "The old workings near the surface. Most of the mines here are rusted half shut.",
+        text: "Old workings near the surface.",
         rules: &["No extra rules."],
         hp_pct: 100,
         me: NOTHING,
@@ -766,8 +766,8 @@ pub static EXPEDITIONS: &[Expedition] = &[
     },
     Expedition {
         name: "Flooded Caverns",
-        text: "Groundwater found the lower tunnels first. Things down here grew fat on it.",
-        rules: &["Enemies have 10% more HP."],
+        text: "Groundwater got here first. Things grew fat on it.",
+        rules: &["Enemies +10% HP."],
         hp_pct: 110,
         me: NOTHING,
         foe: NOTHING,
@@ -776,32 +776,36 @@ pub static EXPEDITIONS: &[Expedition] = &[
     },
     Expedition {
         name: "Ember Depths",
-        text: "The rock is warm to the touch, and the bosses here have learned to burn hotter.",
-        rules: &["Enemies have 10% more HP.", "Bosses gain +1 power every 2 turns."],
+        text: "Warm rock. The bosses burn hotter.",
+        rules: &["Enemies +10% HP.", "Bosses +1 power every 2 turns.", "About 9 faults on your boards."],
         hp_pct: 110,
-        me: NOTHING,
+        me: |m| m.fewer_mines -= 1,
         foe: NOTHING,
         boss: |m| m.slow_enrage += 1,
         curses: false,
     },
     Expedition {
         name: "Crystal Hollows",
-        text: "Caves of glass. Every step rings, and the boards hide more than they show.",
-        rules: &["Enemies have 15% more HP.", "Bosses gain +1 power every 2 turns.", "1 fewer pick each turn."],
+        text: "Caves of glass. Every step rings.",
+        rules: &["Enemies +15% HP.", "Bosses +1 power every 2 turns.", "1 fewer pick a turn.", "About 10 faults on your boards."],
         hp_pct: 115,
-        me: |m| m.reveals -= 1,
+        me: |m| {
+            m.reveals -= 1;
+            m.fewer_mines -= 2
+        },
         foe: NOTHING,
         boss: |m| m.slow_enrage += 1,
         curses: false,
     },
     Expedition {
         name: "The Rift",
-        text: "A crack in the world, below the deepest shaft. Nothing here is kind.",
-        rules: &["Every law of Crystal\u{a0}Hollows.", "Every floor rolls a curse.", "Rites cost 1 more gem, any kind."],
+        text: "A crack in the world. Nothing here is kind.",
+        rules: &["Every law of Crystal\u{a0}Hollows.", "Every floor is cursed.", "Rites cost 1 more gem.", "About 11 faults on your boards."],
         hp_pct: 115,
         me: |m| {
             m.reveals -= 1;
-            m.toll += 1
+            m.toll += 1;
+            m.fewer_mines -= 3
         },
         foe: NOTHING,
         boss: |m| m.slow_enrage += 1,
@@ -809,12 +813,13 @@ pub static EXPEDITIONS: &[Expedition] = &[
     },
     Expedition {
         name: "The Null",
-        text: "Where the maps stop. Whoever drew them never came back to finish.",
-        rules: &["Every law of The\u{a0}Rift.", "Enemies have 25% more HP and +1 power."],
+        text: "Where the maps stop.",
+        rules: &["Every law of The\u{a0}Rift.", "Enemies +25% HP, +1 power.", "About 12 faults on your boards."],
         hp_pct: 125,
         me: |m| {
             m.reveals -= 1;
-            m.toll += 1
+            m.toll += 1;
+            m.fewer_mines -= 4
         },
         foe: |m| m.power += 1,
         boss: |m| m.slow_enrage += 1,

@@ -133,6 +133,8 @@ pub fn end_frame() {
     }) else {
         return;
     };
+    // what overlaps on this frame, so a layout clash shows up without squinting at the picture
+    let _ = std::fs::write(dir.join(format!("{name}.overlaps.txt")), crate::ui::overlaps().join("\n"));
     get_screen_data().export_png(&dir.join(format!("{name}.png")).to_string_lossy());
 }
 

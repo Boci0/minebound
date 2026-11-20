@@ -559,7 +559,7 @@ impl Battle {
         if snatch > 0 && !self.f[1 - a].stacks.is_empty() {
             let keep = self.f[1 - a].stacks.len().saturating_sub(snatch);
             self.f[1 - a].stacks.truncate(keep);
-            self.log.push(format!("{} snatches a stack.", self.f[a].name));
+            self.log.push(format!("{} snatches a gem.", self.f[a].name));
         }
         self.f[1 - a].evades_left = self.f[1 - a].mods.evade;
         let m = self.f[a].mods.clone();
