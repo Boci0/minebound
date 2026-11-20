@@ -111,15 +111,23 @@ impl MixerControl {
             return sound_id;
         }
 
-        // minebound patch: decode off the calling thread; a long Ogg froze the game for ~0.4 s
-        let tx = self.tx.clone();
-        let data = data.to_vec();
-        std::thread::spawn(move || match load_samples_from_file(&data) {
-            Ok(samples) => tx
-                .send(AudioMessage::AddSound(sound_id, samples.into()))
-                .unwrap_or_else(|_| println!("Audio thread died")),
-            Err(()) => println!("quad-snd: could not decode sound {sound_id}"),
+        // minebound patch: decode off the calling thread (a long Ogg froze the game for ~0.4 s), on one
+        // worker that takes the sounds in turn rather than a thread per sound
+        type Job = (u32, Vec<u8>, mpsc::Sender<AudioMessage>);
+        static DECODER: std::sync::OnceLock<std::sync::Mutex<mpsc::Sender<Job>>> = std::sync::OnceLock::new();
+        let decoder = DECODER.get_or_init(|| {
+            let (jobs, rx) = mpsc::channel::<Job>();
+            std::thread::spawn(move || {
+                for (id, data, tx) in rx {
+                    match load_samples_from_file(&data) {
+                        Ok(samples) => tx.send(AudioMessage::AddSound(id, samples.into())).unwrap_or_else(|_| println!("Audio thread died")),
+                        Err(()) => println!("quad-snd: could not decode sound {id}"),
+                    }
+                }
+            });
+            std::sync::Mutex::new(jobs)
         });
+        let _ = decoder.lock().unwrap().send((sound_id, data.to_vec(), self.tx.clone()));
 
         sound_id
     }

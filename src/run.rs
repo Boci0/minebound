@@ -371,9 +371,10 @@ impl Run {
     fn enemy(&self, d: &EnemyDef, scale: bool, slow: i32) -> Fighter {
         // an ending's floor scales on from the last one: each ending past the first is deeper still
         let floor = self.floor as i32;
-        // bosses grow only past the first ending's floor, so a later ending's boss keeps up with its floor
+        // bosses grow only past the first ending's floor, so a later ending's boss keeps up with its floor;
+        // +1 power since bosses load every turn instead of saving up for one big blow (smaller loads break easier)
         let deeper = self.floor.saturating_sub(FLOORS) as i32;
-        let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100 * 125 / 100, d.power + floor + 2) } else { (d.hp * (220 + 40 * deeper) / 100, d.power + deeper) };
+        let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100 * 125 / 100, d.power + floor + 2) } else { (d.hp * (220 + 40 * deeper) / 100, d.power + deeper + 1) };
         let x = &EXPEDITIONS[self.exp];
         let hp = self.keys.iter().fold(hp * x.hp_pct / 100, |hp, &k| hp * ENDINGS[k].hp_pct / 100);
         let mut m = Mods::default();
@@ -385,7 +386,8 @@ impl Run {
             (x.boss)(&mut m);
         }
         m.reveals -= slow;
-        Fighter::new(d.name, d.sprite, d.desc, hp, hp, power, d.elements, m, d.aggro)
+        // enemies never hold gems back (see `ai_step`), so they have no aggro
+        Fighter::new(d.name, d.sprite, d.desc, hp, hp, power, d.elements, m, 0)
     }
 
     fn random_normal(&mut self) -> Fighter {
@@ -398,7 +400,7 @@ impl Run {
         };
         let pool: Vec<&EnemyDef> = pool.iter().filter(|d| self.floor > 0 || !snatches(d)).collect();
         let d = pool[self.rng.below(pool.len())];
-        self.enemy(d, true, 3)
+        self.enemy(d, true, 2)
     }
 
     pub fn enter(&mut self, col: usize, row: usize) -> Stage {

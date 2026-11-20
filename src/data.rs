@@ -510,42 +510,40 @@ pub struct EnemyDef {
     pub hp: i32,
     pub power: i32,
     pub elements: &'static [Element],
-    /// stacks it wants before attacking
-    pub aggro: usize,
     pub mods: Tweak,
 }
 
 #[allow(clippy::too_many_arguments)]
-const fn foe(name: &'static str, sprite: usize, desc: &'static str, hp: i32, power: i32, elements: &'static [Element], aggro: usize, mods: Tweak) -> EnemyDef {
-    EnemyDef { name, sprite, desc, hp, power, elements, aggro, mods }
+const fn foe(name: &'static str, sprite: usize, desc: &'static str, hp: i32, power: i32, elements: &'static [Element], mods: Tweak) -> EnemyDef {
+    EnemyDef { name, sprite, desc, hp, power, elements, mods }
 }
 
 // Every enemy bends one rule, so each asks for a different answer.
 pub static NORMALS: &[EnemyDef] = &[
-    foe("Mire Hound", HD + 3, "Grows fiercer: +1 power every turn.", 16, 1, &[Tide, Stone], 2, |m| m.enrage = 1),
-    foe("Cinder Imp", HD + 4, "Gains a gem whenever your ground caves in.", 12, 2, &[Ember, Spark], 2, |m| m.foe_mine_gift = 1),
-    foe("Gust Wisp", HD + 5, "Slippery: the first rite each turn only grazes it, for half damage.", 12, 1, &[Gale, Spark], 3, |m| {
+    foe("Mire Hound", HD + 3, "Grows fiercer: +1 power every turn.", 16, 1, &[Tide, Stone], |m| m.enrage = 1),
+    foe("Cinder Imp", HD + 4, "Gains a gem whenever your ground caves in.", 12, 2, &[Ember, Spark], |m| m.foe_mine_gift = 1),
+    foe("Gust Wisp", HD + 5, "Slippery: the first rite each turn only grazes it, for half damage.", 12, 1, &[Gale, Spark], |m| {
         m.evade = 1;
         m.graze = 1
     }),
-    foe("Pebble Golem", HD + 6, "Stone hide: every hit deals 2 less.", 20, 1, &[Stone, Ember], 3, |m| m.armor = 2),
-    foe("Brine Leech", HD + 7, "Heals for half the damage it deals.", 16, 1, &[Tide, Gale], 2, |m| m.lifesteal_pct = 50),
-    foe("Static Moth", HD + 8, "Jams your surge at 4.", 12, 2, &[Spark, Tide], 3, |m| m.foe_surge_cap = 4),
-    foe("Thorn Creeper", HD + 9, "Every rite that hits it deals 2 back.", 18, 1, &[Stone, Gale], 3, |m| m.thorns = 2),
-    foe("Ash Rat", HD + 10, "Snatches one of your gems as its turn starts.", 10, 2, &[Ember, Gale], 2, |m| m.pilfer = 1),
+    foe("Pebble Golem", HD + 6, "Stone hide: every hit deals 2 less.", 20, 1, &[Stone, Ember], |m| m.armor = 2),
+    foe("Brine Leech", HD + 7, "Heals for half the damage it deals.", 16, 1, &[Tide, Gale], |m| m.lifesteal_pct = 50),
+    foe("Static Moth", HD + 8, "Jams your surge at 4.", 12, 2, &[Spark, Tide], |m| m.foe_surge_cap = 4),
+    foe("Thorn Creeper", HD + 9, "Every rite that hits it deals 2 back.", 18, 1, &[Stone, Gale], |m| m.thorns = 2),
+    foe("Ash Rat", HD + 10, "Snatches one of your gems as its turn starts.", 10, 2, &[Ember, Gale], |m| m.pilfer = 1),
 ];
 
 pub static ELITES: &[EnemyDef] = &[
-    foe("The Quarrymaster", HD + 11, "Starts with 8 shield. Every hit deals 1 less.", 45, 2, &[Stone, Ember, Spark], 4, |m| {
+    foe("The Quarrymaster", HD + 11, "Starts with 8 shield. Every hit deals 1 less.", 45, 2, &[Stone, Ember, Spark], |m| {
         m.start_shield = 8;
         m.armor = 1
     }),
-    foe("Gale Duchess", HD + 12, "One extra pick. The first rite each turn only grazes her, for half damage.", 38, 2, &[Gale, Tide, Spark], 4, |m| {
+    foe("Gale Duchess", HD + 12, "One extra pick. The first rite each turn only grazes her, for half damage.", 38, 2, &[Gale, Tide, Spark], |m| {
         m.reveals = 1;
         m.evade = 1;
         m.graze = 1
     }),
-    foe("Kiln Tyrant", HD + 13, "Its rites set you burning, and it gains +1 power every turn.", 42, 2, &[Ember, Gale, Stone], 3, |m| {
+    foe("Kiln Tyrant", HD + 13, "Its rites set you burning, and it gains +1 power every turn.", 42, 2, &[Ember, Gale, Stone], |m| {
         m.rite_burn = 1;
         m.burn_bonus = 1;
         m.enrage = 1
@@ -555,34 +553,34 @@ pub static ELITES: &[EnemyDef] = &[
 /// Two per floor; each map rolls which one waits at the end.
 pub static BOSSES: &[[EnemyDef; 2]] = &[
     [
-        foe("Minelayer Queen", HD + 14, "1 more fault in your boards. Gains a gem whenever your ground caves in.", 50, 2, &[Ember, Stone, Spark], 4, |m| {
+        foe("Minelayer Queen", HD + 14, "1 more fault in your boards. Gains a gem whenever your ground caves in.", 50, 2, &[Ember, Stone, Spark], |m| {
             m.foe_mines = 1;
             m.foe_mine_gift = 1
         }),
         // stack snatchers wait past the first floor: they made it a chore
-        foe("The Undertow", HD + 16, "Each turn: heals 2 and gains 2 shield.", 46, 2, &[Tide, Gale, Stone], 4, |m| {
+        foe("The Undertow", HD + 16, "Each turn: heals 2 and gains 2 shield.", 46, 2, &[Tide, Gale, Stone], |m| {
             m.regen = 2;
             m.shield_turn = 2
         }),
     ],
     [
-        foe("The Sapper King", HD + 15, "Starts with 12 shield. Snatches one of your gems each turn.", 105, 3, &[Ember, Gale, Spark], 4, |m| {
+        foe("The Sapper King", HD + 15, "Starts with 12 shield. Snatches one of your gems each turn.", 105, 3, &[Ember, Gale, Spark], |m| {
             m.start_shield = 12;
             m.pilfer = 1
         }),
-        foe("The Tidecaller", HD + 17, "The first rite each turn only grazes her, for half damage. Heals for 30% of damage dealt.", 96, 3, &[Tide, Spark, Gale], 4, |m| {
+        foe("The Tidecaller", HD + 17, "The first rite each turn only grazes her, for half damage. Heals for 30% of damage dealt.", 96, 3, &[Tide, Spark, Gale], |m| {
             m.evade = 1;
             m.graze = 1;
             m.lifesteal_pct = 30
         }),
     ],
     [
-        foe("Null Cartographer", HD + 18, "One extra pick, 3 of its cracks propped up. Jams your surge at 6.", 135, 4, &[Spark, Gale, Ember], 5, |m| {
+        foe("Null Cartographer", HD + 18, "One extra pick, 3 of its cracks propped up. Jams your surge at 6.", 135, 4, &[Spark, Gale, Ember], |m| {
             m.reveals = 1;
             m.scouts = 3;
             m.foe_surge_cap = 6
         }),
-        foe("The Deep Engine", HD + 19, "Iron plating: every hit deals 2 less. +1 power every turn.", 125, 3, &[Stone, Ember, Tide], 5, |m| {
+        foe("The Deep Engine", HD + 19, "Iron plating: every hit deals 2 less. +1 power every turn.", 125, 3, &[Stone, Ember, Tide], |m| {
             m.armor = 2;
             m.enrage = 1
         }),
@@ -627,25 +625,25 @@ pub static ENDINGS: &[Ending] = &[
             choices: &[pick("Take the lantern.", &[Key(0)]), pick("Leave it burning.", &[Text("The light goes out behind you.")])],
         },
         normals: &[
-            foe("Lamprey", HD + 67, "Snatches one of your gems as its turn starts, and heals for half the damage it deals.", 18, 2, &[Tide, Gale], 2, |m| {
+            foe("Lamprey", HD + 67, "Snatches one of your gems as its turn starts, and heals for half the damage it deals.", 18, 2, &[Tide, Gale], |m| {
                 m.pilfer = 1;
                 m.lifesteal_pct = 50
             }),
-            foe("Ink Jelly", HD + 68, "Every rite that hits it deals 3 back. Jams your surge at 6.", 16, 2, &[Tide, Spark], 3, |m| {
+            foe("Ink Jelly", HD + 68, "Every rite that hits it deals 3 back. Jams your surge at 6.", 16, 2, &[Tide, Spark], |m| {
                 m.thorns = 3;
                 m.foe_surge_cap = 6
             }),
-            foe("Deepkin", HD + 69, "Heals 3 each turn. Every hit deals 1 less.", 22, 2, &[Tide, Stone], 3, |m| {
+            foe("Deepkin", HD + 69, "Heals 3 each turn. Every hit deals 1 less.", 22, 2, &[Tide, Stone], |m| {
                 m.regen = 3;
                 m.armor = 1
             }),
         ],
-        elite: foe("The Angler", HD + 70, "Its lure leaves 2 more faults in your boards. The first rite each turn only grazes it.", 50, 3, &[Tide, Gale, Spark], 4, |m| {
+        elite: foe("The Angler", HD + 70, "Its lure leaves 2 more faults in your boards. The first rite each turn only grazes it.", 50, 3, &[Tide, Gale, Spark], |m| {
             m.foe_mines = 2;
             m.evade = 1;
             m.graze = 1
         }),
-        boss: foe("The Archivist Below", HD + 71, "Snatches two of your gems as its turn starts. Heals 3 each turn.", 200, 5, &[Tide, Stone, Spark], 5, |m| {
+        boss: foe("The Archivist Below", HD + 71, "Snatches two of your gems as its turn starts. Heals 3 each turn.", 200, 5, &[Tide, Stone, Spark], |m| {
             m.pilfer = 2;
             m.regen = 3
         }),
@@ -669,22 +667,22 @@ pub static ENDINGS: &[Ending] = &[
             choices: &[pick("Take the seal.", &[Key(1)]), pick("Let it cool.", &[Text("It hisses into grey ash.")])],
         },
         normals: &[
-            foe("Salamander", HD + 72, "Its rites set you burning.", 16, 2, &[Ember, Stone], 2, |m| {
+            foe("Salamander", HD + 72, "Its rites set you burning.", 16, 2, &[Ember, Stone], |m| {
                 m.rite_burn = 1;
                 m.burn_bonus = 1
             }),
-            foe("Living Flame", HD + 73, "+1 power every turn. Cave-ins on its boards burst at you for 5.", 14, 3, &[Ember, Gale], 3, |m| {
+            foe("Living Flame", HD + 73, "+1 power every turn. Cave-ins on its boards burst at you for 5.", 14, 3, &[Ember, Gale], |m| {
                 m.enrage = 1;
                 m.mine_spite = 5
             }),
-            foe("Cinder Whirl", HD + 74, "Each crystal it mines scorches you for 3.", 15, 2, &[Ember, Spark], 2, |m| m.claim_zap = 3),
+            foe("Cinder Whirl", HD + 74, "Each crystal it mines scorches you for 3.", 15, 2, &[Ember, Spark], |m| m.claim_zap = 3),
         ],
-        elite: foe("Slag Colossus", HD + 75, "Starts with 12 shield and gains 3 each turn. Its rites set you burning.", 55, 3, &[Ember, Stone, Spark], 4, |m| {
+        elite: foe("Slag Colossus", HD + 75, "Starts with 12 shield and gains 3 each turn. Its rites set you burning.", 55, 3, &[Ember, Stone, Spark], |m| {
             m.start_shield = 12;
             m.shield_turn = 3;
             m.rite_burn = 1
         }),
-        boss: foe("The Furnace Heart", HD + 76, "Each of its rites stacks 3 burn on you, and your burn hurts 2 more.", 210, 5, &[Ember, Stone, Gale], 5, |m| {
+        boss: foe("The Furnace Heart", HD + 76, "Each of its rites stacks 3 burn on you, and your burn hurts 2 more.", 210, 5, &[Ember, Stone, Gale], |m| {
             m.rite_burn = 3;
             m.burn_bonus = 2
         }),
@@ -705,25 +703,25 @@ pub static ENDINGS: &[Ending] = &[
             choices: &[pick("Pry the eye loose.", &[Key(2)]), pick("Walk past it.", &[Text("It keeps watching.")])],
         },
         normals: &[
-            foe("Spindle Crawler", HD + 77, "Leaves 1 more fault in your boards, and gains a gem whenever your ground caves in.", 16, 2, &[Spark, Stone], 2, |m| {
+            foe("Spindle Crawler", HD + 77, "Leaves 1 more fault in your boards, and gains a gem whenever your ground caves in.", 16, 2, &[Spark, Stone], |m| {
                 m.foe_mines = 1;
                 m.foe_mine_gift = 1
             }),
-            foe("Hover Drone", HD + 78, "One extra pick. The first rite each turn only grazes it.", 13, 2, &[Spark, Gale], 2, |m| {
+            foe("Hover Drone", HD + 78, "One extra pick. The first rite each turn only grazes it.", 13, 2, &[Spark, Gale], |m| {
                 m.reveals = 1;
                 m.evade = 1;
                 m.graze = 1
             }),
-            foe("Rivet Turret", HD + 79, "Fires 6 damage at you as each wave starts. Every hit deals 3 less.", 20, 3, &[Spark, Stone], 3, |m| {
+            foe("Rivet Turret", HD + 79, "Fires 6 damage at you as each wave starts. Every hit deals 3 less.", 20, 3, &[Spark, Stone], |m| {
                 m.opening = 6;
                 m.armor = 3
             }),
         ],
-        elite: foe("The Foreman", HD + 80, "Jams your surge at 4. Every hit deals 2 less.", 52, 3, &[Stone, Spark, Ember], 4, |m| {
+        elite: foe("The Foreman", HD + 80, "Jams your surge at 4. Every hit deals 2 less.", 52, 3, &[Stone, Spark, Ember], |m| {
             m.foe_surge_cap = 4;
             m.armor = 2
         }),
-        boss: foe("The Silent Engine", HD + 81, "Jams your surge at 4 and leaves 2 more faults in your boards. Every hit deals 1 less.", 200, 5, &[Spark, Stone, Tide], 5, |m| {
+        boss: foe("The Silent Engine", HD + 81, "Jams your surge at 4 and leaves 2 more faults in your boards. Every hit deals 1 less.", 200, 5, &[Spark, Stone, Tide], |m| {
             m.foe_surge_cap = 4;
             m.foe_mines = 2;
             m.armor = 1

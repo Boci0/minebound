@@ -659,10 +659,10 @@ impl Battle {
         self.begin_turn();
     }
 
-    /// The enemy with no picks left and nothing left to fire: its turn passes on its own. The hero's
-    /// waits for End turn, so the ground settling never lands on the same click as a pick.
+    /// A side with no picks left and no rite its gems pay for has nothing left to do: its turn passes
+    /// on its own (nothing cracks at turn end, so this never springs a cave-in on the hero).
     fn tidy(&mut self, a: usize) {
-        if !self.over() && a == 1 && self.active == a && self.f[a].reveals_left <= 0 && self.ready(a).is_empty() {
+        if !self.over() && self.active == a && self.f[a].reveals_left <= 0 && self.ready(a).is_empty() {
             self.end_turn();
         }
     }
@@ -1038,12 +1038,13 @@ impl Battle {
             }
         }
         let f = &self.f[a];
-        // firing when it declined a risky reveal keeps a cornered fighter from stalling
-        if armed && (lethal || n >= f.aggro || can_reveal) && a == 1 {
-            // the enemy never fires mid-turn: it loads, and the hero sees it coming
+        if armed && a == 1 {
+            // the enemy never fires mid-turn and never sits on gems: once its picks are done it loads
+            // whatever they pay for, and the hero sees it coming (and can break it)
             self.load();
             self.end_turn();
         } else if armed && (lethal || n >= f.aggro || can_reveal) {
+            // firing when it declined a risky reveal keeps a cornered fighter from stalling
             self.f[a].firing = true;
             self.cast_best();
         } else {
@@ -1602,12 +1603,26 @@ mod tests {
     }
 
     #[test]
+    fn the_heros_turn_ends_itself_once_there_is_nothing_left_to_do() {
+        for (gems, ends) in [(vec![], true), (vec![Ember, Gale], false)] {
+            let mut b = duel();
+            let (cur, n) = (b.f[0].cur, b.f[0].boards[0].tiles.len());
+            let i = (0..n).find(|&i| b.f[0].boards[cur].live(i)).unwrap();
+            (b.f[0].reveals_left, b.f[0].stacks) = (1, gems);
+            assert!(b.dig(i));
+            // the last pick: with a rite still paid for the hero keeps the turn, else it passes
+            assert_eq!(b.active == 1, ends);
+        }
+    }
+
+    #[test]
     fn the_enemy_loads_its_rites_and_fires_them_as_its_next_turn_starts() {
         let mut b = duel();
         b.end_turn();
         assert_eq!(b.active, 1);
         b.f[1].stacks = vec![Tide, Spark];
-        (b.f[1].reveals_left, b.f[1].aggro) = (0, 2);
+        // however many gems a hero would hold out for, an enemy loads what it can pay for
+        (b.f[1].reveals_left, b.f[1].aggro) = (0, 9);
         let hp = b.f[0].hp;
         b.ai_step();
         // loaded, not fired: the hero sees it coming, and how hard it would hit

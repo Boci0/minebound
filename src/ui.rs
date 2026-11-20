@@ -488,11 +488,9 @@ pub fn begin_frame() {
         1.0
     };
     CLOCK.with(|c| c.set((c.get().0 + (real_dt * speed) as f64, real_dt * speed)));
-    // muffled while you hold a gem, during slow motion, and behind a panel
+    // muffled during slow motion and behind a panel
     let want: f32 = if real < slow {
         1.0
-    } else if fx(|fx| fx.drag.is_some()) {
-        0.65
     } else if modal() {
         0.45
     } else {
@@ -1022,7 +1020,7 @@ fn draw_tip() {
 }
 
 /// One line of text with its keywords in colour (and the line's own alpha). Words with a
-/// tooltip float and explain themselves when hovered.
+/// tooltip carry a dotted underline; under the mouse they come alive and explain themselves.
 fn rich(s: &str, x: f32, y: f32, size: f32, c: Color) {
     one_piece(|| rich_words(s, x, y, size, c));
 }
@@ -1037,12 +1035,23 @@ fn rich_words(s: &str, x: f32, y: f32, size: f32, c: Color) {
             Some((k, m)) => (Color { a: c.a, ..k }, m),
             None => (c, None),
         };
-        match motion.or(explained.map(|_| Motion::Wave)) {
+        // still on the page, so a screen of rules text does not crawl; it moves only when looked at
+        let hot = Rect::new(at, y - size, w, size * 1.3).contains(mouse());
+        match motion.or(explained.map(|_| Motion::Wave)).filter(|_| hot) {
             Some(m) => lively(word, at, y, size, col, m),
             None => text(word, at, y, size, col),
         }
-        if let Some(t) = explained.filter(|_| Rect::new(at, y - size, w, size * 1.3).contains(mouse())) {
-            tip(t);
+        if let Some(t) = explained {
+            if hot {
+                tip(t);
+            } else {
+                // under the word itself, not the punctuation round it
+                let core = word.trim_matches(|c: char| !c.is_alphanumeric());
+                let x0 = at + measure(&word[..word.find(core).unwrap_or(0)], size).width;
+                for k in 0..(measure(core, size).width / 4.0) as i32 {
+                    draw_rectangle((x0 + k as f32 * 4.0).round(), (y + 3.0).round(), 2.0, 1.0, fade(col, col.a * 0.55));
+                }
+            }
         }
         at += w + space;
     }
@@ -1070,8 +1079,10 @@ fn lively(s: &str, x: f32, y: f32, size: f32, c: Color, m: Motion) {
 
 fn lively_letters(s: &str, x: f32, y: f32, size: f32, c: Color, m: Motion) {
     let t = now() as f32;
-    for (i, (b, ch)) in s.char_indices().enumerate() {
-        let (f, at) = (i as f32, x + measure(&s[..b], size).width);
+    // a line's width is the sum of its letters' advances, so step along rather than re-measure
+    let (mut at, mut buf) = (x, [0u8; 4]);
+    for (i, ch) in s.chars().enumerate() {
+        let (f, ch) = (i as f32, &*ch.encode_utf8(&mut buf));
         let (dx, dy) = if m == Motion::Tremble {
             let k = (t * 12.0) as usize;
             ((noise(k, i) - 0.5) * size * 0.07, (noise(k + 31, i) - 0.5) * size * 0.07)
@@ -1083,7 +1094,8 @@ fn lively_letters(s: &str, x: f32, y: f32, size: f32, c: Color, m: Motion) {
         } else {
             c
         };
-        text(&ch.to_string(), at + dx, y + dy, size, col);
+        text(ch, at + dx, y + dy, size, col);
+        at += measure(ch, size).width;
     }
 }
 
@@ -1243,6 +1255,17 @@ fn gem(e: Element, p: Vec2, r: f32) {
     sign(e, p, r, el_color(e));
 }
 
+/// An element's hue, the one its rules word is printed in. Signs take only a hint of it (see `sign`).
+fn hue(e: Element) -> Color {
+    match e {
+        Element::Ember => rgb(0xff8a4c),
+        Element::Tide => rgb(0x6fb6ff),
+        Element::Gale => rgb(0x5fe0c8),
+        Element::Stone => rgb(0xc9a77c),
+        Element::Spark => rgb(0xffe066),
+    }
+}
+
 /// The same sign in colour `c`, for greyed-out and highlighted ones.
 fn sign(e: Element, p: Vec2, r: f32, c: Color) {
     let k = r / 9.0;
@@ -1253,18 +1276,8 @@ fn sign(e: Element, p: Vec2, r: f32, c: Color) {
         let (y0, y1) = pts.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
         drawn(Rect::new(p.x + (x0 - 10.0) * k, p.y + (y0 - 10.0) * k, (x1 - x0) * k, (y1 - y0) * k), || format!("{e:?} sign"));
     }
-    // a lit sign takes its element's hue, so Tide and Stone, Ember and Gale tell apart when small
-    let c = if c == INK {
-        match e {
-            Element::Ember => rgb(0xff8a4c),
-            Element::Tide => rgb(0x6fb6ff),
-            Element::Gale => rgb(0x5fe0c8),
-            Element::Stone => rgb(0xc9a77c),
-            Element::Spark => rgb(0xffe066),
-        }
-    } else {
-        c
-    };
+    // a lit sign is white with a hint of its element, so the screen stays black and white
+    let c = if c == INK { mix(INK, hue(e), 0.3) } else { c };
     let w = (1.8 * k).max(1.5);
     let at = |(x, y): (f32, f32)| p + vec2(x - 10.0, y - 10.0) * k;
     for line in sign_strokes(e) {
@@ -2297,8 +2310,11 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 claims.push((side, element, tiles));
             }
             Event::Cave { side } => {
-                // the ground gives way: on your board it shakes the whole screen
-                play(Sfx::Mine);
+                // the ground gives way: on your board it blasts and shakes the whole screen, on theirs it
+                // crumbles; one sound each, so the two never land on the same frame
+                if side != 0 {
+                    play(Sfx::Mine);
+                }
                 fx(|fx| {
                     if side == 0 {
                         fx.boom = Some(now);
@@ -2326,13 +2342,16 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                         fx.floats.push((at, mastery_word(m).into(), MASTERED, first, 30.0));
                     }
                     fx.busy = lands_at(&shot) + SETTLE;
-                    // its voice when it is thrown: by first element, and a charge-up once upgraded
-                    let voice = match (miss, from) {
-                        (true, _) => Sfx::Miss,
-                        (_, 1) => Sfx::Hurt,
-                        _ => Sfx::Skill,
-                    };
-                    fx.later.push((t0 + (charge(lvl) * SHOT_TIME) as f64, voice));
+                    // your rite's voice as it is thrown; a miss or a blow on you sounds as it lands (a
+                    // beat after the bolt's own pop, so they do not blur)
+                    if !miss && from == 0 {
+                        fx.later.push((t0 + (charge(lvl) * SHOT_TIME) as f64, Sfx::Skill));
+                    }
+                    match (miss, from) {
+                        (true, _) => fx.later.push((lands_at(&shot), Sfx::Miss)),
+                        (_, 1) => fx.later.push((lands_at(&shot) + 0.06, Sfx::Hurt)),
+                        _ => {}
+                    }
                     match element {
                         Element::Spark => fx.later.push((t0 + (charge(lvl) * SHOT_TIME) as f64, Sfx::Zap)),
                         Element::Gale => fx.later.push((t0 + (charge(lvl) * SHOT_TIME) as f64, Sfx::Whoosh)),
@@ -2378,7 +2397,11 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 let n = fx(|fx| fx.floats.iter().filter(|f| f.3 == at).count()) as f32;
                 let side = 1 - from;
                 let pos = STAND[side] + if side == 1 { vec2(-300.0, 40.0 + 30.0 * n) } else { vec2(170.0, -20.0 + 30.0 * n) };
-                fx(|fx| fx.floats.push((pos, word.to_uppercase(), col, at, 26.0)));
+                fx(|fx| {
+                    fx.floats.push((pos, word.to_uppercase(), col, at, 26.0));
+                    // a chime per reaction, stepped apart when several go off from one bolt
+                    fx.later.push((at + 0.08 + 0.09 * n as f64, Sfx::React));
+                });
             }
         }
     }
@@ -2625,7 +2648,13 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
 
         // its board, shrunk to a preview, and its stacks
         let fb = foe.board();
-        label("ITS BOARD", PEEK.x, PEEK.y - 12.0);
+        // its turn: the panel says so and is framed, so the eye goes where it is picking
+        if b.active == 1 && !over {
+            text("ITS TURN", PEEK.x, PEEK.y - 12.0, 15.0, BLOOD);
+            outline(Rect::new(PEEK.x - 5.0, PEEK.y - 5.0, W as f32 * 25.0 + 8.0, W as f32 * 25.0 + 8.0), BLOOD);
+        } else {
+            label("ITS BOARD", PEEK.x, PEEK.y - 12.0);
+        }
         // its board signs follow the label, clear of the settings gear in the corner
         let x0 = PEEK.x + measure("ITS BOARD", 15.0).width + 18.0;
         for (k, bd) in foe.boards.iter().enumerate() {
@@ -3351,7 +3380,17 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
             Rect::new(p.x - half, p.y - rad, half * 2.0, rad * 2.0 + 34.0)
         })
         .collect();
-    draw_land(&floor_land(run), FLOOR_LAND, run.floor * 7 + run.seed as usize % 97, &rooms);
+    // the land changes only with the floor's map and where you have been, so build it once for those
+    type Key = (u64, usize, Vec<(usize, usize)>, Option<(usize, usize)>, Vec<Vec<Vec<usize>>>);
+    thread_local!(static FLOOR_AT: std::cell::RefCell<Option<(Key, Vec<Vec<u8>>)>> = const { std::cell::RefCell::new(None) });
+    let key: Key = (run.seed, run.floor, run.trail.clone(), run.pos, run.map.iter().map(|c| c.iter().map(|n| n.next.clone()).collect()).collect());
+    FLOOR_AT.with(|l| {
+        let mut l = l.borrow_mut();
+        if l.as_ref().is_none_or(|(k, _)| *k != key) {
+            *l = Some((key, floor_land(run)));
+        }
+        draw_land(&l.as_ref().unwrap().1, FLOOR_LAND, run.floor * 7 + run.seed as usize % 97, &rooms);
+    });
     let walked = |a: (usize, usize), b: (usize, usize)| run.trail.windows(2).any(|w| w[0] == a && w[1] == b);
     // the route: the way you came bold, the ways on from here plain, the rest faint
     for (c, col) in run.map.iter().enumerate() {

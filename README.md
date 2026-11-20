@@ -147,7 +147,8 @@ game reminds you to right click first.
 - **Surge**: each crystal you mine this turn adds a step, worth +10%, up to 10 steps (+100%).
   Every rite that deals damage spends one step, so casting early makes later rites weaker. Rites
   that deal no damage spend nothing.
-- Casting does not end your turn. Cast, mine some more, and cast again.
+- Casting does not end your turn. Cast, mine some more, and cast again. Once you have no picks left and
+  no rite your gems pay for, the turn ends on its own.
 - **Shield** soaks damage before HP does. Half of it wears off at the start of its owner's next
   turn. Burn goes straight through it.
 - **Overpressure**: after turn 12, every rite deals 2 more damage each turn, so no fight can stall
@@ -489,7 +490,7 @@ All assets are CC0 (public domain), except the character and icon glyphs (CC BY 
 | Window icon | Tiny Dungeon by [Kenney](https://kenney.nl) |
 | Rite effects | [Particle Pack](https://kenney.nl/assets/particle-pack) by Kenney |
 | Sound effects | RPG Audio, Impact Sounds, Interface Sounds and Digital SFX by [Kenney](https://kenney.nl); [Horror Hit Soundpack 1](https://opengameart.org/content/horror-hit-soundpack-1) by psychhead_ |
-| Music | [Stranger Than Fiction](https://freemusicarchive.org/music/holiznacc0/stranger-than-fiction-halloween-sci-fi), [Gamer Soundtrack: Haunted Mansion](https://freemusicarchive.org/music/holiznacc0/gamer-soundtrack-haunted-mansion) and [Horseless Headman](https://freemusicarchive.org/music/holiznacc0/horseless-headman-halloween-beats) by HoliznaCC0 |
+| Music | [Stranger Than Fiction](https://freemusicarchive.org/music/holiznacc0/stranger-than-fiction-halloween-sci-fi), [Gamer Soundtrack: Haunted Mansion](https://freemusicarchive.org/music/holiznacc0/gamer-soundtrack-haunted-mansion), [Horseless Headman](https://freemusicarchive.org/music/holiznacc0/horseless-headman-halloween-beats) and [The Hero And The Haunting](https://freemusicarchive.org/music/holiznacc0/the-hero-and-the-haunting) by HoliznaCC0 |
 
 Licence files for each asset pack are in `assets/`. Audio playback uses a patched copy of
 [quad-snd](https://github.com/not-fl3/quad-snd) in `vendor/quad-snd` (MIT / Apache-2.0), cut down

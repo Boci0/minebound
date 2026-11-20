@@ -29,7 +29,7 @@ enum Screen {
 /// Background music by HoliznaCC0 (CC0), read from assets/music beside the game: "Stranger Than
 /// Fiction", "Gamer Soundtrack: Haunted Mansion" and "Horseless Headman".
 /// (file name, length in seconds, mood: CALM on every screen but a fight, FIGHT, BOSS)
-const TRACKS: [(&str, f64, u8); 18] = [
+const TRACKS: [(&str, f64, u8); 21] = [
     ("somethings-out-there", 172.8, FIGHT),
     ("burning-in-the-atmosphere", 264.8, FIGHT),
     ("an-ocean-in-outer-space", 132.0, CALM),
@@ -48,6 +48,9 @@ const TRACKS: [(&str, f64, u8); 18] = [
     ("haunted-houses", 134.1, FIGHT),
     ("nocturnal", 194.6, FIGHT),
     ("tragedy-waiting-to-happen", 119.2, BOSS),
+    ("the-ghost", 315.0, BOSS),
+    ("the-psych-ward", 386.8, BOSS),
+    ("the-end", 96.6, BOSS),
 ];
 const CALM: u8 = 0;
 const FIGHT: u8 = 1;
