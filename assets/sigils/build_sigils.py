@@ -43,6 +43,14 @@ SIGILS = [
     (["spider-bot"], SPARK), (["delivery-drone"], SPARK), (["walking-turret"], SPARK), (["battle-mech"], SPARK), (["clockwork"], SPARK),
     # 82-84 their keys: Brine Lantern, Cinder Seal, Clockwork Eye
     (["lantern-flame"], LEGEND), (["wax-seal"], LEGEND), (["brass-eye"], LEGEND),
+    # 85-90 more elites, two per floor: Crystal Warden, The Burrower; Flail Sergeant, Iron Tortoise;
+    # The Executioner, The Shade
+    (["ice-golem"], STONE), (["mole"], STONE), (["flail"], EMBER), (["tortoise"], STONE),
+    (["executioner-hood"], EMBER), (["spectre"], GALE),
+    # 91-96 more bosses, two per floor: Old Tusker, Fen Crone; The Broodmother, Storm Roc;
+    # The Wyrm Below, The Hive Queen
+    (["boar"], STONE), (["witch-face"], TIDE), (["spider-alt"], SPARK), (["griffin-symbol"], GALE),
+    (["wyvern"], EMBER), (["bee"], SPARK),
 ]
 CELL, COLS, GLYPH = 128, 8, 100
 

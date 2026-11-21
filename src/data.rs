@@ -577,26 +577,42 @@ pub static NORMALS: &[EnemyDef] = &[
     foe("Ash Rat", HD + 10, "Snatches one of your gems as its turn starts.", 10, 2, &[Ember, Gale], |m| m.pilfer = 1),
 ];
 
-pub static ELITES: &[EnemyDef] = &[
-    foe("The Quarrymaster", HD + 11, "Starts with 8 shield. Every hit deals 1 less.", 45, 2, &[Stone, Ember, Spark], |m| {
-        m.start_shield = 8;
-        m.armor = 1
-    }),
-    foe("Gale Duchess", HD + 12, "One extra pick. The first rite each turn only grazes her, for half damage.", 38, 2, &[Gale, Tide, Spark], |m| {
-        m.reveals = 1;
-        m.evade = 1;
-        m.graze = 1
-    }),
-    foe("Kiln Tyrant", HD + 13, "Its rites set you burning, and it gains +1 power every turn.", 42, 2, &[Ember, Gale, Stone], |m| {
-        m.rite_burn = 1;
-        m.burn_bonus = 1;
-        m.enrage = 1
-    }),
+/// Three per floor; each elite node rolls one from its floor's.
+pub static ELITES: &[&[EnemyDef]] = &[
+    &[
+        foe("The Quarrymaster", HD + 11, "Starts with 8 shield. Every hit deals 1 less.", 45, 2, &[Stone, Ember, Spark], |m| {
+            m.start_shield = 8;
+            m.armor = 1
+        }),
+        foe("Crystal Warden", HD + 85, "Each crystal it mines gives it 4 shield.", 42, 2, &[Stone, Tide, Spark], |m| m.claim_shield = 4),
+        foe("The Burrower", HD + 86, "2 more faults in your boards.", 44, 2, &[Stone, Gale, Ember], |m| m.foe_mines = 2),
+    ],
+    &[
+        foe("Gale Duchess", HD + 12, "One extra pick. The first rite each turn only grazes her, for half damage.", 38, 2, &[Gale, Tide, Spark], |m| {
+            m.reveals = 1;
+            m.evade = 1;
+            m.graze = 1
+        }),
+        foe("Flail Sergeant", HD + 87, "Each of its rites after the first in a turn hits 5 harder.", 40, 3, &[Ember, Stone, Spark], |m| m.chain = 5),
+        foe("Iron Tortoise", HD + 88, "Gains 4 shield each turn, and its shield never wears off.", 40, 2, &[Stone, Tide, Gale], |m| {
+            m.shield_turn = 4;
+            m.keep_shield = 1
+        }),
+    ],
+    &[
+        foe("Kiln Tyrant", HD + 13, "Its rites set you burning, and it gains +1 power every turn.", 42, 2, &[Ember, Gale, Stone], |m| {
+            m.rite_burn = 1;
+            m.burn_bonus = 1;
+            m.enrage = 1
+        }),
+        foe("The Executioner", HD + 89, "Its first rite each turn hits double.", 42, 2, &[Ember, Spark, Stone], |m| m.first_pct = 100),
+        foe("The Shade", HD + 90, "The first rite each turn misses it.", 40, 2, &[Gale, Tide, Spark], |m| m.evade = 1),
+    ],
 ];
 
-/// Two per floor; each map rolls which one waits at the end.
-pub static BOSSES: &[[EnemyDef; 2]] = &[
-    [
+/// Four per floor; each map rolls which one waits at the end.
+pub static BOSSES: &[&[EnemyDef]] = &[
+    &[
         foe("Minelayer Queen", HD + 14, "1 more fault in your boards. Gains a gem whenever your ground caves in.", 50, 2, &[Ember, Stone, Spark], |m| {
             m.foe_mines = 1;
             m.foe_mine_gift = 1
@@ -606,8 +622,13 @@ pub static BOSSES: &[[EnemyDef; 2]] = &[
             m.regen = 2;
             m.shield_turn = 2
         }),
+        foe("Old Tusker", HD + 91, "Starts with 6 shield. Below half HP, +2 power.", 46, 2, &[Stone, Ember, Gale], |m| {
+            m.start_shield = 6;
+            m.desperate = 2
+        }),
+        foe("The Fen Crone", HD + 92, "Each crystal it mines heals it 2.", 44, 2, &[Tide, Gale, Stone], |m| m.claim_heal = 2),
     ],
-    [
+    &[
         foe("The Sapper King", HD + 15, "Starts with 12 shield. Snatches one of your gems each turn.", 105, 3, &[Ember, Gale, Spark], |m| {
             m.start_shield = 12;
             m.pilfer = 1
@@ -617,8 +638,16 @@ pub static BOSSES: &[[EnemyDef; 2]] = &[
             m.graze = 1;
             m.lifesteal_pct = 30
         }),
+        foe("The Broodmother", HD + 93, "Hits you for 10 as she steps in. 1 more fault in your boards.", 100, 3, &[Spark, Stone, Ember], |m| {
+            m.opening = 10;
+            m.foe_mines = 1
+        }),
+        foe("Storm Roc", HD + 94, "Its rites deal +25%. Jams your surge at 5.", 96, 3, &[Gale, Spark, Tide], |m| {
+            m.rite_pct = 25;
+            m.foe_surge_cap = 5
+        }),
     ],
-    [
+    &[
         foe("Null Cartographer", HD + 18, "One extra pick, 3 of its cracks propped up. Jams your surge at 6.", 135, 4, &[Spark, Gale, Ember], |m| {
             m.reveals = 1;
             m.scouts = 3;
@@ -627,6 +656,14 @@ pub static BOSSES: &[[EnemyDef; 2]] = &[
         foe("The Deep Engine", HD + 19, "Iron plating: every hit deals 2 less. +1 power every turn.", 125, 3, &[Stone, Ember, Tide], |m| {
             m.armor = 2;
             m.enrage = 1
+        }),
+        foe("The Wyrm Below", HD + 95, "Its rites set you burning. Below half HP, +3 power.", 130, 3, &[Ember, Gale, Stone], |m| {
+            m.rite_burn = 2;
+            m.desperate = 3
+        }),
+        foe("The Hive Queen", HD + 96, "One extra pick. Each of her rites after the first in a turn hits 8 harder.", 135, 4, &[Spark, Ember, Gale], |m| {
+            m.reveals = 1;
+            m.chain = 8
         }),
     ],
 ];
@@ -775,7 +812,7 @@ pub static ENDINGS: &[Ending] = &[
 
 /// True for any boss, a floor's or an ending's.
 pub fn is_boss(name: &str) -> bool {
-    BOSSES.iter().flatten().chain(ENDINGS.iter().map(|e| &e.boss)).any(|d| d.name == name)
+    BOSSES.iter().flat_map(|f| f.iter()).chain(ENDINGS.iter().map(|e| &e.boss)).any(|d| d.name == name)
 }
 
 /// The places on the overworld, unlocked one after another by winning the one before.

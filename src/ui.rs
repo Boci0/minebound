@@ -1528,6 +1528,15 @@ fn rune_circle(c: Vec2, rx: f32, ry: f32, col: Color, a: f32) {
 /// The title menu: Play goes to the overworld, Back quits the game.
 pub fn title() -> Option<Go> {
     let t = now() as f32;
+    // the lords of The Below watch from the dark either side, the nearer ones larger and less faint
+    let lurk = [(150.0, 150.0, 90.0), (70.0, 330.0, 70.0), (250.0, 310.0, 110.0), (120.0, 500.0, 100.0), (270.0, 580.0, 80.0), (60.0, 660.0, 64.0)];
+    for (k, d) in BOSSES.iter().flat_map(|f| f.iter()).enumerate().take(12) {
+        let (x, y, size) = lurk[k / 2];
+        let x = if k % 2 == 0 { x } else { 1280.0 - x };
+        let bob = (t * 0.6 + k as f32 * 1.3).sin() * 4.0;
+        let breathe = 0.75 + 0.25 * (t * 0.4 + k as f32).sin();
+        sprite(d.sprite, x - size / 2.0, y - size / 2.0 + bob, size, fade(INK, size / 110.0 * 0.2 * breathe));
+    }
     // the heroes waiting in a summoning circle
     rune_circle(vec2(640.0, 640.0), 280.0, 40.0, ACCENT, 0.28);
     for k in 0..4 {
@@ -1779,7 +1788,7 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
         let prev = EXPEDITIONS[shown - 1].name.replace(' ', "\u{a0}");
         col.block(2, None, [format!("Win {prev} to open the way here.")], INK);
     } else {
-        let lords = BOSSES.iter().map(|pair| pair.iter().map(|d| d.name).collect::<Vec<_>>().join(" or "));
+        let lords = BOSSES.iter().map(|pair| pair.iter().map(|d| d.name.replace(' ', "\u{a0}")).collect::<Vec<_>>().join(", "));
         col.block(1, Some("LORDS BELOW"), lords, INK);
     }
     col.draw();

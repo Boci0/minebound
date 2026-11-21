@@ -100,7 +100,7 @@ pub struct Run {
     /// the one blessing held, by index in `BLESSINGS`
     pub blessing: Option<usize>,
     pub floor: usize,
-    /// which of the floor's two bosses waits at the end
+    /// which of the floor's bosses waits at the end
     pub boss: usize,
     /// this floor's rule twist, by index in `TWISTS`
     pub twist: usize,
@@ -366,7 +366,7 @@ impl Run {
     }
 
     fn gen_map(&mut self) {
-        self.boss = self.rng.below(2);
+        self.boss = self.rng.below(BOSSES[self.floor.min(BOSSES.len() - 1)].len());
         self.twist = if EXPEDITIONS[self.exp].curses || self.daily.is_some() {
             let curses: Vec<usize> = (0..TWISTS.len()).filter(|&i| TWISTS[i].tone < 0).collect();
             curses[self.rng.below(curses.len())]
@@ -475,7 +475,10 @@ impl Run {
                     NodeKind::Elite => {
                         let elite = match self.ending() {
                             Some(e) => &ENDINGS[e].elite,
-                            None => &ELITES[self.rng.below(ELITES.len())],
+                            None => {
+                                let pool = ELITES[self.floor.min(ELITES.len() - 1)];
+                                &pool[self.rng.below(pool.len())]
+                            }
                         };
                         vec![self.random_normal(), self.enemy(elite, true, 2, 100)]
                     }
@@ -880,8 +883,8 @@ mod tests {
     }
 
     thread_local! {
-        /// per fight: (node kind, [loads, breaks, hero HP lost, turns])
-        static PROBE: std::cell::RefCell<Vec<(usize, [usize; 4])>> = const { std::cell::RefCell::new(Vec::new()) };
+        /// per fight: (node kind, last foe faced, hero won, [loads, breaks, hero HP lost, turns])
+        static PROBE: std::cell::RefCell<Vec<(usize, String, bool, [usize; 4])>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
     /// Prints how much enemies get done per fight kind. `cargo test --release probe_enemy -- --ignored --nocapture`
@@ -896,10 +899,21 @@ mod tests {
         PROBE.with(|p| {
             let p = p.borrow();
             for (kind, name) in [(0, "normal"), (1, "elite"), (5, "boss"), (6, "shrine")] {
-                let rows: Vec<&[usize; 4]> = p.iter().filter(|r| r.0 == kind).map(|r| &r.1).collect();
+                let rows: Vec<&[usize; 4]> = p.iter().filter(|r| r.0 == kind).map(|r| &r.3).collect();
                 let sum = |k: usize| rows.iter().map(|r| r[k]).sum::<usize>() as f32;
                 let n = rows.len().max(1) as f32;
                 println!("{name:7} fights {:5}  loads/fight {:.2}  broken {:.0}%  hp lost/fight {:.1}  turns {:.1}", rows.len(), sum(0) / n, 100.0 * sum(1) / sum(0).max(1.0), sum(2) / n, sum(3) / n);
+            }
+            // each elite and boss on its own, by the foe the fight ended on
+            let mut names: Vec<(usize, &str)> = p.iter().filter(|r| r.0 == 1 || r.0 == 5).map(|r| (r.0, r.1.as_str())).collect();
+            names.sort();
+            names.dedup();
+            for (kind, who) in names {
+                let rows: Vec<_> = p.iter().filter(|r| r.0 == kind && r.1 == who).collect();
+                let n = rows.len() as f32;
+                let won = rows.iter().filter(|r| r.2).count() as f32;
+                let avg = |k: usize| rows.iter().map(|r| r.3[k]).sum::<usize>() as f32 / n;
+                println!("{:5} {who:20} fights {:4}  hero wins {:3.0}%  hp lost {:5.1}  turns {:4.1}", if kind == 1 { "elite" } else { "boss" }, rows.len(), 100.0 * won / n, avg(2), avg(3));
             }
         });
     }
@@ -928,7 +942,7 @@ mod tests {
                     let kind = run.pos.map_or(0, |(c, r)| run.map[c][r].kind as usize);
                     let count = |f: fn(&crate::battle::Event) -> bool| b.events.iter().filter(|e| f(e)).count();
                     let row = [count(|e| matches!(e, crate::battle::Event::Load)), count(|e| matches!(e, crate::battle::Event::Break)), (hp0 - b.f[0].hp).max(0) as usize, b.turn];
-                    PROBE.with(|p| p.borrow_mut().push((kind, row)));
+                    PROBE.with(|p| p.borrow_mut().push((kind, b.f[1].name.to_string(), b.won(), row)));
                     run.finish_battle(&b)
                 }
                 Stage::Pick(options) => {

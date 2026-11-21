@@ -382,17 +382,29 @@ details.
 | Static Moth | Normal | Jams your surge at 4 |
 | Thorn Creeper | Normal | Every rite that hits it deals 2 back |
 | Ash Rat | Normal, from floor 2 | Snatches one of your gems as its turn starts |
-| The Quarrymaster | Elite | Starts with 8 shield; every hit deals 1 less |
-| Gale Duchess | Elite | One extra pick; the first rite each turn only grazes her |
-| Kiln Tyrant | Elite | Its rites set you burning, and +1 power every turn |
+| The Quarrymaster | Elite, floor 1 | Starts with 8 shield; every hit deals 1 less |
+| Crystal Warden | Elite, floor 1 | Each crystal it mines gives it 4 shield |
+| The Burrower | Elite, floor 1 | 2 more faults in your boards |
+| Gale Duchess | Elite, floor 2 | One extra pick; the first rite each turn only grazes her |
+| Flail Sergeant | Elite, floor 2 | Each of its rites after the first in a turn hits 5 harder |
+| Iron Tortoise | Elite, floor 2 | Gains 4 shield each turn, and its shield never wears off |
+| Kiln Tyrant | Elite, floor 3 | Its rites set you burning, and +1 power every turn |
+| The Executioner | Elite, floor 3 | Its first rite each turn hits double |
+| The Shade | Elite, floor 3 | The first rite each turn misses it |
 | Minelayer Queen | Boss, floor 1 | 1 more fault in your boards; gains a gem whenever your ground caves in |
 | The Undertow | Boss, floor 1 | Heals 2 and gains 2 shield each turn |
+| Old Tusker | Boss, floor 1 | Starts with 6 shield; below half HP, +2 power |
+| The Fen Crone | Boss, floor 1 | Each crystal it mines heals it 2 |
 | The Sapper King | Boss, floor 2 | Starts with 12 shield; snatches one of your gems each turn |
 | The Tidecaller | Boss, floor 2 | The first rite each turn only grazes her; heals for 30% of damage dealt |
+| The Broodmother | Boss, floor 2 | Hits you for 10 as she steps in; 1 more fault in your boards |
+| Storm Roc | Boss, floor 2 | Its rites deal +25%; jams your surge at 5 |
 | Null Cartographer | Boss, floor 3 | One extra pick, 3 of its cracks propped up; jams your surge at 6 |
 | The Deep Engine | Boss, floor 3 | Every hit deals 2 less; +1 power every turn |
+| The Wyrm Below | Boss, floor 3 | Its rites set you burning; below half HP, +3 power |
+| The Hive Queen | Boss, floor 3 | One extra pick; each of her rites after the first in a turn hits 8 harder |
 
-Each floor's boss is one of its two, at random; the map shows which one waits for you.
+Each floor's elites come from its own three, and its boss is one of its four, at random; the map shows which one waits for you.
 
 ### Expeditions
 
