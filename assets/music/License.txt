@@ -2,7 +2,7 @@ Music by HoliznaCC0, from three albums:
 
 "Stranger Than Fiction ( Halloween / Sci Fi )"
 https://freemusicarchive.org/music/holiznacc0/stranger-than-fiction-halloween-sci-fi
-Tracks: Somethings Out There, Burning In The Atmosphere, An Ocean in Outer Space, Little Green Men, Sky Fish
+Tracks: Burning In The Atmosphere, An Ocean in Outer Space, Little Green Men
 
 "Gamer Soundtrack: Haunted Mansion"
 https://freemusicarchive.org/music/holiznacc0/gamer-soundtrack-haunted-mansion
@@ -11,13 +11,18 @@ Tracks: Floor 1, Floor 2, Floor 3, Floor 4, Floor 5, Floor 6
 "Horseless Headman ( Halloween Beats )"
 https://freemusicarchive.org/music/holiznacc0/horseless-headman-halloween-beats
 Tracks: Never Speak Of The Devil, Halloween Soundscape, Between Life And Death, Haunted Houses,
-Tragedy Waiting To Happen, CobWebs, Nocturnal
+CobWebs, Nocturnal
 
-"The Hero And The Haunting"
-https://freemusicarchive.org/music/holiznacc0/the-hero-and-the-haunting
-Tracks: The Ghost, The Psych Ward, The End
+Boss music, from OpenGameArt.org (each CC0):
+"Hunted By The Evil" by Umplix: https://opengameart.org/content/hunted-by-the-evil
+"The Confrontation" by Umplix: https://opengameart.org/content/the-confrontation
+"Dark Castle Part I" by Umplix: https://opengameart.org/content/dark-castle-part-i
+"Sinister Abode" by Zane Little Music: https://opengameart.org/content/sinister-abode
+"The True Villain Emerges" by Umplix: https://opengameart.org/content/the-true-villain-emerges
+"Castle Boss" by madameberry: https://opengameart.org/content/patreon-songs-castle-boss-and-solemn-tide
 
 License: Creative Commons Zero (CC0 1.0 Universal), public domain
 https://creativecommons.org/publicdomain/zero/1.0/
 
-Re-encoded from MP3 to 44.1 kHz Ogg Vorbis for this game.
+Re-encoded to 44.1 kHz Ogg Vorbis for this game; boss tracks loudness-normalised, and
+Hunted By The Evil looped five times into one file.

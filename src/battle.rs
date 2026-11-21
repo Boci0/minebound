@@ -86,6 +86,8 @@ pub struct Fighter {
     pub break_at: i32,
     /// rite damage taken this turn, toward breaking its load
     pub took: i32,
+    /// its load was broken: it still fires, at half damage
+    pub broken: bool,
     /// the elements of the last rite that hit it: a rite bringing any other sets off reactions
     pub mark: Vec<Element>,
     pub mods: Mods,
@@ -268,6 +270,18 @@ impl Battle {
         self.f[1].hp = 0;
     }
 
+    /// Developer shortcut: the enemy loads (if it has nothing loaded) and the load breaks at once.
+    pub fn debug_break(&mut self) {
+        if self.f[1].loaded.is_empty() {
+            self.f[1].stacks = self.f[1].elements.iter().flat_map(|&e| [e, e]).collect();
+            self.load();
+        }
+        if !self.f[1].loaded.is_empty() && !self.f[1].broken {
+            self.f[1].broken = true;
+            self.events.push(Event::Break);
+        }
+    }
+
     /// Combos `s` can pay for right now, at their level.
     pub fn ready(&self, s: usize) -> Vec<&'static Combo> {
         COMBOS.iter().filter(|c| self.f[s].payment(c, &self.f[s].stacks).is_some()).collect()
@@ -309,6 +323,11 @@ impl Battle {
         if d != full {
             steps.push((if d == 0 { "it evades" } else { "it grazes: half" }.into(), format!("= {d}")));
         }
+        // enemies only cast by firing their load, so a broken one halves every rite of it
+        if s == 1 && self.f[1].broken {
+            steps.push(("its load was broken: half".into(), format!("= {}", d / 2)));
+            return (d / 2, steps);
+        }
         (d, steps)
     }
 
@@ -331,15 +350,17 @@ impl Battle {
     /// What the enemy's loaded rites would deal the hero if they fired now (before the hero's shield).
     pub fn loaded_damage(&self) -> i32 {
         let (mut total, mut surge, mut evades) = (0, self.f[1].surge, self.f[0].mods.evade);
+        // a broken load hits for half, rite by rite, as `hit_steps` halves it
+        let cut = if self.f[1].broken { 2 } else { 1 };
         for (nth, c) in self.f[1].loaded.iter().enumerate() {
             let full = self.dmg(1, c, nth as i32, surge, self.f[1].shield);
             if evades > 0 {
                 evades -= 1;
                 if self.f[0].mods.graze > 0 {
-                    total += full / 2;
+                    total += full / 2 / cut;
                 }
             } else {
-                total += full;
+                total += full / cut;
             }
             surge = (surge - 1).max(0);
         }
@@ -628,10 +649,12 @@ impl Battle {
         }
         self.f[1].surge = fresh;
         self.f[1].cast_n = 0;
+        self.f[1].broken = false;
     }
 
     /// The enemy loads every rite its stacks pay for, biggest first, to fire as its next turn starts.
     fn load(&mut self) {
+        self.f[1].broken = false;
         while let Some(c) = self.best_combo(1, &self.f[1].stacks) {
             let paid = self.f[1].payment(c, &self.f[1].stacks).expect("best_combo checked it");
             spend(&mut self.f[1].stacks, &paid);
@@ -972,13 +995,13 @@ impl Battle {
             self.log.push(format!("{}'s brittle shield shatters onto {} for {guard}", self.f[t].name, self.f[a].name));
         }
         self.events.extend(react.iter().map(|&element| Event::React { from: a, element }));
-        if a == 0 && hits && !self.f[t].loaded.is_empty() {
+        if a == 0 && hits && !self.f[t].loaded.is_empty() && !self.f[t].broken {
             self.f[t].took += dmg;
             if self.f[t].took >= self.f[t].break_at {
-                self.f[t].loaded.clear();
-                self.f[t].break_at = 0;
+                // a break blunts the load rather than stopping it: enemies always land something
+                self.f[t].broken = true;
                 self.events.push(Event::Break);
-                self.log.push(format!("The loaded rites of {} shatter", self.f[t].name));
+                self.log.push(format!("The loaded rites of {} crack: they will hit for half", self.f[t].name));
             }
         }
         let line = if hits { format!("{}: {name} for {dmg}", self.f[a].name) } else { format!("{}: {name}", self.f[a].name) };
@@ -1687,7 +1710,7 @@ mod tests {
     }
 
     #[test]
-    fn hitting_hard_enough_in_one_turn_breaks_the_load() {
+    fn hitting_hard_enough_in_one_turn_breaks_the_load_to_half() {
         let mut b = duel();
         b.f[1].loaded = vec![combo("Conduction")];
         b.f[1].break_at = 30;
@@ -1695,13 +1718,14 @@ mod tests {
         assert!(b.cast(combo("Raze")));
         assert!(!b.f[1].loaded.is_empty() && b.f[1].took > 0, "not enough yet");
         b.f[0].stacks = vec![Ember, Gale, Stone, Ember, Gale, Stone];
-        while b.f[0].stacks.len() >= 3 && !b.f[1].loaded.is_empty() {
+        while b.f[0].stacks.len() >= 3 && !b.f[1].broken {
             assert!(b.cast(combo("Upheaval")));
         }
-        assert!(b.f[1].loaded.is_empty() && b.events.iter().any(|e| matches!(e, Event::Break)));
-        let hp = b.f[0].hp;
+        assert!(b.f[1].broken && b.events.iter().any(|e| matches!(e, Event::Break)));
+        let (hp, half) = (b.f[0].hp, b.loaded_damage());
         b.end_turn();
-        assert_eq!(b.f[0].hp, hp, "a broken load deals nothing");
+        assert!(half > 0 && b.f[0].hp == hp - half, "a broken load still fires, at half");
+        assert!(b.f[1].loaded.is_empty() && !b.f[1].broken);
         // what the hero dealt last turn does not count toward the next break
         b.f[1].loaded = vec![combo("Conduction")];
         b.end_turn();

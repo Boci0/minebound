@@ -159,7 +159,7 @@ game reminds you to right click first.
   forever. A warning shows at the top left from turn 9.
 - **Loaded rites**: the enemy loads its rites at the end of its turn and fires them as its next
   turn starts. NEXT, under its HP, shows what is loaded, how hard it would hit, and its **break**:
-  deal that much rite damage to it in your turn and everything loaded shatters unfired.
+  deal that much rite damage to it in your turn and everything loaded cracks: it still fires, for half.
 - Every rite shows the damage it would deal right now, already counting armour, dodges and surge.
 
 **Reactions.** A rite marks its target with its elements. The next rite that hits it bringing an
@@ -509,7 +509,7 @@ All assets are CC0 (public domain), except the character and icon glyphs (CC BY 
 | Window icon | Tiny Dungeon by [Kenney](https://kenney.nl) |
 | Rite effects | [Particle Pack](https://kenney.nl/assets/particle-pack) by Kenney |
 | Sound effects | RPG Audio, Impact Sounds, Interface Sounds and Digital SFX by [Kenney](https://kenney.nl); [Horror Hit Soundpack 1](https://opengameart.org/content/horror-hit-soundpack-1) by psychhead_ |
-| Music | [Stranger Than Fiction](https://freemusicarchive.org/music/holiznacc0/stranger-than-fiction-halloween-sci-fi), [Gamer Soundtrack: Haunted Mansion](https://freemusicarchive.org/music/holiznacc0/gamer-soundtrack-haunted-mansion), [Horseless Headman](https://freemusicarchive.org/music/holiznacc0/horseless-headman-halloween-beats) and [The Hero And The Haunting](https://freemusicarchive.org/music/holiznacc0/the-hero-and-the-haunting) by HoliznaCC0 |
+| Music | [Stranger Than Fiction](https://freemusicarchive.org/music/holiznacc0/stranger-than-fiction-halloween-sci-fi), [Gamer Soundtrack: Haunted Mansion](https://freemusicarchive.org/music/holiznacc0/gamer-soundtrack-haunted-mansion), [Horseless Headman](https://freemusicarchive.org/music/holiznacc0/horseless-headman-halloween-beats) by HoliznaCC0; boss music [Hunted By The Evil](https://opengameart.org/content/hunted-by-the-evil), [The Confrontation](https://opengameart.org/content/the-confrontation), [Dark Castle Part I](https://opengameart.org/content/dark-castle-part-i) and [The True Villain Emerges](https://opengameart.org/content/the-true-villain-emerges) by Umplix, [Sinister Abode](https://opengameart.org/content/sinister-abode) by Zane Little Music and [Castle Boss](https://opengameart.org/content/patreon-songs-castle-boss-and-solemn-tide) by madameberry (all CC0). Each floor has its own calm, fight and boss track |
 
 Licence files for each asset pack are in `assets/`. Audio playback uses a patched copy of
 [quad-snd](https://github.com/not-fl3/quad-snd) in `vendor/quad-snd` (MIT / Apache-2.0), cut down

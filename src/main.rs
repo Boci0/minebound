@@ -24,34 +24,42 @@ enum Screen {
     Title,
     World,
     Run(Run, Stage, Option<usize>),
+    /// debug builds: songs and animations on demand, with the song picked (if any)
+    Gallery(Option<usize>),
 }
 
-/// Background music by HoliznaCC0 (CC0), read from assets/music beside the game: "Stranger Than
-/// Fiction", "Gamer Soundtrack: Haunted Mansion" and "Horseless Headman".
-/// (file name, length in seconds, mood: CALM on every screen but a fight, FIGHT, BOSS)
-const TRACKS: [(&str, f64, u8); 21] = [
-    ("somethings-out-there", 172.8, FIGHT),
-    ("burning-in-the-atmosphere", 264.8, FIGHT),
-    ("an-ocean-in-outer-space", 132.0, CALM),
-    ("little-green-men", 156.7, FIGHT),
-    ("sky-fish", 194.4, CALM),
-    ("floor-1", 211.9, CALM),
-    ("floor-2", 164.0, CALM),
-    ("floor-3", 202.0, CALM),
-    ("floor-4", 298.0, CALM),
-    ("floor-5", 246.0, CALM),
-    ("floor-6", 220.0, CALM),
-    ("halloween-soundscape", 234.0, CALM),
-    ("never-speak-of-the-devil", 145.9, CALM),
-    ("between-life-and-death", 163.7, FIGHT),
-    ("cobwebs", 149.3, FIGHT),
-    ("haunted-houses", 134.1, FIGHT),
-    ("nocturnal", 194.6, FIGHT),
-    ("tragedy-waiting-to-happen", 119.2, BOSS),
-    ("the-ghost", 315.0, BOSS),
-    ("the-psych-ward", 386.8, BOSS),
-    ("the-end", 96.6, BOSS),
+/// Background music (CC0), read from assets/music beside the game: HoliznaCC0's albums for calm and
+/// fight music, OpenGameArt tracks for bosses (credits in assets/music/License.txt).
+/// (file name, length in seconds, mood: CALM on every screen but a fight, FIGHT, BOSS; place: the floor
+/// (0-2), an ending's floor (3 + its index in ENDINGS), or MENUS for screens outside a run)
+const TRACKS: [(&str, f64, u8, u8); 21] = [
+    ("floor-1", 211.9, CALM, 0),
+    ("cobwebs", 149.3, FIGHT, 0),
+    ("hunted-by-the-evil", 131.6, BOSS, 0),
+    ("floor-2", 164.0, CALM, 1),
+    ("haunted-houses", 134.1, FIGHT, 1),
+    ("the-confrontation", 79.6, BOSS, 1),
+    ("floor-3", 202.0, CALM, 2),
+    ("between-life-and-death", 163.7, FIGHT, 2),
+    ("dark-castle", 96.0, BOSS, 2),
+    // The Drowned Archive
+    ("floor-4", 298.0, CALM, 3),
+    ("nocturnal", 194.6, FIGHT, 3),
+    ("sinister-abode", 147.0, BOSS, 3),
+    // The Furnace Heart
+    ("floor-5", 246.0, CALM, 4),
+    ("burning-in-the-atmosphere", 264.8, FIGHT, 4),
+    ("villain-emerges", 130.3, BOSS, 4),
+    // The Silent Engine
+    ("floor-6", 220.0, CALM, 5),
+    ("little-green-men", 156.7, FIGHT, 5),
+    ("castle-boss", 124.0, BOSS, 5),
+    ("halloween-soundscape", 234.0, CALM, MENUS),
+    ("an-ocean-in-outer-space", 132.0, CALM, MENUS),
+    ("never-speak-of-the-devil", 145.9, CALM, MENUS),
 ];
+/// The place of the title, the world map and the gallery.
+const MENUS: u8 = 6;
 const CALM: u8 = 0;
 const FIGHT: u8 = 1;
 const BOSS: u8 = 2;
@@ -77,10 +85,11 @@ impl Music {
         Music { playing: None, track: usize::MAX, until: 0.0, fading: None, loading: None }
     }
 
-    /// Plays tracks of `mood`: the next one when the current one ends or N is pressed, and a fade
-    /// to a new one when the mood changes. One track is held in memory at a time: a decoded track
+    /// Plays tracks of `want` (mood, place): the next one when the current one ends or N is pressed,
+    /// and a fade to a new one when the mood or place changes. One track is held in memory at a time: a decoded track
     /// is tens of megabytes.
-    async fn tick(&mut self, mood: u8) {
+    /// `only`: play just this track (the gallery's pick), over and over.
+    async fn tick(&mut self, want: (u8, u8), only: Option<usize>) {
         if let Some(rx) = &self.loading {
             let read = match rx.try_recv() {
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
@@ -107,7 +116,8 @@ impl Music {
             }
             return;
         }
-        let wrong = self.track < TRACKS.len() && TRACKS[self.track].2 != mood;
+        let fits = |i: usize| only.map_or((TRACKS[i].2, TRACKS[i].3) == want, |o| o == i);
+        let wrong = self.track < TRACKS.len() && !fits(self.track);
         if self.playing.is_some() && wrong && self.fading.is_none() {
             self.fading = Some(get_time());
         }
@@ -122,8 +132,8 @@ impl Music {
             stop_sound(&old);
         }
         self.fading = None;
-        // a random track of this mood, not the one just played (unless it is the only one)
-        let pool: Vec<usize> = (0..TRACKS.len()).filter(|&i| TRACKS[i].2 == mood).collect();
+        // a random track for this mood and place, not the one just played (unless it is the only one)
+        let pool: Vec<usize> = (0..TRACKS.len()).filter(|&i| fits(i)).collect();
         let fresh: Vec<usize> = pool.iter().copied().filter(|&i| i != self.track).collect();
         let from = if fresh.is_empty() { &pool } else { &fresh };
         self.track = from[rand::gen_range(0, from.len())];
@@ -133,12 +143,14 @@ impl Music {
     }
 }
 
-/// The music a screen calls for: a fight's, a boss fight's, or the calm between.
-fn mood(screen: &Screen) -> u8 {
-    match screen {
-        Screen::Run(_, Stage::Battle(b), _) if data::is_boss(&b.f[1].name) => BOSS,
-        Screen::Run(_, Stage::Battle(_), _) => FIGHT,
-        _ => CALM,
+/// The music a screen calls for: (a fight's, a boss fight's or the calm between, and where it is).
+fn mood(screen: &Screen) -> (u8, u8) {
+    let Screen::Run(run, stage, _) = screen else { return (CALM, MENUS) };
+    let place = run.ending().map_or(run.floor.min(FLOORS - 1), |e| FLOORS + e) as u8;
+    match stage {
+        Stage::Battle(b) if data::is_boss(&b.f[1].name) => (BOSS, place),
+        Stage::Battle(_) => (FIGHT, place),
+        _ => (CALM, place),
     }
 }
 
@@ -229,7 +241,8 @@ async fn main() {
         clear_background(ui::BG);
         ctl::begin_frame();
         ui::begin_frame();
-        music.tick(mood(&screen)).await;
+        let only = if let Screen::Gallery(t) = screen { t } else { None };
+        music.tick(mood(&screen), only).await;
         let mut quit_run = false;
         // days since 1970 (UTC): the daily descent changes as this does
         let today = (miniquad::date::now() / 86_400.0) as u64;
@@ -238,7 +251,18 @@ async fn main() {
             Screen::Title => match ui::title() {
                 Some(Go::Play) => to = Some(Screen::World),
                 Some(Go::Back) => break,
+                Some(Go::Gallery) => to = Some(Screen::Gallery(None)),
                 Some(Go::Daily) | None => {}
+            },
+            Screen::Gallery(track) => match ui::gallery(&TRACKS, *track) {
+                Some(ui::Shown::Track(i)) => *track = Some(i),
+                Some(ui::Shown::Fight(ending)) => {
+                    let (mut run, _) = Run::new((miniquad::date::now() * 1000.0) as u64, pick.1, pick.0);
+                    let stage = if ending { run.debug_endings() } else { run.debug_last_fight() };
+                    to = Some(Screen::Run(run, stage, None));
+                }
+                Some(ui::Shown::Back) => to = Some(Screen::Title),
+                None => {}
             },
             Screen::World => match ui::world(&save, &mut pick, today) {
                 Some(Go::Play) => {
@@ -260,7 +284,7 @@ async fn main() {
                     to = Some(Screen::Run(run, stage, None));
                 }
                 Some(Go::Back) => to = Some(Screen::Title),
-                None => {}
+                Some(Go::Gallery) | None => {}
             },
             Screen::Run(run, stage, opened) => {
                 // debug builds only, to reach any screen quickly: F9, Ctrl+W or a middle click wins the current
@@ -291,6 +315,17 @@ async fn main() {
                 let next = match stage {
                     Stage::Map => ui::map_screen(run).map(|(c, r)| run.enter(c, r)),
                     Stage::Battle(b) => {
+                        // debug builds: the gallery's buttons, so the big animations can be seen on demand
+                        if cfg!(debug_assertions) && !b.over() {
+                            if let Some(k) = ui::debug_bar() {
+                                run.debug = true;
+                                match k {
+                                    0 => b.f[1].hp -= 130,
+                                    1 => b.debug_break(),
+                                    _ => b.debug_win(),
+                                }
+                            }
+                        }
                         // the very first fight waits under a sheet of rules until it is read
                         ui::hold_for_rules(!save.rules_seen);
                         let ending = b.over() && (!b.won() || run.last_fight());
@@ -391,10 +426,14 @@ mod tests {
 
     #[test]
     fn every_mood_has_music_and_every_track_is_there() {
-        for m in [CALM, FIGHT, BOSS] {
-            assert!(TRACKS.iter().any(|t| t.2 == m), "no music for mood {m}");
+        // every floor and every ending's floor has its own calm, fight and boss track
+        for place in 0..(FLOORS + data::ENDINGS.len()) as u8 {
+            for m in [CALM, FIGHT, BOSS] {
+                assert!(TRACKS.iter().any(|t| (t.2, t.3) == (m, place)), "no music for mood {m} on place {place}");
+            }
         }
-        for (name, _, _) in TRACKS {
+        assert!(TRACKS.iter().any(|t| (t.2, t.3) == (CALM, MENUS)));
+        for (name, ..) in TRACKS {
             assert!(std::path::Path::new(&music_path(name)).exists(), "missing assets/music/{name}.ogg");
         }
     }

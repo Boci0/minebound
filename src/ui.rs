@@ -922,7 +922,7 @@ fn glossary(word: &str) -> Option<(&'static str, &'static str)> {
         "crush" => ("Crush", "Stone reacts: +4 damage, before surge."),
         "arc" => ("Arc", "Spark reacts: +2 surge for the caster."),
         "brittle" => ("Brittle", "Blocks the next rite, then shatters: the attacker takes that much damage."),
-        "break" | "broken" => ("Break", "Deal this much rite damage in your turn and its loaded rites shatter."),
+        "break" | "broken" => ("Break", "Deal this much rite damage in your turn and its loaded rites crack: they still fire, for half."),
         _ => return None,
     })
 }
@@ -1426,6 +1426,65 @@ pub enum Go {
     Back,
     /// today's daily descent
     Daily,
+    /// the gallery (debug builds)
+    Gallery,
+}
+
+/// What the gallery asks for: a song, a boss fight (true: the first ending's), or the title again.
+pub enum Shown {
+    Track(usize),
+    Fight(bool),
+    Back,
+}
+
+/// Debug builds: every song to play by name, and ways into the fights with the big animations.
+/// `tracks`: (file, seconds, mood 0-2, place: floors 0-2, endings 3-5, 6 menus), as main.rs lists them.
+pub fn gallery(tracks: &[(&str, f64, u8, u8)], playing: Option<usize>) -> Option<Shown> {
+    centered("GALLERY", 640.0, 62.0, 44.0, INK);
+    let places = ["Floor 1", "Floor 2", "Floor 3", "Archive", "Furnace", "Engine", "Menus"];
+    for (k, head) in ["CALM", "FIGHT", "BOSS"].iter().enumerate() {
+        label(head, 150.0 + k as f32 * 276.0, 104.0);
+    }
+    let mut go = None;
+    let mut menus = 0;
+    for (i, &(name, ..)) in tracks.iter().enumerate() {
+        let (mood, place) = (tracks[i].2 as usize, tracks[i].3 as usize);
+        // menu tracks are all calm: they fill their row left to right
+        let col = if place == 6 { (menus, menus += 1).0 } else { mood };
+        let y = 116.0 + place as f32 * 70.0;
+        if col == 0 {
+            label(places[place], 40.0, y + 24.0);
+        }
+        let secs = tracks[i].1 as u32;
+        if button(Rect::new(150.0 + col as f32 * 276.0, y, 268.0, 36.0), name, true, playing == Some(i)) {
+            go = Some(Shown::Track(i));
+        }
+        centered(&format!("{}:{:02}", secs / 60, secs % 60), 150.0 + col as f32 * 276.0 + 134.0, y + 54.0, 14.0, MUTED);
+    }
+    label("ANIMATIONS", 990.0, 104.0);
+    if button(Rect::new(990.0, 116.0, 240.0, 40.0), "Boss fight", true, false) {
+        go = Some(Shown::Fight(false));
+    }
+    if button(Rect::new(990.0, 164.0, 240.0, 40.0), "Ending boss fight", true, false) {
+        go = Some(Shown::Fight(true));
+    }
+    wrapped("In a fight, the buttons by Surrender: Hit 130 shows a huge hit's impact frames, Break breaks the enemy's load, Win ends the fight.", 990.0, 232.0, 240.0, 16.0, MUTED);
+    if button(Rect::new(990.0, 640.0, 240.0, 44.0), "Back", true, false) {
+        go = Some(Shown::Back);
+    }
+    go
+}
+
+/// Debug builds, mid-fight: 0 a huge hit on the enemy, 1 its load broken, 2 the fight won.
+pub fn debug_bar() -> Option<u8> {
+    if modal() || fx(|fx| fx.impact.is_some()) {
+        return None;
+    }
+    // between Surrender and the board's left edge (472)
+    [("Hit 130", 216.0, 84.0), ("Break", 308.0, 76.0), ("Win", 392.0, 60.0)]
+        .iter()
+        .enumerate()
+        .find_map(|(k, &(s, x, w))| button(Rect::new(x, 652.0, w, 36.0), s, true, false).then_some(k as u8))
 }
 
 /// A four-point star of radius `r`, turned by `spin` radians.
@@ -1496,6 +1555,9 @@ pub fn title() -> Option<Go> {
     }
     if button(Rect::new(540.0, 342.0, 200.0, 44.0), "Quit", true, false) {
         go = Some(Go::Back);
+    }
+    if cfg!(debug_assertions) && button(Rect::new(540.0, 400.0, 200.0, 44.0), "Gallery", true, false) {
+        go = Some(Go::Gallery);
     }
     go
 }
@@ -2678,13 +2740,17 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 gem(e, vec2(x - 8.0, 289.0), 8.0);
                 x -= 20.0;
             }
-            // the break: how much of it your rites have dealt this turn
+            // the break: how much of it your rites have dealt this turn (once broken, it hits for half)
             let (took, need) = (foe.took.min(foe.break_at), foe.break_at);
-            rich(&format!("break {took}/{need}"), ex, 294.0, 15.0, INK);
-            let w = 90.0;
-            let bx = ex + measure(&format!("break {took}/{need}"), 15.0).width + 10.0;
-            draw_rectangle(bx, 288.0, w, 4.0, FAINT);
-            draw_rectangle(bx, 288.0, w * took as f32 / need.max(1) as f32, 4.0, BLOOD);
+            if foe.broken {
+                rich("broken: half", ex, 294.0, 15.0, INK);
+            } else {
+                rich(&format!("break {took}/{need}"), ex, 294.0, 15.0, INK);
+                let w = 90.0;
+                let bx = ex + measure(&format!("break {took}/{need}"), 15.0).width + 10.0;
+                draw_rectangle(bx, 288.0, w, 4.0, FAINT);
+                draw_rectangle(bx, 288.0, w * took as f32 / need.max(1) as f32, 4.0, BLOOD);
+            }
         }
         right(&what, x - 4.0, 294.0, 16.0, if loaded.is_empty() { MUTED } else { INK });
         right("NEXT", x - 16.0 - measure(&what, 16.0).width, 294.0, 15.0, MUTED);
@@ -3252,12 +3318,9 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             let (bg, ink) = if el < IMPACT { (BLACK, WHITE) } else { (WHITE, BLACK) };
             overlay();
     draw_rectangle(-2000.0, -2000.0, VIEW.x + 4000.0, VIEW.y + 4000.0, bg);
-            // speed lines bursting out of whoever was hit
-            for _ in 0..36 {
-                let dir = Vec2::from_angle(gen_range(0.0, std::f32::consts::TAU));
-                let from = STAND[s] + dir * FIGHTER[s] * gen_range(0.7, 1.2);
-                draw_line(from.x, from.y, from.x + dir.x * 1600.0, from.y + dir.y * 1600.0, gen_range(2.0, 9.0), ink);
-            }
+            // one shockwave ring around whoever was hit, wider on the second frame
+            let r = FIGHTER[s] * if el < IMPACT { 0.8 } else { 1.15 };
+            draw_poly_lines(STAND[s].x, STAND[s].y, 64, r, 0.0, 10.0, ink);
             let fallen = fx(|fx| fx.fallen.as_ref().map(|f| f.sprite));
             for k in 0..2 {
                 let sprite = if k == 1 { fallen.unwrap_or(b.f[1].sprite) } else { b.f[0].sprite };
@@ -4181,7 +4244,7 @@ pub fn rules() -> bool {
         "Mining cracks the tiles touching it. A tile with 3 cracks caves in: 6 damage to you.",
         "Click a tile without a crystal to vent: it and the tiles touching it lose a crack.",
         "Drag gems into a rite to cast it. Each crystal mined adds surge: +10% damage.",
-        "NEXT shows the enemy's loaded rite. Deal its break damage first and it shatters.",
+        "NEXT shows the enemy's loaded rite. Deal its break damage first and it hits for half.",
         "Tabs or keys 1 to 3 swap boards. Hover a tile or a floating word to learn more.",
     ] {
         col.block(1, None, [line], INK);
