@@ -51,6 +51,10 @@ SIGILS = [
     # The Wyrm Below, The Hive Queen
     (["boar"], STONE), (["witch-face"], TIDE), (["spider-alt"], SPARK), (["griffin-symbol"], GALE),
     (["wyvern"], EMBER), (["bee"], SPARK),
+    # 97-100 pacts opened by deeds: Scavenger's Hook, War Drum, Damper Coil, Bone Pact
+    (["fishing-hook"], COMMON), (["drum"], RARE), (["magnet"], RARE), (["broken-bone"], LEGEND),
+    # 101 the fifth hero, Galvanist, opened by a deed
+    (["gas-mask"], SPARK),
 ]
 CELL, COLS, GLYPH = 128, 8, 100
 

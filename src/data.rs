@@ -315,6 +315,10 @@ pub static BRANDS: &[Brand] = &[
     brand("Insight", Reveal(1)),
     brand("Fracture", Shatter(1)),
     brand("Snare", Bury(1)),
+    // opened by deeds
+    brand("Charge", Surge(2)),
+    brand("Dazzle", Blind(1)),
+    brand("Siphon", Lifesteal(25)),
 ];
 
 const fn combo(name: &'static str, up: [&'static str; 2], needs: &'static [Element], effects: &'static [Effect], master: Option<Effect>) -> Combo {
@@ -411,7 +415,23 @@ pub static HEROES: &[Hero] = &[
         },
         passive_desc: "Searing touch: rites add 1 burn and heal 15% of their damage.",
     },
+    // opened by a deed (see `save::DEEDS`)
+    Hero {
+        name: "Galvanist",
+        sprite: HD + 101,
+        hp: 92,
+        power: 7,
+        elements: [Ember, Stone, Spark],
+        passive: |m| {
+            m.surge_pct += 5;
+            m.mine_surge += 2;
+        },
+        passive_desc: "Live wire: each surge step is worth +15%, and every cave-in on your boards gives 2 surge.",
+    },
 ];
+
+/// The heroes every save starts with; the rest are opened by deeds.
+pub const FIRST_HEROES: usize = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Rarity {
@@ -541,6 +561,14 @@ pub static CHARMS: &[Charm] = &[
     charm("Sixth Sense", Legendary, Set::Delver, (HD + 63, PLAIN), "sense", "The first cave-in on your boards each turn does no harm.", |m| m.sense += 1),
     charm("Echo Chamber", Legendary, Set::Blade, (HD + 64, PLAIN), "echo", "Your three-element rites fire twice.", |m| m.echo += 1),
     charm("Berserker's Axe", Legendary, Set::Blood, (HD + 65, PLAIN), "desperate", "Below half HP, +4 power.", |m| m.desperate += 4),
+    // opened by deeds
+    charm("Scavenger's Hook", Common, Set::Delver, (HD + 97, PLAIN), "foe_mine_gift", "Gain a random gem whenever the enemy's ground caves in.", |m| m.foe_mine_gift += 1),
+    charm("War Drum", Rare, Set::Blade, (HD + 98, PLAIN), "slow_enrage", "+1 power every second turn of a battle.", |m| m.slow_enrage += 1),
+    charm("Damper Coil", Rare, Set::Surge, (HD + 99, PLAIN), "foe_surge_cap", "The enemy's surge cannot pass 3.", |m| m.foe_surge_cap = 3),
+    charm("Bone Pact", Legendary, Set::Blood, (HD + 100, PLAIN), "enrage", "+1 power every turn of a battle, but 20 less max HP.", |m| {
+        m.enrage += 1;
+        m.max_hp -= 20
+    }),
 ];
 
 /// Sprites from here up are the 128px sigils of assets/sigils/sigils-mono.png (game-icons.net, CC BY 3.0),

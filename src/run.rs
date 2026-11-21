@@ -71,7 +71,8 @@ pub struct Shop {
 
 /// Who carries day `day`'s daily descent, and where (one of the first three expeditions): (hero, expedition).
 pub fn daily(day: u64) -> (usize, usize) {
-    let heroes = HEROES.len() as u64;
+    // only heroes every save has, so the day's run is the same for all
+    let heroes = FIRST_HEROES as u64;
     ((day % heroes) as usize, (day / heroes % 3) as usize)
 }
 
@@ -129,10 +130,18 @@ pub struct Run {
     bare_shops: usize,
     /// pacts given up in the choice being applied, so the same trade cannot hand them back
     given: Vec<usize>,
+    /// deeds the save had done as the run began, one bit per `save::DEEDS`: what they open can come up
+    pub deeds: u32,
 }
 
 impl Run {
+    /// A run with nothing a deed opens: the daily's, and every test's.
     pub fn new(seed: u64, hero: usize, exp: usize) -> (Run, Stage) {
+        Run::with_deeds(seed, hero, exp, 0)
+    }
+
+    /// A run where what `deeds` opened can come up, from its first pick on.
+    pub fn with_deeds(seed: u64, hero: usize, exp: usize, deeds: u32) -> (Run, Stage) {
         let mut run = Run {
             seed,
             rng: Rng::new(seed),
@@ -163,6 +172,7 @@ impl Run {
             kindled: None,
             bare_shops: 0,
             given: vec![],
+            deeds,
         };
         run.gen_map();
         run.note = format!("{}, floor 1.", EXPEDITIONS[exp].name);
@@ -293,6 +303,16 @@ impl Run {
         (HEROES[self.hero].hp + self.bonus_hp + self.mods().max_hp).max(1)
     }
 
+    /// Whether pact `i` can come up: always, unless a deed not yet done opens it.
+    fn pact_open(&self, i: usize) -> bool {
+        crate::save::is_open(self.deeds, crate::save::Unlock::Pact(CHARMS[i].name))
+    }
+
+    /// The brands that can come up this run.
+    fn brand_pool(&self) -> Vec<usize> {
+        (0..BRANDS.len()).filter(|&i| crate::save::is_open(self.deeds, crate::save::Unlock::Brand(BRANDS[i].name))).collect()
+    }
+
     pub fn add_charm(&mut self, id: usize) {
         let before = self.max_hp();
         self.charms.push(id);
@@ -302,7 +322,7 @@ impl Run {
     /// Up to `n` charms the player does not own yet; rarer ones come up less often.
     /// `avoid`: ids not to offer this time (the wares a restock replaces).
     fn offer(&mut self, n: usize, avoid: &[usize]) -> Vec<usize> {
-        let mut pool: Vec<usize> = (0..CHARMS.len()).filter(|i| !self.charms.contains(i) && !self.given.contains(i) && !avoid.contains(i)).collect();
+        let mut pool: Vec<usize> = (0..CHARMS.len()).filter(|&i| self.pact_open(i) && !self.charms.contains(&i) && !self.given.contains(&i) && !avoid.contains(&i)).collect();
         let mut ids = vec![];
         while ids.len() < n && !pool.is_empty() {
             let total: usize = pool.iter().map(|&i| self.weight(i)).sum();
@@ -326,7 +346,7 @@ impl Run {
         match self.rng.below(4) {
             2 if !ids.is_empty() => Stage::Upgrade(ids),
             3 => {
-                let mut pool: Vec<usize> = (0..BRANDS.len()).collect();
+                let mut pool = self.brand_pool();
                 Stage::Brand((0..3).map(|_| pool.remove(self.rng.below(pool.len()))).collect())
             }
             _ => self.pick(),
@@ -566,7 +586,7 @@ impl Run {
                 Stage::Blessing((0..3).map(|_| pool.remove(self.rng.below(pool.len()))).collect())
             }
             NodeKind::Elite => {
-                let mut pool: Vec<usize> = (0..BRANDS.len()).collect();
+                let mut pool = self.brand_pool();
                 Stage::Brand((0..3).map(|_| pool.remove(self.rng.below(pool.len()))).collect())
             }
             _ => self.pick(),
@@ -672,7 +692,8 @@ impl Run {
         let ids = self.offer(SHOP_SIZE, avoid);
         let sale = self.rng.below(ids.len().max(1));
         let markup = self.keys.iter().fold(100, |p, &k| p * ENDINGS[k].price_pct / 100);
-        let brand = Some(self.rng.below(BRANDS.len()));
+        let pool = self.brand_pool();
+        let brand = Some(pool[self.rng.below(pool.len())]);
         Shop { stock: ids.into_iter().map(Some).collect(), sale, restocks, markup, brand, lesson: true }
     }
 
@@ -728,7 +749,7 @@ impl Run {
     /// Swaps every ware on the counter for new ones.
     /// Restocking is only worth paying for while some pact is neither yours nor on the counter.
     pub fn can_restock(&self, shop: &Shop) -> bool {
-        (0..CHARMS.len()).any(|i| !self.charms.contains(&i) && !shop.stock.contains(&Some(i)))
+        (0..CHARMS.len()).any(|i| self.pact_open(i) && !self.charms.contains(&i) && !shop.stock.contains(&Some(i)))
     }
 
     pub fn restock(&mut self, shop: &mut Shop) -> bool {
@@ -793,12 +814,29 @@ mod tests {
         assert_eq!((a.seed, a.hero, a.exp, a.twist), (b.seed, b.hero, b.exp, b.twist));
         assert_ne!(a.seed, Run::new_daily(20_001).0.seed);
         assert!(TWISTS[a.twist].tone < 0 && a.exp < 3);
-        // over a few days every hero takes a turn
+        // over a few days every hero every save has takes a turn, and only those
         let heroes: std::collections::HashSet<usize> = (0..8).map(|d| daily(d).0).collect();
-        assert_eq!(heroes.len(), HEROES.len());
+        assert_eq!(heroes.len(), FIRST_HEROES);
         // names repeat only after every pairing has had its day
         let names: std::collections::HashSet<String> = (0..120).map(daily_name).collect();
         assert_eq!(names.len(), 120);
+    }
+
+    #[test]
+    fn what_a_deed_opens_comes_up_only_once_it_is_done() {
+        let hook = CHARMS.iter().position(|c| c.name == "Scavenger's Hook").unwrap();
+        let charge = BRANDS.iter().position(|b| b.name == "Charge").unwrap();
+        let seen = |deeds: u32| {
+            let (mut pact, mut brand) = (false, false);
+            for seed in 0..300 {
+                let (mut run, _) = Run::with_deeds(seed, 0, 0, deeds);
+                pact |= run.offer(6, &[]).contains(&hook);
+                brand |= run.stock(0, &[]).brand == Some(charge);
+            }
+            (pact, brand)
+        };
+        assert_eq!(seen(0), (false, false));
+        assert_eq!(seen(0b11), (true, true));
     }
 
     #[test]
@@ -883,8 +921,61 @@ mod tests {
     }
 
     thread_local! {
+        /// the deeds `play` starts its runs with (none, unless a probe says otherwise)
+        static PLAY_DEEDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         /// per fight: (node kind, last foe faced, hero won, [loads, breaks, hero HP lost, turns])
         static PROBE: std::cell::RefCell<Vec<(usize, String, bool, [usize; 4])>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Plays every hero with no deeds and with all of them, and how runs holding each opened pact or
+    /// brand did. `cargo test --release probe_deeds -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn probe_deeds() {
+        const RUNS: u64 = 300;
+        let mut ends: Vec<(Run, bool)> = vec![];
+        for hero in 0..HEROES.len() {
+            let mut line = format!("{:12}", HEROES[hero].name);
+            for deeds in [0, u32::MAX] {
+                PLAY_DEEDS.with(|d| d.set(deeds));
+                let runs: Vec<(Run, bool)> = (0..RUNS).map(|s| play(s, hero, 0, &[])).collect();
+                let wins = runs.iter().filter(|r| r.1 || r.0.floor >= FLOORS).count();
+                line += &format!("  deeds {:3}: wins {wins:3}/{RUNS}", if deeds == 0 { "no" } else { "all" });
+                if deeds != 0 {
+                    ends.extend(runs);
+                }
+            }
+            println!("{line}");
+        }
+        PLAY_DEEDS.with(|d| d.set(0));
+        let won = |r: &&(Run, bool)| r.1 || r.0.floor >= FLOORS;
+        let all = ends.iter().filter(won).count() as f32 / ends.len() as f32;
+        println!("all runs with every deed: win {:.0}%", 100.0 * all);
+        for name in ["Scavenger's Hook", "War Drum", "Damper Coil", "Bone Pact"] {
+            let id = CHARMS.iter().position(|c| c.name == name).unwrap();
+            let held: Vec<&(Run, bool)> = ends.iter().filter(|r| r.0.charms.contains(&id)).collect();
+            let w = held.iter().filter(|r| won(r)).count() as f32 / held.len().max(1) as f32;
+            println!("pact  {name:17} held in {:4} runs, those win {:.0}%", held.len(), 100.0 * w);
+        }
+        for name in ["Charge", "Dazzle", "Siphon"] {
+            let id = BRANDS.iter().position(|b| b.name == name).unwrap();
+            let held: Vec<&(Run, bool)> = ends.iter().filter(|r| r.0.brands.iter().any(|b| b.1 == id)).collect();
+            let w = held.iter().filter(|r| won(r)).count() as f32 / held.len().max(1) as f32;
+            println!("brand {name:17} held in {:4} runs, those win {:.0}%", held.len(), 100.0 * w);
+        }
+        // the old ones, for scale
+        for name in ["Edge", "Ward", "Tempo"] {
+            let id = BRANDS.iter().position(|b| b.name == name).unwrap();
+            let held: Vec<&(Run, bool)> = ends.iter().filter(|r| r.0.brands.iter().any(|b| b.1 == id)).collect();
+            let w = held.iter().filter(|r| won(r)).count() as f32 / held.len().max(1) as f32;
+            println!("brand {name:17} held in {:4} runs, those win {:.0}%  (old)", held.len(), 100.0 * w);
+        }
+        for name in ["Berserker's Axe", "Chain Lightning", "Overcharger"] {
+            let id = CHARMS.iter().position(|c| c.name == name).unwrap();
+            let held: Vec<&(Run, bool)> = ends.iter().filter(|r| r.0.charms.contains(&id)).collect();
+            let w = held.iter().filter(|r| won(r)).count() as f32 / held.len().max(1) as f32;
+            println!("pact  {name:17} held in {:4} runs, those win {:.0}%  (old)", held.len(), 100.0 * w);
+        }
     }
 
     /// Prints how much enemies get done per fight kind. `cargo test --release probe_enemy -- --ignored --nocapture`
@@ -920,7 +1011,7 @@ mod tests {
 
     /// Plays a whole run, carrying `keys` from the start. Returns the run as it ended, and whether it won.
     fn play(seed: u64, hero: usize, exp: usize, keys: &[usize]) -> (Run, bool) {
-        let (mut run, mut stage) = Run::new(seed, hero, exp);
+        let (mut run, mut stage) = Run::with_deeds(seed, hero, exp, PLAY_DEEDS.with(|d| d.get()));
         run.keys = keys.to_vec();
         run.hp = run.max_hp();
         let mut pick = Rng::new(seed ^ 0xABCD);

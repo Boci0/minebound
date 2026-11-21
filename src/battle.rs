@@ -35,7 +35,7 @@ pub const HOOKS: &[&str] = &[
     "thorns", "foe_mines", "fewer_mines", "lifesteal_pct", "opening", "shield_turn", "surge_start", "surge_pct",
     "keep_surge", "rite_bonus", "rite_burn", "first_pct", "claim_zap", "claim_heal", "claim_shield", "claim_bonus",
     "salvage", "mine_spite", "armor", "evade", "reveal_shield", "hoard_shield", "chain", "mine_surge", "sense", "echo",
-    "desperate", "heal_after",
+    "desperate", "heal_after", "foe_mine_gift", "enrage", "slow_enrage", "foe_surge_cap",
 ];
 
 #[derive(Clone, Default)]
@@ -591,6 +591,10 @@ impl Battle {
         let m = self.f[a].mods.clone();
         let kept = m.keep_surge > 0 && self.f[a].surge > 0;
         self.procs(a, &[("reveals", m.reveals > 0), ("surge_start", m.surge_start > 0), ("keep_surge", kept), ("shield_turn", m.shield_turn > 0)]);
+        self.procs(a, &[("enrage", turn > 1 && m.enrage > 0), ("slow_enrage", turn > 1 && turn % 2 == 1 && m.slow_enrage > 0)]);
+        // the side whose rule holds the other's surge down flashes as that side's turn starts
+        let damped = self.f[1 - a].mods.foe_surge_cap > 0;
+        self.procs(1 - a, &[("foe_surge_cap", damped)]);
         let bonus = self.f[1 - a].mods.burn_bonus;
         self.procs(1 - a, &[("burn_bonus", self.f[a].burn > 0 && bonus > 0)]);
         let f = &mut self.f[a];
@@ -791,6 +795,8 @@ impl Battle {
                 let e = self.f[t].elements[k];
                 self.f[t].stacks.push(e);
             }
+            let gift = self.f[t].mods.foe_mine_gift > 0;
+            self.procs(t, &[("foe_mine_gift", gift)]);
             if m.mine_spite > 0 {
                 self.hurt(t, m.mine_spite);
                 self.proc(s, "mine_spite");

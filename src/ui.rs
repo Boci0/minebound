@@ -5,7 +5,7 @@ use crate::{
     board::{Board, CAVE, N, W},
     data::*,
     run::*,
-    save::{Save, CLEARED},
+    save::{is_open, Save, Unlock, CLEARED, DEEDS},
     sfx::{self, Sfx},
 };
 use macroquad::audio::{play_sound, PlaySoundParams, Sound};
@@ -198,6 +198,8 @@ thread_local! {
     static RULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// the rules sheet, reopened from settings over any screen
     static HOWTO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// the deeds sheet is up over the map of The Below
+    static DEEDS_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// game time and this frame's step: real time, slowed for a kill and stopped for a hit-stop
     static CLOCK: std::cell::Cell<(f64, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
     /// real times until which (slow motion, hit-stop) last
@@ -541,7 +543,7 @@ fn mouse() -> Vec2 {
 
 /// True while a panel (settings, retreat) is open over the screen.
 fn modal() -> bool {
-    SETTINGS.with(|s| s.get()) || RETREAT.with(|r| r.get()) || RULES.with(|r| r.get()) || HOWTO.with(|h| h.get())
+    SETTINGS.with(|s| s.get()) || RETREAT.with(|r| r.get()) || RULES.with(|r| r.get()) || HOWTO.with(|h| h.get()) || DEEDS_ON.with(|d| d.get())
 }
 
 /// A left click meant for the screen. While a panel is open it swallows every click.
@@ -1526,7 +1528,8 @@ fn rune_circle(c: Vec2, rx: f32, ry: f32, col: Color, a: f32) {
 }
 
 /// The title menu: Play goes to the overworld, Back quits the game.
-pub fn title() -> Option<Go> {
+/// `deeds`: those the save has done, for which heroes stand in the circle.
+pub fn title(deeds: u32) -> Option<Go> {
     let t = now() as f32;
     // the lords of The Below watch from the dark either side, the nearer ones larger and less faint
     let lurk = [(150.0, 150.0, 90.0), (70.0, 330.0, 70.0), (250.0, 310.0, 110.0), (120.0, 500.0, 100.0), (270.0, 580.0, 80.0), (60.0, 660.0, 64.0)];
@@ -1546,8 +1549,10 @@ pub fn title() -> Option<Go> {
         let p = vec2(640.0 + ((f * 71.0) % 520.0 - 260.0) + (t + f).sin() * 8.0, 640.0 - up * 150.0);
         sparkle(p, 3.0, t + f, fade(mix(ACCENT, INK, 0.5), 0.4 * (1.0 - up)));
     }
-    for (i, h) in HEROES.iter().enumerate() {
-        let x = 640.0 + (i as f32 - (HEROES.len() - 1) as f32 / 2.0) * 135.0;
+    // only the heroes this save has: one a deed opens joins the circle once it is done
+    let heroes: Vec<&Hero> = HEROES.iter().filter(|h| is_open(deeds, Unlock::Hero(h.name))).collect();
+    for (i, h) in heroes.iter().enumerate() {
+        let x = 640.0 + (i as f32 - (heroes.len() - 1) as f32 / 2.0) * 135.0;
         draw_ellipse(x, 640.0, 40.0, 7.0, 0.0, fade(OUT, 0.6));
         sprite(h.sprite, x - 48.0, 548.0 + (t * 2.0 + i as f32 * 2.1).sin() * 3.0, 96.0, WHITE);
     }
@@ -1669,7 +1674,7 @@ fn dotted(a: Vec2, b: Vec2, gap: f32, r: f32, c: Color) {
 
 /// The world map, The Below: pick an open descent and a bearer, then descend.
 /// `pick` is (descent, hero) and lasts between visits.
-pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
+pub fn world(save: &mut Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     let mut go = None;
     text("The Below", 48.0, 70.0, 44.0, INK);
     let found = save.endings.count_ones();
@@ -1677,6 +1682,11 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     let tx = 48.0 + measure("The Below", 44.0).width + 28.0;
     if button(Rect::new(tx, 40.0, 110.0, 36.0), "< Title", true, false) {
         go = Some(Go::Back);
+    }
+    let fresh = save.new_deeds().count_ones();
+    let deeds = if fresh > 0 { format!("Deeds · {fresh} new") } else { format!("Deeds {} of {}", save.deeds.count_ones(), DEEDS.len()) };
+    if button(Rect::new(tx + 122.0, 40.0, 170.0, 36.0), &deeds, true, fresh > 0) {
+        DEEDS_ON.with(|d| d.set(true));
     }
 
     // the land: unexplored tiles are raised grey; around each open place it lies turned over, its
@@ -1799,7 +1809,17 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     label(if show_daily { "BEARER · SET FOR TODAY" } else { "BEARER" }, lx, by);
     let bearer = if show_daily { dhero } else { pick.1 };
     for (i, h) in HEROES.iter().enumerate() {
-        let r = Rect::new(lx + i as f32 * 60.0, by + 12.0, 50.0, 50.0);
+        let r = Rect::new(lx + i as f32 * 52.0, by + 12.0, 46.0, 46.0);
+        // a bearer a deed opens waits faint until it is done, saying which
+        if !is_open(save.deeds, Unlock::Hero(h.name)) {
+            outline(r, FAINT);
+            sprite(h.sprite, r.x + 5.0, r.y + 5.0, 36.0, fade(WHITE, 0.08));
+            if r.contains(mouse()) {
+                let deed = DEEDS.iter().find(|d| d.opens == Unlock::Hero(h.name)).expect("a locked hero has its deed");
+                tip_text(h.name, format!("Opens with the deed {}: {}", deed.name, deed.task));
+            }
+            continue;
+        }
         let on = i == bearer;
         let hot = r.contains(mouse()) && !modal() && !show_daily;
         if hot {
@@ -1807,7 +1827,7 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
         }
         outline(r, if on { INK } else { FAINT });
         let dim = if show_daily { 0.15 } else { 0.45 };
-        sprite(h.sprite, r.x + 5.0, r.y + 5.0, 40.0, if on || hot { WHITE } else { fade(WHITE, dim) });
+        sprite(h.sprite, r.x + 5.0, r.y + 5.0, 36.0, if on || hot { WHITE } else { fade(WHITE, dim) });
         if hot && clicked() {
             play(Sfx::Click);
             pick.1 = i;
@@ -1832,7 +1852,64 @@ pub fn world(save: &Save, pick: &mut (usize, usize), today: u64) -> Option<Go> {
     if ok && (descend || (is_key_pressed(KeyCode::Enter) && !modal())) {
         go = Some(if daily_on { Go::Daily } else { Go::Play });
     }
+    if DEEDS_ON.with(|d| d.get()) && deeds_sheet(save) {
+        DEEDS_ON.with(|d| d.set(false));
+        save.deeds_seen = save.deeds;
+        save.store();
+    }
     go
+}
+
+/// Every deed, done or not, and what it opens, on one sheet over the map. True once closed.
+fn deeds_sheet(save: &Save) -> bool {
+    let press = is_mouse_button_pressed(MouseButton::Left) && !SETTINGS.with(|s| s.get());
+    overlay();
+    draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.7));
+    let panel = Rect::new(200.0, 24.0, 880.0, 672.0);
+    plate(panel, CARD);
+    stamped("Deeds", 640.0, panel.y + 52.0, 38.0, INK);
+    centered("Each one, done once, opens something for every run after.", 640.0, panel.y + 80.0, 15.0, MUTED);
+    let fresh = save.new_deeds();
+    for (k, d) in DEEDS.iter().enumerate() {
+        let y = panel.y + 104.0 + k as f32 * 64.0;
+        let done = save.deeds & 1 << k != 0;
+        if k > 0 {
+            draw_line(panel.x + 36.0, y - 6.0, panel.right() - 36.0, y - 6.0, 1.0, FAINT);
+        }
+        // a filled box for done, an empty one for still to do
+        let mark = Rect::new(panel.x + 40.0, y + 10.0, 14.0, 14.0);
+        if done { block(mark, INK) } else { outline(mark, MUTED) }
+        text(d.name, panel.x + 70.0, y + 22.0, 18.0, if done { INK } else { MUTED });
+        if fresh & 1 << k != 0 {
+            lively("new", panel.x + 78.0 + measure(d.name, 18.0).width, y + 22.0, 14.0, GOLD, Motion::Wave);
+        }
+        text(d.task, panel.x + 70.0, y + 44.0, 14.0, MUTED);
+        // what it opens: its sigil, its name and what it does
+        let (kind, name, what, sigil) = match d.opens {
+            Unlock::Pact(n) => {
+                let id = CHARMS.iter().position(|c| c.name == n).expect("a deed's pact exists");
+                ("Pact", n, CHARMS[id].desc.to_string(), Some(CHARMS[id].icon.0))
+            }
+            Unlock::Brand(n) => {
+                let b = BRANDS.iter().find(|b| b.name == n).expect("a deed's brand exists");
+                ("Brand", n, format!("Burnt onto a rite: {}.", b.effect.text(1)), None)
+            }
+            Unlock::Hero(n) => {
+                let h = HEROES.iter().find(|h| h.name == n).expect("a deed's hero exists");
+                ("Bearer", n, h.passive_desc.to_string(), Some(h.sprite))
+            }
+        };
+        let ox = panel.x + 470.0;
+        let icon = Rect::new(ox, y + 4.0, 40.0, 40.0);
+        outline(icon, if done { INK } else { FAINT });
+        match sigil {
+            Some(sp) => sprite(sp, icon.x + 5.0, icon.y + 5.0, 30.0, if done { WHITE } else { fade(WHITE, 0.35) }),
+            None => draw_poly_lines(icon.center().x, icon.center().y, 4, 11.0, 0.0, 1.5, if done { INK } else { MUTED }),
+        }
+        text(&format!("{kind} · {name}"), ox + 54.0, y + 18.0, 15.0, if done { INK } else { MUTED });
+        wrapped_fit(&what, ox + 54.0, y + 36.0, 316.0, 13.0, 30.0, MUTED);
+    }
+    panel_button(Rect::new(540.0, panel.bottom() - 58.0, 200.0, 40.0), "Close", true, press)
 }
 
 /// a board tile, and the step from one tile to the next

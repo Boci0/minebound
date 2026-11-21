@@ -26,7 +26,7 @@ full view.
   - [Controls](#controls) and [the right-click shortcut](#the-right-click-shortcut)
   - [Your boards](#your-boards) and [rites](#rites-and-damage)
   - [Heroes](#heroes), [a run](#a-run), [pacts](#pacts), [brands](#brands), [blessings](#blessings)
-  - [Enemies](#enemies), [expeditions](#expeditions) and [tips](#tips)
+  - [Enemies](#enemies), [expeditions](#expeditions), [deeds](#deeds) and [tips](#tips)
 - [Building from source](#building-from-source)
 - [Development](#development)
 - [Credits](#credits)
@@ -34,16 +34,17 @@ full view.
 
 ## Features
 
-- **Four heroes**, each with their own elements, rites and play style.
+- **Five heroes**, each with their own elements, rites and play style; the fifth is earned with a deed.
+- **Deeds** to do across runs, each opening a new pact, brand or hero for every run after.
 - **A board of cracking ground**: mine crystals in plain view, but every one you take cracks the
   tiles around it, and a tile cracked three times caves in on you.
 - **Five elements** and 17 rites that need the right mix of gems, each upgradable to level 3.
 - **Element reactions**: hit a marked foe with a new element to ignite, douse, gust, crush or arc.
 - **Branching runs** across three floors: battles, elites, encounters, shops, shrines, treasure
   and a boss at the end of each floor.
-- **38 pacts** in three rarities (common, rare, legendary) that bend the rules of a turn, in six
+- **42 pacts** in three rarities (common, rare, legendary) that bend the rules of a turn, in six
   **sets**: hold three of one set to wake its bonus.
-- **12 brands** to burn onto rites for extra effects, one per rite level.
+- **15 brands** to burn onto rites for extra effects, one per rite level.
 - **10 blessings**: win a shrine fight to take one. You hold one at a time, and each lifts a single
   stat such as damage, shield, healing or burn.
 - **14 enemies**, each breaking one rule: armour, dodging, lifesteal, surge jamming, gem theft
@@ -206,7 +207,8 @@ shield, and then the burn halves. **Detonate** (the Fuse brand) sets off all the
 
 ### Heroes
 
-All four play by the same rules. Each brings three elements and a trait that keeps them alive.
+All five play by the same rules. Each brings three elements and a trait that keeps them alive.
+Galvanist joins once you do the deed Full Company (see [Deeds](#deeds)).
 
 | Hero | HP | Power | Elements | Rites | Trait |
 | --- | --- | --- | --- | --- | --- |
@@ -214,9 +216,11 @@ All four play by the same rules. Each brings three elements and a trait that kee
 | Stormreader | 94 | 7 | Tide, Gale, Spark | Mistveil, Conduction, Thunderclap, Tempest | +1 pick each turn; each pick left unused becomes 3 shield |
 | Deepforger | 96 | 6 | Tide, Stone, Spark | Bulwark, Conduction, Lodestone, Geode Surge | Shield never wears off, and each point stops 2 damage |
 | Scaldwright | 96 | 6 | Ember, Tide, Spark | Steam Burst, Plasma, Conduction, Boilover | Every rite adds 1 burn on the foe and heals you for 15% of its damage |
+| Galvanist | 92 | 7 | Ember, Stone, Spark | Magma, Plasma, Lodestone, Forgefire | Each surge step is worth +15%, and every cave-in on your boards gives 2 surge |
 
 Ashwarden is a berserker who hits harder as he gets hurt. Stormreader turns picks into damage or
 shield. Deepforger builds a wall of shield and throws it. Scaldwright stacks burn and cashes it in.
+Galvanist rides surge, and even its cave-ins feed it.
 
 ### A run
 
@@ -277,7 +281,7 @@ toward sets you already hold, and the top bar shows sets two or more deep.
 ![The Tinker's Stall: three pacts with their sets and prices, a brand with the rite to burn it onto, the lesson, restock and leave](docs/screenshots/shop.png)
 
 <details>
-<summary>All 38 pacts</summary>
+<summary>All 42 pacts</summary>
 
 | Pact | Rarity | Set | Effect |
 | --- | --- | --- | --- |
@@ -319,6 +323,10 @@ toward sets you already hold, and the top bar shows sets two or more deep.
 | Sixth Sense | Legendary | Delver | The first cave-in on your boards each turn does no harm |
 | Echo Chamber | Legendary | Blade | Your three-element rites fire twice |
 | Berserker's Axe | Legendary | Blood | Below half HP, +4 power |
+| Scavenger's Hook | Common | Delver | Gain a random gem whenever the enemy's ground caves in (deed: Lordslayer) |
+| War Drum | Rare | Blade | +1 power every second turn of a battle (deed: Hoarder) |
+| Damper Coil | Rare | Surge | The enemy's surge cannot pass 3 (deed: Set Bound) |
+| Bone Pact | Legendary | Blood | +1 power every turn of a battle, but 20 less max HP (deed: Two Paths) |
 
 </details>
 
@@ -346,6 +354,9 @@ its own.
 | Insight | +1 pick |
 | Fracture | Break 1 foe crystal |
 | Snare | Crack 1 foe tile |
+| Charge | +2 surge (deed: Heavy Hand) |
+| Dazzle | Foe gets 1 fewer pick next turn (deed: Keybearer) |
+| Siphon | Heal 25% of its damage (deed: Dawn Delver) |
 
 ### Blessings
 
@@ -439,6 +450,24 @@ cut by a bar. Any element fills it.
 | Sharp Edges | Everyone has +1 power |
 
 </details>
+
+### Deeds
+
+Deeds are done once and kept for good. Each opens something new that can come up in every run
+after, except the daily descent, which stays the same for everyone. The **Deeds** button on the
+map of The Below lists them all, what each asks and what it opens; it lights up when one is newly
+done. Progress from before deeds existed counts.
+
+| Deed | Do this | Opens |
+| --- | --- | --- |
+| Lordslayer | Beat a floor 1 boss | Pact: Scavenger's Hook |
+| Heavy Hand | Land a single hit of 100 or more | Brand: Charge |
+| Hoarder | Hold 8 pacts at once | Pact: War Drum |
+| Set Bound | Wake a pact set: hold 3 pacts of one set | Pact: Damper Coil |
+| Keybearer | Carry a secret key | Brand: Dazzle |
+| Dawn Delver | Clear a daily descent | Brand: Siphon |
+| Two Paths | Clear a descent with two different bearers | Pact: Bone Pact |
+| Full Company | Clear a descent with each of the first four bearers | Bearer: Galvanist |
 
 ### Tips
 

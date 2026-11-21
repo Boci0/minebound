@@ -248,7 +248,7 @@ async fn main() {
         let today = (miniquad::date::now() / 86_400.0) as u64;
         let mut to = None;
         match &mut screen {
-            Screen::Title => match ui::title() {
+            Screen::Title => match ui::title(save.deeds) {
                 Some(Go::Play) => to = Some(Screen::World),
                 Some(Go::Back) => break,
                 Some(Go::Gallery) => to = Some(Screen::Gallery(None)),
@@ -264,10 +264,10 @@ async fn main() {
                 Some(ui::Shown::Back) => to = Some(Screen::Title),
                 None => {}
             },
-            Screen::World => match ui::world(&save, &mut pick, today) {
+            Screen::World => match ui::world(&mut save, &mut pick, today) {
                 Some(Go::Play) => {
                     let seed = fixed_seed.unwrap_or((miniquad::date::now() * 1000.0) as u64);
-                    let (mut run, mut stage) = Run::new(seed, pick.1, pick.0);
+                    let (mut run, mut stage) = Run::with_deeds(seed, pick.1, pick.0, save.deeds);
                     // debug builds only: MINEBOUND_ENDINGS=1 starts every run as Ctrl+E does, for when keys can't be sent
                     if cfg!(debug_assertions) && std::env::var_os("MINEBOUND_ENDINGS").is_some() {
                         stage = run.debug_endings();
