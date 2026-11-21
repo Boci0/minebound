@@ -93,11 +93,12 @@ same rules, and you can watch its board the whole time.
 | Mine a crystal | Left click a crystal |
 | Dig a vent | Left click a tile without a crystal |
 | Switch board | Click a board tab under the board, or press 1 to 3 (free, any time in your turn) |
-| Socket a gem by dragging | Drag a gem from your GEMS row onto a rite; it fills the matching socket |
+| Socket a gem by dragging | Drag a gem from your gem row (bottom left) onto a rite; it fills the matching socket |
 | Socket a gem by clicking | Right click anywhere off the board to pick a rite, then left click a gem (see below) |
 | Take a gem back | Click the filled socket |
 | End your turn (unspent gems are kept) | End turn, or Space |
 | Explain a rule word | Hover any word that floats |
+| Read your hero's trait | Hover your hero's name in battle |
 | Abandon the run | Retreat (top right, outside battle) |
 | Give up a battle (ends the run) | Surrender (bottom left, in battle) |
 | Sound on / off | M |
@@ -112,7 +113,7 @@ You don't have to drag gems:
    frame and a pointer at its left edge.
 2. Each further right click moves the pick one rite down, and wraps back to the top after the
    last.
-3. **Left click a gem** in your GEMS row. It goes into the picked rite's matching socket. Keep
+3. **Left click a gem** in your gem row. It goes into the picked rite's matching socket. Keep
    clicking gems until the rite is full and fires.
 
 Dragging still works, and dropping a gem on a rite always sends it there, whichever rite is picked. If you click a gem before picking a rite, the
@@ -137,7 +138,7 @@ game reminds you to right click first.
 - You have one board per element, and switching boards is free. A board keeps its state while you
   are on another one. A board with no crystal left to claim is dealt again, and every board is
   dealt fresh at the start of each wave.
-- You can hold any number of gems. Gems no rite can use yet wait in your GEMS row.
+- You can hold any number of gems. Gems no rite can use yet wait in your gem row.
 
 ### Rites and damage
 
@@ -151,9 +152,11 @@ game reminds you to right click first.
 - Casting does not end your turn. Cast, mine some more, and cast again. Once you have no picks left and
   no rite your gems pay for, the turn ends on its own.
 - **Shield** soaks damage before HP does. Half of it wears off at the start of its owner's next
-  turn. Burn goes straight through it.
+  turn. Burn goes straight through it. A **brittle** shield (Lodestone) stays brittle into the next
+  wave for as long as the shield lasts. A rite that shatters shields, like Magma, breaks it before it
+  can shatter back, and the screen says **PIERCED**.
 - **Overpressure**: after turn 12, every rite deals 2 more damage each turn, so no fight can stall
-  forever.
+  forever. A warning shows at the top left from turn 9.
 - **Loaded rites**: the enemy loads its rites at the end of its turn and fires them as its next
   turn starts. NEXT, under its HP, shows what is loaded, how hard it would hit, and its **break**:
   deal that much rite damage to it in your turn and everything loaded shatters unfired.
@@ -250,7 +253,7 @@ You can **Retreat** anywhere outside a battle; how far you got still counts. In 
 
 ### Pacts
 
-![Choosing a pact: three cards, each with its rarity](docs/screenshots/pact.png)
+![Choosing a pact: three cards, each with its rarity, its set and the set's bonus](docs/screenshots/pact.png)
 
 Pacts are passive items that bend the rules. They come in three rarities: common (30 shards),
 rare (45) and legendary (65). Rarer ones are offered less often. You get them at the start of a
@@ -271,7 +274,7 @@ toward sets you already hold, and the top bar shows sets two or more deep.
 | Blood | Heal 5 at the start of each of your turns |
 | Cinder | Your rites add 1 burn, and burns deal +2 |
 
-![The Tinker's Stall: four pacts with prices, the sale tag, patch up, restock and leave](docs/screenshots/shop.png)
+![The Tinker's Stall: three pacts with their sets and prices, a brand with the rite to burn it onto, the lesson, restock and leave](docs/screenshots/shop.png)
 
 <details>
 <summary>All 38 pacts</summary>
@@ -321,7 +324,7 @@ toward sets you already hold, and the top bar shows sets two or more deep.
 
 ### Brands
 
-![After an elite: three brands to choose from](docs/screenshots/brand.png)
+![Burning a brand onto a rite: each rite shows its brand sockets and what it becomes](docs/screenshots/brand.png)
 
 Beat an elite and choose one of three brands, then burn it onto one of your rites. Shops sell a
 brand too, and treasure sometimes holds them. The rite gains the brand's effect **without costing
