@@ -41,8 +41,9 @@ full view.
 - **Element reactions**: hit a marked foe with a new element to ignite, douse, gust, crush or arc.
 - **Branching runs** across three floors: battles, elites, encounters, shops, shrines, treasure
   and a boss at the end of each floor.
-- **38 pacts** in three rarities (common, rare, legendary) that bend the rules of a turn.
-- **12 brands**: beat an elite to burn one onto a rite and give it an extra effect.
+- **38 pacts** in three rarities (common, rare, legendary) that bend the rules of a turn, in six
+  **sets**: hold three of one set to wake its bonus.
+- **12 brands** to burn onto rites for extra effects, one per rite level.
 - **10 blessings**: win a shrine fight to take one. You hold one at a time, and each lifts a single
   stat such as damage, shield, healing or burn.
 - **14 enemies**, each breaking one rule: armour, dodging, lifesteal, surge jamming, gem theft
@@ -172,8 +173,9 @@ element not in the mark reacts, once per new element:
 Hover **Marked** in a fighter's stats to see which elements would react.
 
 Each hero can cast four rites: the three made from two of their elements, and the one made from all
-three. Beating a boss lets you **upgrade** a rite, up to level 3. Each level renames the rite, raises
-its numbers by about half, and adds one more gem to its cost. A level 3 rite is **mastered**: it
+three. Beating a boss lets you **upgrade** a rite, up to level 3; so can a shop's lesson or a level
+found in treasure. Each level renames the rite, raises its numbers by about half, adds one more gem
+to its cost, and opens one more brand socket. A level 3 rite is **mastered**: it
 gains a trick of its own (last column), with its own look when cast.
 
 | Rite | Gems | Effect at level 1 | Mastered (level 3) |
@@ -235,8 +237,8 @@ help or hurt.
 | Battle | One to three enemies in a row (more on later floors). Win 18–24 shards. |
 | Elite | A normal enemy, then an elite. Win 25–34 shards and a **brand**. Appears from the third column. |
 | Shrine | A normal battle. Win it and choose a **blessing**. Every floor has at least one. |
-| Shop | Four pacts for sale (one at 25% off), and restocks. |
-| Treasure | Choose one pact from three. |
+| Shop | Three pacts (one at 25% off), a brand, a lesson that levels up a rite (one per shop), and restocks. |
+| Treasure | Choose one pact from three, or sometimes a level for a rite or a brand. |
 | Encounter | A short event with a choice: shards, max HP or pacts, often for a price or a gamble. |
 | Boss | A floor's boss. Win 40 shards and upgrade one of your rites. |
 
@@ -256,51 +258,64 @@ run, from treasure, shops and some encounters. In battle they sit at the top lef
 time they take effect; if you hold more than fit, the last slot shows **+N** and lists them all
 when you hover it.
 
+Each pact belongs to one of six **sets**. Hold three pacts of one set and its bonus wakes for the
+rest of the run. Pact cards and shop wares show the set and how many of it you hold, offers lean
+toward sets you already hold, and the top bar shows sets two or more deep.
+
+| Set | Bonus at three |
+| --- | --- |
+| Guard | Every hit on you deals 2 less; gain 5 shield each turn |
+| Blade | +1 power |
+| Delver | +1 pick each turn |
+| Surge | Begin each turn with 5 surge |
+| Blood | Heal 5 at the start of each of your turns |
+| Cinder | Your rites add 1 burn, and burns deal +2 |
+
 ![The Tinker's Stall: four pacts with prices, the sale tag, patch up, restock and leave](docs/screenshots/shop.png)
 
 <details>
 <summary>All 38 pacts</summary>
 
-| Pact | Rarity | Effect |
-| --- | --- | --- |
-| Lucky Coin | Common | The first cave-in on your boards each wave does no harm |
-| Dowsing Rod | Common | Every board you are dealt has 3 cracks propped up |
-| Ward Stone | Common | Gain 10 shield at the start of each wave |
-| Field Rations | Common | Heal 10 whenever a new wave steps in |
-| Magpie Purse | Common | +50% shards from battles |
-| Head Start | Common | Begin each battle with 3 random gems |
-| Bramble Coat | Common | Enemy rites that hit you cost them 4 HP |
-| Saboteur Kit | Common | +2 faults on every enemy board |
-| Sweeper's Map | Common | 1 fewer fault on each of your boards |
-| Shell Fragment | Common | Gain 4 shield at the start of your turn |
-| Whetted Shard | Common | Your rites deal +5 damage |
-| Kindling | Common | Your rites set the enemy burning for 3 turns |
-| Slow Fuse | Common | Your burns deal +2 damage per turn |
-| Sap Tap | Common | Each crystal you mine heals you for 2 |
-| Crystal Skin | Common | Each crystal you mine gives 3 shield |
-| Plate Scraps | Common | Every hit on you deals 2 less |
-| Heart Root | Common | +20 max HP |
-| Quick Fingers | Rare | +1 pick each turn |
-| Resonator | Rare | Each rite's listed damage, shield and healing are 75% stronger |
-| Leech Fang | Rare | Heal for 30% of the damage your rites deal |
-| Ambush Wire | Rare | Deal 10 damage at the start of each wave |
-| Running Start | Rare | Begin each turn with 6 surge |
-| Overcharger | Rare | Each surge step is worth +17% instead of +10% |
-| Steady Hands | Rare | Surge carries over between your turns |
-| Opening Gambit | Rare | Your first rite each turn deals +100% |
-| Resonant Shards | Rare | Each crystal you mine zaps the enemy for 3 |
-| Salvager | Rare | Each cave-in on your boards gives a gem of its element |
-| Spite Fuse | Rare | Each cave-in on your boards also deals 6 damage to the enemy |
-| Hourglass | Rare | Each pick left unused at turn end becomes 3 shield |
-| Hoarder's Sack | Rare | End your turn holding 3+ gems: gain 6 shield |
-| Chain Lightning | Rare | Each rite after your first in a turn deals +5 more than the one before |
-| Powder Keg | Rare | Each cave-in on your boards gives 3 surge |
-| Twin Vein | Legendary | Crystals give 2 gems, but your boards hold 2 more faults |
-| Glass Blade | Legendary | +2 power, but cave-ins deal 2 more damage to you |
-| Smoke Bomb | Legendary | The first enemy rite each turn misses you |
-| Sixth Sense | Legendary | The first cave-in on your boards each turn does no harm |
-| Echo Chamber | Legendary | Your three-element rites fire twice |
-| Berserker's Axe | Legendary | Below half HP, +4 power |
+| Pact | Rarity | Set | Effect |
+| --- | --- | --- | --- |
+| Lucky Coin | Common | Delver | The first cave-in on your boards each wave does no harm |
+| Dowsing Rod | Common | Delver | Every board you are dealt has 3 cracks propped up |
+| Ward Stone | Common | Guard | Gain 10 shield at the start of each wave |
+| Field Rations | Common | Blood | Heal 10 whenever a new wave steps in |
+| Magpie Purse | Common | Delver | +50% shards from battles |
+| Head Start | Common | Surge | Begin each battle with 3 random gems |
+| Bramble Coat | Common | Cinder | Enemy rites that hit you cost them 4 HP |
+| Saboteur Kit | Common | Delver | +2 faults on every enemy board |
+| Sweeper's Map | Common | Delver | 1 fewer fault on each of your boards |
+| Shell Fragment | Common | Guard | Gain 4 shield at the start of your turn |
+| Whetted Shard | Common | Blade | Your rites deal +5 damage |
+| Kindling | Common | Cinder | Your rites set the enemy burning for 3 turns |
+| Slow Fuse | Common | Cinder | Your burns deal +2 damage per turn |
+| Sap Tap | Common | Blood | Each crystal you mine heals you for 2 |
+| Crystal Skin | Common | Guard | Each crystal you mine gives 3 shield |
+| Plate Scraps | Common | Guard | Every hit on you deals 2 less |
+| Heart Root | Common | Blood | +20 max HP |
+| Quick Fingers | Rare | Delver | +1 pick each turn |
+| Resonator | Rare | Blade | Each rite's listed damage, shield and healing are 75% stronger |
+| Leech Fang | Rare | Blood | Heal for 30% of the damage your rites deal |
+| Ambush Wire | Rare | Cinder | Deal 10 damage at the start of each wave |
+| Running Start | Rare | Surge | Begin each turn with 6 surge |
+| Overcharger | Rare | Surge | Each surge step is worth +17% instead of +10% |
+| Steady Hands | Rare | Surge | Surge carries over between your turns |
+| Opening Gambit | Rare | Blade | Your first rite each turn deals +100% |
+| Resonant Shards | Rare | Cinder | Each crystal you mine zaps the enemy for 3 |
+| Salvager | Rare | Delver | Each cave-in on your boards gives a gem of its element |
+| Spite Fuse | Rare | Cinder | Each cave-in on your boards also deals 6 damage to the enemy |
+| Hourglass | Rare | Guard | Each pick left unused at turn end becomes 3 shield |
+| Hoarder's Sack | Rare | Guard | End your turn holding 3+ gems: gain 6 shield |
+| Chain Lightning | Rare | Blade | Each rite after your first in a turn deals +5 more than the one before |
+| Powder Keg | Rare | Surge | Each cave-in on your boards gives 3 surge |
+| Twin Vein | Legendary | Delver | Crystals give 2 gems, but your boards hold 2 more faults |
+| Glass Blade | Legendary | Blade | +2 power, but cave-ins deal 2 more damage to you |
+| Smoke Bomb | Legendary | Guard | The first enemy rite each turn misses you |
+| Sixth Sense | Legendary | Delver | The first cave-in on your boards each turn does no harm |
+| Echo Chamber | Legendary | Blade | Your three-element rites fire twice |
+| Berserker's Axe | Legendary | Blood | Below half HP, +4 power |
 
 </details>
 
@@ -308,9 +323,10 @@ when you hover it.
 
 ![After an elite: three brands to choose from](docs/screenshots/brand.png)
 
-Beat an elite and choose one of three brands, then burn it onto one of your rites. The rite gains
-the brand's effect **without costing an extra gem**. A brand stays at level-1 strength when the rite
-is upgraded, and a rite holds one brand at a time. A branded rite shows the brand's name next to
+Beat an elite and choose one of three brands, then burn it onto one of your rites. Shops sell a
+brand too, and treasure sometimes holds them. The rite gains the brand's effect **without costing
+an extra gem**. A brand stays at level-1 strength when the rite is upgraded. A rite holds one brand
+per level: once its sockets are full, a new brand sears the oldest away. A branded rite shows the brand's name next to
 its own.
 
 | Brand | Adds |

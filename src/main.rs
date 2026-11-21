@@ -313,7 +313,7 @@ async fn main() {
                     }
                     Stage::Pick(options) => {
                         ui::status(run);
-                        ui::pick(options).map(|id| {
+                        ui::pick(run, options).map(|id| {
                             run.add_charm(id);
                             run.after_node()
                         })

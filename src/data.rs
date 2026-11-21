@@ -190,9 +190,9 @@ impl Combo {
 }
 
 /// What a rite does at `lvl`, with the brand burnt onto it, if any. A brand stays at level 1.
-pub fn rite_text(c: &Combo, lvl: usize, brand: Option<&Brand>) -> String {
+pub fn rite_text(c: &Combo, lvl: usize, brands: &[&Brand]) -> String {
     let master = c.master.filter(|_| lvl >= MAX_LEVEL);
-    let parts: Vec<String> = c.effects.iter().map(|&e| e.text(lvl)).chain(master.map(|e| e.text(lvl))).chain(brand.map(|b| b.effect.text(1))).collect();
+    let parts: Vec<String> = c.effects.iter().map(|&e| e.text(lvl)).chain(master.map(|e| e.text(lvl))).chain(brands.iter().map(|b| b.effect.text(1))).collect();
     let s = parts.join(", ");
     s[..1].to_uppercase() + &s[1..]
 }
@@ -292,6 +292,7 @@ pub static BLESSINGS: &[Blessing] = &[
 ];
 
 /// Burnt onto a rite, a brand adds its effect. It costs no extra gem and does not grow with the rite.
+/// A rite holds one brand per level.
 pub struct Brand {
     pub name: &'static str,
     pub effect: Effect,
@@ -433,9 +434,52 @@ impl Rarity {
 }
 use Rarity::*;
 
+/// The set a pact belongs to. Holding `SET_AT` pacts of one set adds its bonus.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Set {
+    Guard,
+    Blade,
+    Delver,
+    Surge,
+    Blood,
+    Cinder,
+}
+
+/// Pacts of one set it takes to wake its bonus.
+pub const SET_AT: usize = 3;
+
+pub struct SetDef {
+    pub name: &'static str,
+    pub bonus: &'static str,
+    pub apply: Tweak,
+}
+
+/// In the order of `Set`.
+pub static SETS: &[SetDef] = &[
+    SetDef { name: "Guard", bonus: "Every hit on you deals 2 less; gain 5 shield each turn.", apply: |m| {
+        m.armor += 2;
+        m.shield_turn += 5
+    } },
+    SetDef { name: "Blade", bonus: "+1 power: every gem a rite spends hits 1 harder.", apply: |m| m.power += 1 },
+    SetDef { name: "Delver", bonus: "+1 pick each turn.", apply: |m| m.reveals += 1 },
+    SetDef { name: "Surge", bonus: "Begin each turn with 5 surge.", apply: |m| m.surge_start += 5 },
+    SetDef { name: "Blood", bonus: "Heal 5 at the start of each of your turns.", apply: |m| m.regen += 5 },
+    SetDef { name: "Cinder", bonus: "Your rites add 1 burn, and burns deal +2.", apply: |m| {
+        m.rite_burn += 1;
+        m.burn_bonus += 2
+    } },
+];
+
+impl Set {
+    pub fn def(self) -> &'static SetDef {
+        &SETS[self as usize]
+    }
+}
+
 pub struct Charm {
     pub name: &'static str,
     pub rarity: Rarity,
+    pub set: Set,
     /// sprite sheet tile and its tint (0xffffff = as drawn)
     pub icon: (usize, u32),
     /// the `Mods` field it changes; battle reports it by this name each time it takes effect
@@ -444,59 +488,59 @@ pub struct Charm {
     pub apply: Tweak,
 }
 
-const fn charm(name: &'static str, rarity: Rarity, icon: (usize, u32), hook: &'static str, desc: &'static str, apply: Tweak) -> Charm {
-    Charm { name, rarity, icon, hook, desc, apply }
+const fn charm(name: &'static str, rarity: Rarity, set: Set, icon: (usize, u32), hook: &'static str, desc: &'static str, apply: Tweak) -> Charm {
+    Charm { name, rarity, set, icon, hook, desc, apply }
 }
 
 const PLAIN: u32 = 0xffffff;
 
 pub static CHARMS: &[Charm] = &[
-    charm("Lucky Coin", Common, (HD + 28, PLAIN), "duds", "The first cave-in on your boards each wave does no harm.", |m| m.duds += 1),
-    charm("Dowsing Rod", Common, (HD + 29, PLAIN), "scouts", "Every board you are dealt has 3 cracks propped up.", |m| m.scouts += 3),
-    charm("Ward Stone", Common, (HD + 30, PLAIN), "start_shield", "Gain 10 shield at the start of each wave.", |m| m.start_shield += 10),
-    charm("Field Rations", Common, (HD + 31, PLAIN), "heal_after", "Heal 10 whenever a new wave steps in.", |m| m.heal_after += 10),
-    charm("Magpie Purse", Common, (HD + 32, PLAIN), "shard_pct", "+50% shards from battles.", |m| m.shard_pct += 50),
-    charm("Head Start", Common, (HD + 33, PLAIN), "start_stacks", "Begin each battle with 3 random gems.", |m| m.start_stacks += 3),
-    charm("Bramble Coat", Common, (HD + 34, PLAIN), "thorns", "Enemy rites that hit you cost them 4 HP.", |m| m.thorns += 4),
-    charm("Saboteur Kit", Common, (HD + 35, PLAIN), "foe_mines", "+2 faults on every enemy board.", |m| m.foe_mines += 2),
-    charm("Sweeper's Map", Common, (HD + 36, PLAIN), "fewer_mines", "1 fewer fault on each of your boards.", |m| m.fewer_mines += 1),
-    charm("Shell Fragment", Common, (HD + 37, PLAIN), "shield_turn", "Gain 4 shield at the start of your turn.", |m| m.shield_turn += 4),
-    charm("Whetted Shard", Common, (HD + 38, PLAIN), "rite_bonus", "Your rites deal +5 damage.", |m| m.rite_bonus += 5),
-    charm("Kindling", Common, (HD + 39, PLAIN), "rite_burn", "Every rite you cast adds 1 burn on the enemy.", |m| m.rite_burn += 1),
-    charm("Slow Fuse", Common, (HD + 40, PLAIN), "burn_bonus", "Your burns deal +2 more damage each turn.", |m| m.burn_bonus += 2),
-    charm("Sap Tap", Common, (HD + 41, PLAIN), "claim_heal", "Each crystal you mine heals you for 2.", |m| m.claim_heal += 2),
-    charm("Crystal Skin", Common, (HD + 42, PLAIN), "claim_shield", "Each crystal you mine gives 3 shield.", |m| m.claim_shield += 3),
-    charm("Plate Scraps", Common, (HD + 43, PLAIN), "armor", "Every hit on you deals 2 less.", |m| m.armor += 2),
-    charm("Heart Root", Common, (HD + 44, PLAIN), "max_hp", "+20 max HP.", |m| m.max_hp += 20),
+    charm("Lucky Coin", Common, Set::Delver, (HD + 28, PLAIN), "duds", "The first cave-in on your boards each wave does no harm.", |m| m.duds += 1),
+    charm("Dowsing Rod", Common, Set::Delver, (HD + 29, PLAIN), "scouts", "Every board you are dealt has 3 cracks propped up.", |m| m.scouts += 3),
+    charm("Ward Stone", Common, Set::Guard, (HD + 30, PLAIN), "start_shield", "Gain 10 shield at the start of each wave.", |m| m.start_shield += 10),
+    charm("Field Rations", Common, Set::Blood, (HD + 31, PLAIN), "heal_after", "Heal 10 whenever a new wave steps in.", |m| m.heal_after += 10),
+    charm("Magpie Purse", Common, Set::Delver, (HD + 32, PLAIN), "shard_pct", "+50% shards from battles.", |m| m.shard_pct += 50),
+    charm("Head Start", Common, Set::Surge, (HD + 33, PLAIN), "start_stacks", "Begin each battle with 3 random gems.", |m| m.start_stacks += 3),
+    charm("Bramble Coat", Common, Set::Cinder, (HD + 34, PLAIN), "thorns", "Enemy rites that hit you cost them 4 HP.", |m| m.thorns += 4),
+    charm("Saboteur Kit", Common, Set::Delver, (HD + 35, PLAIN), "foe_mines", "+2 faults on every enemy board.", |m| m.foe_mines += 2),
+    charm("Sweeper's Map", Common, Set::Delver, (HD + 36, PLAIN), "fewer_mines", "1 fewer fault on each of your boards.", |m| m.fewer_mines += 1),
+    charm("Shell Fragment", Common, Set::Guard, (HD + 37, PLAIN), "shield_turn", "Gain 4 shield at the start of your turn.", |m| m.shield_turn += 4),
+    charm("Whetted Shard", Common, Set::Blade, (HD + 38, PLAIN), "rite_bonus", "Your rites deal +5 damage.", |m| m.rite_bonus += 5),
+    charm("Kindling", Common, Set::Cinder, (HD + 39, PLAIN), "rite_burn", "Every rite you cast adds 1 burn on the enemy.", |m| m.rite_burn += 1),
+    charm("Slow Fuse", Common, Set::Cinder, (HD + 40, PLAIN), "burn_bonus", "Your burns deal +2 more damage each turn.", |m| m.burn_bonus += 2),
+    charm("Sap Tap", Common, Set::Blood, (HD + 41, PLAIN), "claim_heal", "Each crystal you mine heals you for 2.", |m| m.claim_heal += 2),
+    charm("Crystal Skin", Common, Set::Guard, (HD + 42, PLAIN), "claim_shield", "Each crystal you mine gives 3 shield.", |m| m.claim_shield += 3),
+    charm("Plate Scraps", Common, Set::Guard, (HD + 43, PLAIN), "armor", "Every hit on you deals 2 less.", |m| m.armor += 2),
+    charm("Heart Root", Common, Set::Blood, (HD + 44, PLAIN), "max_hp", "+20 max HP.", |m| m.max_hp += 20),
     // rares change how a turn is played
-    charm("Quick Fingers", Rare, (HD + 45, PLAIN), "reveals", "+1 pick each turn.", |m| m.reveals += 1),
-    charm("Resonator", Rare, (HD + 46, PLAIN), "combo_pct", "Each rite's listed damage, shield and healing are 75% stronger.", |m| m.combo_pct += 75),
-    charm("Leech Fang", Rare, (HD + 47, PLAIN), "lifesteal_pct", "Heal for 30% of the damage your rites deal.", |m| m.lifesteal_pct += 30),
-    charm("Ambush Wire", Rare, (HD + 48, PLAIN), "opening", "Deal 10 damage at the start of each wave.", |m| m.opening += 10),
-    charm("Running Start", Rare, (HD + 49, PLAIN), "surge_start", "Begin each turn with 6 surge.", |m| m.surge_start += 6),
-    charm("Overcharger", Rare, (HD + 50, PLAIN), "surge_pct", "Each surge step is worth +17% instead of +10%.", |m| m.surge_pct += 7),
-    charm("Steady Hands", Rare, (HD + 51, PLAIN), "keep_surge", "Surge carries over between your turns.", |m| m.keep_surge += 1),
-    charm("Opening Gambit", Rare, (HD + 52, PLAIN), "first_pct", "Your first rite each turn deals +100%.", |m| m.first_pct += 100),
-    charm("Resonant Shards", Rare, (HD + 53, PLAIN), "claim_zap", "Each crystal you mine zaps the enemy for 3.", |m| m.claim_zap += 3),
-    charm("Salvager", Rare, (HD + 54, PLAIN), "salvage", "Each cave-in on your boards gives a gem of its element.", |m| m.salvage += 1),
-    charm("Spite Fuse", Rare, (HD + 55, PLAIN), "mine_spite", "Each cave-in on your boards also deals 6 damage to the enemy.", |m| m.mine_spite += 6),
-    charm("Hourglass", Rare, (HD + 56, PLAIN), "reveal_shield", "Each pick you leave unused when your turn ends becomes 3 shield.", |m| m.reveal_shield += 3),
-    charm("Hoarder's Sack", Rare, (HD + 57, PLAIN), "hoard_shield", "End your turn holding 3 or more gems: gain 6 shield.", |m| m.hoard_shield += 6),
-    charm("Chain Lightning", Rare, (HD + 58, PLAIN), "chain", "Each rite after your first in a turn deals +5 more than the one before.", |m| m.chain += 5),
-    charm("Powder Keg", Rare, (HD + 59, PLAIN), "mine_surge", "Each cave-in on your boards gives 3 surge.", |m| m.mine_surge += 3),
+    charm("Quick Fingers", Rare, Set::Delver, (HD + 45, PLAIN), "reveals", "+1 pick each turn.", |m| m.reveals += 1),
+    charm("Resonator", Rare, Set::Blade, (HD + 46, PLAIN), "combo_pct", "Each rite's listed damage, shield and healing are 75% stronger.", |m| m.combo_pct += 75),
+    charm("Leech Fang", Rare, Set::Blood, (HD + 47, PLAIN), "lifesteal_pct", "Heal for 30% of the damage your rites deal.", |m| m.lifesteal_pct += 30),
+    charm("Ambush Wire", Rare, Set::Cinder, (HD + 48, PLAIN), "opening", "Deal 10 damage at the start of each wave.", |m| m.opening += 10),
+    charm("Running Start", Rare, Set::Surge, (HD + 49, PLAIN), "surge_start", "Begin each turn with 6 surge.", |m| m.surge_start += 6),
+    charm("Overcharger", Rare, Set::Surge, (HD + 50, PLAIN), "surge_pct", "Each surge step is worth +17% instead of +10%.", |m| m.surge_pct += 7),
+    charm("Steady Hands", Rare, Set::Surge, (HD + 51, PLAIN), "keep_surge", "Surge carries over between your turns.", |m| m.keep_surge += 1),
+    charm("Opening Gambit", Rare, Set::Blade, (HD + 52, PLAIN), "first_pct", "Your first rite each turn deals +100%.", |m| m.first_pct += 100),
+    charm("Resonant Shards", Rare, Set::Cinder, (HD + 53, PLAIN), "claim_zap", "Each crystal you mine zaps the enemy for 3.", |m| m.claim_zap += 3),
+    charm("Salvager", Rare, Set::Delver, (HD + 54, PLAIN), "salvage", "Each cave-in on your boards gives a gem of its element.", |m| m.salvage += 1),
+    charm("Spite Fuse", Rare, Set::Cinder, (HD + 55, PLAIN), "mine_spite", "Each cave-in on your boards also deals 6 damage to the enemy.", |m| m.mine_spite += 6),
+    charm("Hourglass", Rare, Set::Guard, (HD + 56, PLAIN), "reveal_shield", "Each pick you leave unused when your turn ends becomes 3 shield.", |m| m.reveal_shield += 3),
+    charm("Hoarder's Sack", Rare, Set::Guard, (HD + 57, PLAIN), "hoard_shield", "End your turn holding 3 or more gems: gain 6 shield.", |m| m.hoard_shield += 6),
+    charm("Chain Lightning", Rare, Set::Blade, (HD + 58, PLAIN), "chain", "Each rite after your first in a turn deals +5 more than the one before.", |m| m.chain += 5),
+    charm("Powder Keg", Rare, Set::Surge, (HD + 59, PLAIN), "mine_surge", "Each cave-in on your boards gives 3 surge.", |m| m.mine_surge += 3),
     // legendaries bend a core rule
-    charm("Twin Vein", Legendary, (HD + 60, PLAIN), "claim_bonus", "Crystals give 2 gems, but your boards hold 2 more faults.", |m| {
+    charm("Twin Vein", Legendary, Set::Delver, (HD + 60, PLAIN), "claim_bonus", "Crystals give 2 gems, but your boards hold 2 more faults.", |m| {
         m.claim_bonus += 1;
         m.fewer_mines -= 2
     }),
-    charm("Glass Blade", Legendary, (HD + 61, PLAIN), "power", "+2 power, but cave-ins deal 2 more damage to you.", |m| {
+    charm("Glass Blade", Legendary, Set::Blade, (HD + 61, PLAIN), "power", "+2 power, but cave-ins deal 2 more damage to you.", |m| {
         m.power += 2;
         m.mine_guard -= 2
     }),
-    charm("Smoke Bomb", Legendary, (HD + 62, PLAIN), "evade", "The first enemy rite each turn misses you.", |m| m.evade += 1),
-    charm("Sixth Sense", Legendary, (HD + 63, PLAIN), "sense", "The first cave-in on your boards each turn does no harm.", |m| m.sense += 1),
-    charm("Echo Chamber", Legendary, (HD + 64, PLAIN), "echo", "Your three-element rites fire twice.", |m| m.echo += 1),
-    charm("Berserker's Axe", Legendary, (HD + 65, PLAIN), "desperate", "Below half HP, +4 power.", |m| m.desperate += 4),
+    charm("Smoke Bomb", Legendary, Set::Guard, (HD + 62, PLAIN), "evade", "The first enemy rite each turn misses you.", |m| m.evade += 1),
+    charm("Sixth Sense", Legendary, Set::Delver, (HD + 63, PLAIN), "sense", "The first cave-in on your boards each turn does no harm.", |m| m.sense += 1),
+    charm("Echo Chamber", Legendary, Set::Blade, (HD + 64, PLAIN), "echo", "Your three-element rites fire twice.", |m| m.echo += 1),
+    charm("Berserker's Axe", Legendary, Set::Blood, (HD + 65, PLAIN), "desperate", "Below half HP, +4 power.", |m| m.desperate += 4),
 ];
 
 /// Sprites from here up are the 128px sigils of assets/sigils/sigils-mono.png (game-icons.net, CC BY 3.0),

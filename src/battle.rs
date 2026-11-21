@@ -91,7 +91,7 @@ pub struct Fighter {
     pub mods: Mods,
     /// skills upgraded by boss kills, by index in `COMBOS`; a repeat is another level
     pub ups: Vec<usize>,
-    /// brands burnt onto rites: (index in `COMBOS`, index in `BRANDS`), one per rite
+    /// brands burnt onto rites: (index in `COMBOS`, index in `BRANDS`), up to the rite's level each, oldest first
     pub brands: Vec<(usize, usize)>,
 }
 
@@ -111,9 +111,9 @@ impl Fighter {
         1 + self.ups.iter().filter(|&&u| u == id).count()
     }
 
-    pub fn brand(&self, c: &Combo) -> Option<&'static Brand> {
+    pub fn brands(&self, c: &Combo) -> Vec<&'static Brand> {
         let id = combo_id(c);
-        self.brands.iter().find(|b| b.0 == id).map(|b| &BRANDS[b.1])
+        self.brands.iter().filter(|b| b.0 == id).map(|b| &BRANDS[b.1]).collect()
     }
 
     /// What `c` does for this fighter, each effect with the level it works at: the rite's own grow
@@ -121,11 +121,11 @@ impl Fighter {
     pub fn effects<'a>(&'a self, c: &'a Combo) -> impl Iterator<Item = (Effect, usize)> + 'a {
         let lvl = self.level(c);
         let master = c.master.filter(|_| lvl >= MAX_LEVEL);
-        c.effects.iter().copied().chain(master).map(move |e| (e, lvl)).chain(self.brand(c).map(|b| (b.effect, 1)))
+        c.effects.iter().copied().chain(master).map(move |e| (e, lvl)).chain(self.brands(c).into_iter().map(|b| (b.effect, 1)))
     }
 
     pub fn describe(&self, c: &Combo) -> String {
-        rite_text(c, self.level(c), self.brand(c))
+        rite_text(c, self.level(c), &self.brands(c))
     }
 
     /// True if `c` carries effect `e` for this fighter (a mastery, say).
@@ -202,6 +202,8 @@ pub enum Event {
     React { from: usize, element: Element },
     /// `side`'s brittle shield shattered onto the one who hit it
     Brittle { side: usize },
+    /// a rite shattered `side`'s shield before its hit (Pierce); a brittle one is gone without shattering back
+    Pierced { side: usize },
 }
 
 /// `f[0]` is the player, `f[1]` the current enemy. Both sides obey exactly the same rules.
@@ -507,7 +509,8 @@ impl Battle {
                 let els = self.f[0].elements.clone();
                 self.f[0].stacks.extend(els.iter().flat_map(|&e| std::iter::repeat(e).take(n)));
             }
-            (self.f[s].hold, self.f[s].blind, self.f[s].simmer, self.f[s].brittle) = (false, 0, false, false);
+            // a brittle shield stays brittle into the next wave, as long as the shield lasts
+            (self.f[s].hold, self.f[s].blind, self.f[s].simmer) = (false, 0, false);
             self.f[s].burn += self.f[s].mods.self_burn.max(0);
             let m = self.f[s].mods.clone();
             self.procs(s, &[("start_shield", m.start_shield > 0), ("scouts", m.scouts > 0), ("fewer_mines", m.fewer_mines > 0), ("foe_mines", m.foe_mines > 0)]);
@@ -530,6 +533,8 @@ impl Battle {
         let k = 1 + f.mods.shield_block.max(0);
         let soak = (f.shield * k).min(dmg).max(0);
         f.shield -= (soak + k - 1) / k;
+        // worn away to nothing, a brittle shield is gone, so a fresh one is not brittle
+        f.brittle &= f.shield > 0;
         f.hp -= dmg - soak;
         dmg - soak
     }
@@ -578,6 +583,8 @@ impl Battle {
             // shield wears off: half of it is gone by the start of its owner's next turn
             f.shield /= 2;
         }
+        // a shield that is all gone takes its brittleness with it
+        f.brittle &= f.shield > 0;
         f.hold = false;
         f.surge = (if f.mods.keep_surge > 0 { f.surge } else { 0 }).max(f.mods.surge_start).min(jam);
         f.cast_n = 0;
@@ -869,7 +876,7 @@ impl Battle {
         let pct = 100 + self.f[a].mods.combo_pct;
         let master = lvl >= MAX_LEVEL && !(self.f[a].has(c, Effect::Execute) && self.f[t].hp * 2 > self.f[t].max_hp);
         let (shield, mut leech) = (self.f[a].shield, self.f[a].mods.lifesteal_pct);
-        let mut fell = 0;
+        let (mut fell, mut pierced) = (0, false);
         for (e, lvl) in effects {
             let up = |v: i32| at_level(v, lvl);
             match e {
@@ -882,7 +889,10 @@ impl Battle {
                     let keep = self.f[t].stacks.len().saturating_sub(up(n as i32) as usize);
                     self.f[t].stacks.truncate(keep);
                 }
-                Effect::Pierce => self.f[t].shield = 0,
+                Effect::Pierce => {
+                    pierced |= self.f[t].shield > 0;
+                    (self.f[t].shield, self.f[t].brittle) = (0, false);
+                }
                 // in hit_damage, worked out before any effect lands
                 Effect::PerSurge(_) | Effect::Detonate | Effect::PerReveal(_) | Effect::PerBurn(_) | Effect::PerQuarterLost(_) => {}
                 Effect::Surge(v) => self.f[a].surge = (self.f[a].surge + up(v)).min(self.surge_cap(a)),
@@ -938,7 +948,8 @@ impl Battle {
                 self.best = (dmg, name);
             }
         }
-        let guard = self.f[t].shield;
+        // as the hit meets it: the hit may wear the shield to nothing, and it still shatters back
+        let (guard, brittle) = (self.f[t].shield, self.f[t].brittle);
         let dealt = self.hurt(t, dmg);
         let steal = dealt * leech / 100;
         self.f[a].hp = (self.f[a].hp + steal).min(self.f[a].max_hp);
@@ -948,14 +959,18 @@ impl Battle {
             self.hurt(a, thorns);
             self.proc(t, "thorns");
         }
+        self.events.push(Event::Cast { from: a, name, element, miss: false, skill, master });
+        if pierced {
+            self.events.push(Event::Pierced { side: t });
+        }
         // a brittle shield still blocks the hit, then all of it shatters onto the attacker
-        if hits && self.f[t].brittle && guard > 0 {
+        // (after the cast, so the screen shows it as that rite lands)
+        if hits && brittle && guard > 0 {
             (self.f[t].shield, self.f[t].brittle) = (0, false);
             self.hurt(a, guard);
             self.events.push(Event::Brittle { side: t });
             self.log.push(format!("{}'s brittle shield shatters onto {} for {guard}", self.f[t].name, self.f[a].name));
         }
-        self.events.push(Event::Cast { from: a, name, element, miss: false, skill, master });
         self.events.extend(react.iter().map(|&element| Event::React { from: a, element }));
         if a == 0 && hits && !self.f[t].loaded.is_empty() {
             self.f[t].took += dmg;
@@ -1171,7 +1186,7 @@ mod tests {
         assert_eq!((b.f[1].hp, b.f[0].stacks.len()), (85, 0));
         assert_eq!(b.f[0].reveals_left, reveals + 2, "steam clears the view: +2 reveals at Lv 2");
         assert!(b.events.iter().any(|e| matches!(e, Event::Cast { name: "Scald Geyser", .. })));
-        assert_eq!(rite_text(steam, 3, None), "+8 damage, +3 picks, your next 3 cave-ins do no harm");
+        assert_eq!(rite_text(steam, 3, &[]), "+8 damage, +3 picks, your next 3 cave-ins do no harm");
     }
 
     #[test]
@@ -1465,6 +1480,38 @@ mod tests {
         assert_eq!((b.f[0].shield, b.f[0].brittle), (0, false), "then all of it shatters");
         assert_eq!(b.f[1].hp, foe - 20, "onto the attacker, as much as the shield held");
         assert!(b.events.iter().any(|e| matches!(e, Event::Brittle { side: 0 })));
+    }
+
+    #[test]
+    fn a_pierced_brittle_shield_is_gone_without_shattering_back() {
+        let mut b = duel();
+        b.f[0].elements = vec![Tide, Stone, Spark];
+        (b.f[0].stacks, b.f[0].shield) = (vec![Stone, Spark], 10);
+        assert!(b.cast(combo("Lodestone")));
+        let foe = b.f[1].hp;
+        b.land(1, combo("Magma"));
+        assert_eq!((b.f[0].shield, b.f[0].brittle, b.f[1].hp), (0, false, foe), "pierced: nothing shatters back");
+        assert!(b.events.iter().any(|e| matches!(e, Event::Pierced { side: 0 })));
+        assert!(!b.events.iter().any(|e| matches!(e, Event::Brittle { .. })));
+    }
+
+    #[test]
+    fn a_shield_worn_to_nothing_leaves_no_brittleness_behind() {
+        let mut b = duel();
+        (b.f[0].shield, b.f[0].brittle) = (5, true);
+        b.hurt(0, 9);
+        b.f[0].shield = 12;
+        assert!(!b.f[0].brittle, "the new shield is plain");
+    }
+
+    #[test]
+    fn a_brittle_shield_lasts_into_the_next_wave() {
+        let mut b = duel();
+        b.f[0].elements = vec![Tide, Stone, Spark];
+        (b.f[0].stacks, b.f[0].shield) = (vec![Stone, Spark], 10);
+        assert!(b.cast(combo("Lodestone")));
+        b.start_wave();
+        assert!(b.f[0].brittle && b.f[0].shield == 20, "the next foe still meets it");
     }
 
     #[test]

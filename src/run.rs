@@ -7,7 +7,11 @@ use crate::{
 pub const FLOORS: usize = 3;
 pub const COLS: usize = 5;
 /// HP everyone recovers after a won fight
-pub const SHOP_SIZE: usize = 4;
+/// pacts on a shop's shelf; a brand sits beside them
+pub const SHOP_SIZE: usize = 3;
+pub const BRAND_PRICE: i32 = 40;
+/// a lesson levels up a rite; one per shop
+pub const LESSON_PRICE: i32 = 60;
 /// the first restock; each one after costs this much more
 pub const RESTOCK_PRICE: i32 = 10;
 
@@ -59,6 +63,10 @@ pub struct Shop {
     pub restocks: i32,
     /// prices, in percent of normal
     pub markup: i32,
+    /// the brand for sale (index in `BRANDS`), until bought
+    pub brand: Option<usize>,
+    /// the lesson is still for sale
+    pub lesson: bool,
 }
 
 /// Who carries day `day`'s daily descent, and where (one of the first three expeditions): (hero, expedition).
@@ -87,7 +95,7 @@ pub struct Run {
     pub charms: Vec<usize>,
     /// upgraded skills, by index in `COMBOS`; a repeat is another level
     pub ups: Vec<usize>,
-    /// brands burnt onto rites: (index in `COMBOS`, index in `BRANDS`), one per rite
+    /// brands burnt onto rites: (index in `COMBOS`, index in `BRANDS`), up to the rite's level each, oldest first
     pub brands: Vec<(usize, usize)>,
     /// the one blessing held, by index in `BLESSINGS`
     pub blessing: Option<usize>,
@@ -177,6 +185,9 @@ impl Run {
         for &c in &self.charms {
             (CHARMS[c].apply)(&mut m);
         }
+        for set in SETS.iter().enumerate().filter(|(k, _)| self.set_count(*k) >= SET_AT).map(|(_, d)| d) {
+            (set.apply)(&mut m);
+        }
         if let Some(b) = self.blessing {
             (BLESSINGS[b].apply)(&mut m);
         }
@@ -234,8 +245,13 @@ impl Run {
         1 + self.ups.iter().filter(|&&u| u == id).count()
     }
 
-    pub fn brand_of(&self, id: usize) -> Option<&'static Brand> {
-        self.brands.iter().find(|b| b.0 == id).map(|b| &BRANDS[b.1])
+    pub fn brands_of(&self, id: usize) -> Vec<&'static Brand> {
+        self.brands.iter().filter(|b| b.0 == id).map(|b| &BRANDS[b.1]).collect()
+    }
+
+    /// Whether rite `id` has every brand socket filled (one per level), so a new brand sears the oldest away.
+    pub fn sockets_full(&self, id: usize) -> bool {
+        self.brands.iter().filter(|b| b.0 == id).count() >= self.level(id)
     }
 
     /// The rites this hero can make, by index in `COMBOS`.
@@ -243,17 +259,34 @@ impl Run {
         combos_for(&HEROES[self.hero].elements).iter().map(|c| combo_id(c)).collect()
     }
 
-    /// Burns `brand` onto rite `id`, replacing any brand it had.
+    /// Burns `brand` onto rite `id`; with its sockets full, the oldest brand on it goes.
     pub fn burn_brand(&mut self, id: usize, brand: usize) -> Stage {
-        self.brands.retain(|b| b.0 != id);
-        self.brands.push((id, brand));
+        self.sear(id, brand);
         self.after_node()
     }
 
-    /// Upgrades skill `id`, then the boss's charm reward.
+    fn sear(&mut self, id: usize, brand: usize) {
+        if self.sockets_full(id) {
+            let k = self.brands.iter().position(|b| b.0 == id).expect("a full rite has a brand");
+            self.brands.remove(k);
+        }
+        self.brands.push((id, brand));
+    }
+
+    /// Upgrades skill `id`, then a boss's charm reward; a hoard's level is the whole prize.
     pub fn upgrade(&mut self, id: usize) -> Stage {
         self.ups.push(id);
-        self.pick()
+        if self.here() == NodeKind::Boss { self.pick() } else { self.after_node() }
+    }
+
+    /// Pacts held of set `k` (index in `SETS`).
+    pub fn set_count(&self, k: usize) -> usize {
+        self.charms.iter().filter(|&&c| CHARMS[c].set as usize == k).count()
+    }
+
+    /// How often pact `i` is offered: its rarity's weight, leaning toward sets already held.
+    fn weight(&self, i: usize) -> usize {
+        CHARMS[i].rarity.weight() * (2 + self.set_count(CHARMS[i].set as usize))
     }
 
     pub fn max_hp(&self) -> i32 {
@@ -272,10 +305,10 @@ impl Run {
         let mut pool: Vec<usize> = (0..CHARMS.len()).filter(|i| !self.charms.contains(i) && !self.given.contains(i) && !avoid.contains(i)).collect();
         let mut ids = vec![];
         while ids.len() < n && !pool.is_empty() {
-            let total: usize = pool.iter().map(|&i| CHARMS[i].rarity.weight()).sum();
+            let total: usize = pool.iter().map(|&i| self.weight(i)).sum();
             let mut roll = self.rng.below(total);
             let k = pool.iter().position(|&i| {
-                let w = CHARMS[i].rarity.weight();
+                let w = self.weight(i);
                 if roll < w {
                     return true;
                 }
@@ -285,6 +318,24 @@ impl Run {
             ids.push(pool.remove(k.expect("roll is below the total weight")));
         }
         ids
+    }
+
+    /// A hoard: half the time pacts, else a level for a rite or a brand.
+    fn treasure(&mut self) -> Stage {
+        let ids: Vec<usize> = self.rites().into_iter().filter(|&id| self.level(id) < MAX_LEVEL).collect();
+        match self.rng.below(4) {
+            2 if !ids.is_empty() => Stage::Upgrade(ids),
+            3 => {
+                let mut pool: Vec<usize> = (0..BRANDS.len()).collect();
+                Stage::Brand((0..3).map(|_| pool.remove(self.rng.below(pool.len()))).collect())
+            }
+            _ => self.pick(),
+        }
+    }
+
+    /// The kind of room the player stands in.
+    pub fn here(&self) -> NodeKind {
+        self.pos.map_or(NodeKind::Battle, |(c, r)| self.map[c][r].kind)
     }
 
     fn pick(&mut self) -> Stage {
@@ -438,7 +489,7 @@ impl Run {
             }
             NodeKind::Encounter => Stage::Event(&ENCOUNTERS[self.rng.below(ENCOUNTERS.len())], None),
             NodeKind::Shop => Stage::Shop(self.stock(0, &[])),
-            NodeKind::Treasure => self.pick(),
+            NodeKind::Treasure => self.treasure(),
         }
     }
 
@@ -480,7 +531,7 @@ impl Run {
             return Stage::End(false);
         }
         self.wins += 1;
-        let kind = self.pos.map_or(NodeKind::Battle, |(c, r)| self.map[c][r].kind);
+        let kind = self.here();
         if let Some(e) = self.ending().filter(|_| kind == NodeKind::Boss) {
             self.found.push(e);
         }
@@ -540,7 +591,7 @@ impl Run {
 
     /// Leaves a shop. The second shop in a row left without buying offers the Clockwork Eye.
     pub fn leave_shop(&mut self, shop: &Shop) -> Stage {
-        let bought = shop.stock.iter().any(|w| w.is_none());
+        let bought = shop.stock.iter().any(|w| w.is_none()) || shop.brand.is_none() || !shop.lesson;
         self.bare_shops = if bought { 0 } else { self.bare_shops + 1 };
         if self.bare_shops >= 2 {
             self.bare_shops = 0;
@@ -618,12 +669,43 @@ impl Run {
         let ids = self.offer(SHOP_SIZE, avoid);
         let sale = self.rng.below(ids.len().max(1));
         let markup = self.keys.iter().fold(100, |p, &k| p * ENDINGS[k].price_pct / 100);
-        Shop { stock: ids.into_iter().map(Some).collect(), sale, restocks, markup }
+        let brand = Some(self.rng.below(BRANDS.len()));
+        Shop { stock: ids.into_iter().map(Some).collect(), sale, restocks, markup, brand, lesson: true }
     }
 
     pub fn price(shop: &Shop, k: usize) -> i32 {
         let p = shop.stock[k].map_or(0, |id| CHARMS[id].rarity.price() * shop.markup / 100);
         if k == shop.sale { p * 3 / 4 } else { p }
+    }
+
+    pub fn brand_price(shop: &Shop) -> i32 {
+        BRAND_PRICE * shop.markup / 100
+    }
+
+    pub fn lesson_price(shop: &Shop) -> i32 {
+        LESSON_PRICE * shop.markup / 100
+    }
+
+    /// Buys the shop's brand and burns it onto rite `id`.
+    pub fn buy_brand(&mut self, shop: &mut Shop, id: usize) -> bool {
+        let price = Self::brand_price(shop);
+        let Some(brand) = shop.brand.filter(|_| self.shards >= price) else { return false };
+        self.shards -= price;
+        self.sear(id, brand);
+        shop.brand = None;
+        true
+    }
+
+    /// Buys the shop's lesson for rite `id`, one level up.
+    pub fn buy_lesson(&mut self, shop: &mut Shop, id: usize) -> bool {
+        let price = Self::lesson_price(shop);
+        if !shop.lesson || self.shards < price || self.level(id) >= MAX_LEVEL {
+            return false;
+        }
+        self.shards -= price;
+        self.ups.push(id);
+        shop.lesson = false;
+        true
     }
 
     pub fn restock_price(shop: &Shop) -> i32 {
@@ -653,7 +735,9 @@ impl Run {
         }
         self.shards -= price;
         let shelf: Vec<usize> = shop.stock.iter().flatten().copied().collect();
+        let lesson = shop.lesson;
         *shop = self.stock(shop.restocks + 1, &shelf);
+        shop.lesson = lesson;
         true
     }
 }
@@ -661,6 +745,35 @@ impl Run {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rite_holds_one_brand_per_level_and_sears_the_oldest() {
+        let (mut run, _) = Run::new(1, 0, 0);
+        let id = run.rites()[0];
+        let names = |run: &Run| run.brands_of(id).iter().map(|b| b.name).collect::<Vec<_>>();
+        run.burn_brand(id, 0);
+        run.burn_brand(id, 1);
+        assert_eq!(names(&run), [BRANDS[1].name], "one socket at level 1");
+        run.ups.push(id);
+        run.burn_brand(id, 2);
+        assert_eq!(names(&run), [BRANDS[1].name, BRANDS[2].name], "a level adds a socket");
+        run.burn_brand(id, 3);
+        assert_eq!(names(&run), [BRANDS[2].name, BRANDS[3].name], "full, the oldest goes");
+    }
+
+    #[test]
+    fn a_shop_sells_one_lesson_and_one_brand() {
+        let (mut run, _) = Run::new(1, 0, 0);
+        let id = run.rites()[0];
+        let mut shop = run.stock(0, &[]);
+        run.shards = 500;
+        assert!(run.buy_lesson(&mut shop, id) && run.level(id) == 2);
+        assert!(!run.buy_lesson(&mut shop, id), "one lesson a shop");
+        run.restock(&mut shop);
+        assert!(!shop.lesson, "a restock brings no new lesson");
+        assert!(run.buy_brand(&mut shop, id) && run.brands_of(id).len() == 1 && shop.brand.is_none());
+        assert!(matches!(run.leave_shop(&shop), Stage::Map));
+    }
 
     #[test]
     fn stack_snatchers_wait_past_the_first_floor() {
@@ -759,6 +872,13 @@ mod tests {
         (won || run.floor >= FLOORS, run.floor.min(FLOORS - 1))
     }
 
+    /// A rite with a free brand socket, if any has one.
+    fn socket(run: &Run, pick: &mut Rng) -> usize {
+        let free: Vec<usize> = run.rites().into_iter().filter(|&id| !run.sockets_full(id)).collect();
+        let from = if free.is_empty() { run.rites() } else { free };
+        from[pick.below(from.len())]
+    }
+
     /// Plays a whole run, carrying `keys` from the start. Returns the run as it ended, and whether it won.
     fn play(seed: u64, hero: usize, exp: usize, keys: &[usize]) -> (Run, bool) {
         let (mut run, mut stage) = Run::new(seed, hero, exp);
@@ -782,16 +902,24 @@ mod tests {
                     run.finish_battle(&b)
                 }
                 Stage::Pick(options) => {
-                    run.add_charm(options[0]);
+                    // the pact that builds most on a set already held
+                    let id = *options.iter().rev().max_by_key(|&&id| run.set_count(CHARMS[id].set as usize)).expect("a pick offers pacts");
+                    run.add_charm(id);
                     run.after_node()
                 }
                 Stage::Upgrade(ids) => run.upgrade(ids[pick.below(ids.len())]),
                 Stage::Blessing(offers) => run.take_blessing(Some(offers[pick.below(offers.len())])),
                 Stage::Brand(offers) => {
-                    let rites = run.rites();
-                    run.burn_brand(rites[pick.below(rites.len())], offers[pick.below(offers.len())])
+                    let id = socket(&run, &mut pick);
+                    run.burn_brand(id, offers[pick.below(offers.len())])
                 }
                 Stage::Shop(mut shop) => {
+                    let ids: Vec<usize> = run.rites().into_iter().filter(|&id| run.level(id) < MAX_LEVEL).collect();
+                    if !ids.is_empty() {
+                        run.buy_lesson(&mut shop, ids[pick.below(ids.len())]);
+                    }
+                    let id = socket(&run, &mut pick);
+                    run.buy_brand(&mut shop, id);
                     for k in 0..shop.stock.len() {
                         run.buy(&mut shop, k);
                     }

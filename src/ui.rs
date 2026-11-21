@@ -73,7 +73,7 @@ struct Shot {
     t0: f64,
     /// (index in `COMBOS`, level)
     skill: (usize, usize),
-    /// the effect of the brand on that rite, if it has one
+    /// the effect of the rite's first brand, if it has one (for the visuals)
     brand: Option<Effect>,
     /// false for a rite that deals no damage: it rises from the caster and settles back on them
     hits: bool,
@@ -287,8 +287,13 @@ fn stream(from: Vec2, to: Vec2, n: usize, color: Color) {
 }
 
 fn quake(strength: f32) {
+    quake_at(now(), strength);
+}
+
+/// A shake that starts at `t`, which may be later: as a bolt lands.
+fn quake_at(t: f64, strength: f32) {
     // the user found full strength overkill: every shake plays at a third, and a weaker one never cuts a stronger short
-    let (t, s) = (now(), strength / 3.0);
+    let s = strength / 3.0;
     fx(|fx| {
         if t - fx.quake.0 > 0.15 || s >= fx.quake.1 {
             fx.quake = (t, s);
@@ -511,7 +516,7 @@ pub fn begin_frame() {
     // a heavy hit shakes the whole view for a moment
     let (t0, strength) = fx(|fx| fx.quake);
     let since = (now() - t0) as f32;
-    let jolt = if since < 0.3 {
+    let jolt = if (0.0..0.3).contains(&since) {
         vec2((since * 71.0).sin(), (since * 93.0).cos()) * strength * (1.0 - since / 0.3)
     } else {
         Vec2::ZERO
@@ -1306,8 +1311,34 @@ pub fn status(run: &Run) {
         text(&value, x + w + 8.0, 43.0, 20.0, c);
         x += 190.0;
     }
+    // sets two or more pacts deep, between the pact count and the Retreat button
+    let mut right = 1060.0;
+    for (k, set) in SETS.iter().enumerate().rev() {
+        let n = run.set_count(k);
+        if n >= 2 {
+            let s = format!("{} {}/{SET_AT}", set.name, n.min(SET_AT));
+            if right - measure(&s, 16.0).width < 920.0 {
+                break;
+            }
+            right -= measure(&s, 16.0).width;
+            text(&s, right, 42.0, 16.0, if n >= SET_AT { GOLD_C } else { MUTED });
+            right -= 18.0;
+        }
+    }
 }
 
+
+/// Pact `id`'s set, how many of it `held` has, and what the set does at `SET_AT`.
+fn set_line(held: &[usize], id: usize) -> (String, bool) {
+    let set = CHARMS[id].set;
+    let n = held.iter().filter(|&&c| CHARMS[c].set == set).count();
+    (format!("{} {}/{SET_AT}: {}", set.def().name, n.min(SET_AT), set.def().bonus), n >= SET_AT)
+}
+
+/// `line` at `size`, shrunk until it fits in `room`.
+fn fit_text(line: &str, x: f32, y: f32, room: f32, size: f32, c: Color) {
+    text(line, x, y, size * (room / measure(line, size).width).min(1.0), c);
+}
 
 fn rarity_color(r: Rarity) -> Color {
     match r {
@@ -1379,11 +1410,13 @@ fn charm_bar(charms: &[usize]) {
     }
     if let Some((id, r)) = tip {
         let c = &CHARMS[id];
-        let panel = Rect::new(r.x.min(VIEW.x - 330.0), r.bottom() + 12.0, 310.0, 88.0);
+        let panel = Rect::new(r.x.min(VIEW.x - 330.0), r.bottom() + 12.0, 310.0, 108.0);
         plate(panel, CARD);
         pact_name(id, panel.x + 14.0, panel.y + 24.0, 16.0, INK);
         rich(c.rarity.name(), panel.right() - 14.0 - measure(c.rarity.name(), 16.0).width, panel.y + 24.0, 16.0, rarity_color(c.rarity));
         wrapped(c.desc, panel.x + 14.0, panel.y + 48.0, panel.w - 28.0, 16.0, MUTED);
+        let (line, awake) = set_line(charms, id);
+        fit_text(&line, panel.x + 14.0, panel.bottom() - 12.0, panel.w - 28.0, 14.0, if awake { GOLD_C } else { MUTED });
     }
 }
 
@@ -2328,7 +2361,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 let lvl = skill.1;
                 fx(|fx| {
                     let t0 = start + card_lead(lvl) as f64;
-                    let shot = Shot { from, t0, skill, brand: b.f[from].brand(&COMBOS[skill.0]).map(|x| x.effect), hits: b.hits(from, &COMBOS[skill.0]), miss, master };
+                    let shot = Shot { from, t0, skill, brand: b.f[from].brands(&COMBOS[skill.0]).first().map(|x| x.effect), hits: b.hits(from, &COMBOS[skill.0]), miss, master };
                     fx.shots.push(shot);
                     fx.banner.push((name, el_color(element), from, start, lvl));
                     if miss {
@@ -2377,17 +2410,24 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 fx(|fx| fx.floats.push((STAND[1] + vec2(280.0, 70.0), "LOADED".into(), BLOOD, at, 26.0)));
             }
             Event::Break => {
-                play(Sfx::Boom);
-                quake(14.0);
+                // as the bolt that broke it lands
                 let at = fx(|fx| fx.shots.last().map_or(now, lands_at));
+                fx(|fx| fx.later.push((at, Sfx::Boom)));
+                quake_at(at, 14.0);
                 fx(|fx| fx.floats.push((STAND[1] + vec2(280.0, 40.0), "BROKEN".into(), BLOOD, at, 40.0)));
             }
             Event::Brittle { side } => {
-                play(Sfx::Boom);
-                quake(10.0);
                 let at = fx(|fx| fx.shots.last().map_or(now, lands_at));
+                fx(|fx| fx.later.push((at, Sfx::Boom)));
+                quake_at(at, 10.0);
                 let pos = STAND[side] + if side == 1 { vec2(-300.0, 10.0) } else { vec2(170.0, -50.0) };
                 fx(|fx| fx.floats.push((pos, "SHATTERED".into(), rgb(0x6fb6ff), at, 30.0)));
+            }
+            Event::Pierced { side } => {
+                // where SHATTERED would show, so a brittle shield that never shattered back says why
+                let at = fx(|fx| fx.shots.last().map_or(now, lands_at));
+                let pos = STAND[side] + if side == 1 { vec2(-300.0, 10.0) } else { vec2(170.0, -50.0) };
+                fx(|fx| fx.floats.push((pos, "PIERCED".into(), rgb(0x6fb6ff), at, 26.0)));
             }
             Event::React { from, element } => {
                 let word = react_word(element);
@@ -2602,8 +2642,11 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     // the counter moves on with the takeover, not while the last wave's enemy is still dying
     let wave = b.wave - usize::from(fallen.is_some() && b.wave > 1);
     label(&format!("FLOOR {}  ·  WAVE {}/{}  ·  TURN {}", floor + 1, wave, b.waves, b.turn), 56.0, 40.0);
-    let note = if b.pressure() > 0 { format!("Overpressure: every rite +{}", b.pressure()) } else { format!("Overpressure after turn {PRESSURE_TURN}") };
-    rich(&note, 56.0, 116.0, 15.0, if b.pressure() > 0 { INK } else { MUTED });
+    // the warning shows only once it is a few turns off
+    if b.pressure() > 0 || b.turn + 3 >= PRESSURE_TURN {
+        let note = if b.pressure() > 0 { format!("Overpressure: every rite +{}", b.pressure()) } else { format!("Overpressure after turn {PRESSURE_TURN}") };
+        rich(&note, 56.0, 116.0, 15.0, if b.pressure() > 0 { INK } else { MUTED });
+    }
 
     // the enemy, alone at the top: name, life, and what it would throw if it fired now
     {
@@ -2693,10 +2736,11 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     // you, on the left: name, life, conditions and your stacks, one chip per element
     let me = &b.f[0];
     let hx = 56.0 + shake[0];
-    // a trait that wraps past two lines lifts the name with it, so it never runs into the HP bar
-    let lift = wrap(&me.desc, 330.0, 15.0).len().saturating_sub(2) as f32 * 19.0;
-    text(&me.name, hx, 434.0 - lift, 34.0, INK);
-    wrapped(&me.desc, hx, 458.0 - lift, 330.0, 15.0, MUTED);
+    // the passive waits behind the name: hover it to read
+    text(&me.name, hx, 450.0, 34.0, INK);
+    if Rect::new(hx, 418.0, measure(&me.name, 34.0).width, 40.0).contains(mouse()) {
+        tip_text("Passive", me.desc.clone());
+    }
     label("HP", hx, 506.0);
     right(&format!("{} / {}", bar[0], me.max_hp), hx + 330.0, 506.0, 16.0, INK);
     life(Rect::new(hx, 514.0, 330.0, 8.0), bar[0] as f32 / me.max_hp as f32, ghost[0] / me.max_hp as f32);
@@ -2847,7 +2891,6 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     right(&format!("{} picks left", me.reveals_left), BOARD.x + 6.0 * STEP - 2.0, 694.0, 15.0, MUTED);
 
     // your stacks: drag a chip onto a rite's sockets
-    label("GEMS", hx, 584.0);
     for (j, &(e, n)) in held.iter().enumerate() {
         let r = chip(j);
         let n = n - usize::from(drag.is_some_and(|k| me.stacks[k] == e));
@@ -2942,8 +2985,10 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
 
     // rites, on the right: only the ones you can make. Drop gems into a rite's sockets to cast it.
     let rx = 880.0;
-    label("RITES", rx, 316.0);
-    right("drag gems in, or right-click to pick", rx + 350.0, 316.0, 14.0, MUTED);
+    // how to cast, only in a run's first two fights
+    if run.floor == 0 && run.wins < 2 {
+        right("drag gems in, or right-click to pick", rx + 350.0, 316.0, 14.0, MUTED);
+    }
     let ready = b.ready(0);
     let list = combos_for(&me.elements);
     // right-click off the board picks the next rite down; then a click on a gem sends it there
@@ -2981,9 +3026,13 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             text(c.title(lvl), rx, y + 30.0, 24.0, if bright { INK } else { MUTED });
         }
         let mut after = rx + measure(c.title(lvl), 24.0).width + 10.0;
-        if let Some(br) = me.brand(c) {
-            text(br.name, after, y + 30.0, 14.0, ACCENT);
-            after += measure(br.name, 14.0).width + 10.0;
+        let brands = me.brands(c);
+        if !brands.is_empty() {
+            // the names, or just how many when they would run into the sockets
+            let names = brands.iter().map(|b| b.name).collect::<Vec<_>>().join(" ");
+            let names = if after + measure(&names, 14.0).width > rx + 210.0 { format!("{} brands", brands.len()) } else { names };
+            text(&names, after, y + 30.0, 14.0, ACCENT);
+            after += measure(&names, 14.0).width + 10.0;
         }
         let reacts: Vec<&str> = b.reactions(0, c).into_iter().map(react_word).collect();
         if !reacts.is_empty() {
@@ -3540,7 +3589,7 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     chosen
 }
 
-fn charm_card(r: Rect, id: usize, on: bool) -> bool {
+fn charm_card(r: Rect, id: usize, on: bool, held: &[usize]) -> bool {
     let c = &CHARMS[id];
     let edge = rarity_color(c.rarity);
     let hit = card(r, on);
@@ -3557,16 +3606,20 @@ fn charm_card(r: Rect, id: usize, on: bool) -> bool {
     pact_name(id, r.x + 100.0, r.y + 52.0, 24.0, INK);
     rich(c.rarity.name(), r.x + 100.0, r.y + 78.0, 16.0, edge);
     wrapped(c.desc, r.x + 24.0, r.y + 124.0, r.w - 48.0, 16.0, INK);
+    let (line, awake) = set_line(held, id);
+    let set = c.set.def();
+    text(&format!("{} SET", set.name.to_uppercase()), r.x + 24.0, r.bottom() - 56.0, 13.0, if awake { GOLD_C } else { ACCENT });
+    wrapped_fit(&line[set.name.len() + 1..], r.x + 24.0, r.bottom() - 34.0, r.w - 48.0, 14.0, 34.0, MUTED);
     hit
 }
 
-pub fn pick(options: &[usize]) -> Option<usize> {
+pub fn pick(run: &Run, options: &[usize]) -> Option<usize> {
     // title and cards sit in the middle of the screen, however many cards there are
     stamped("Choose a pact", 640.0, 250.0, 40.0, INK);
     let mut chosen = None;
     let x0 = 640.0 - (options.len() as f32 * 350.0 - 30.0) / 2.0;
     for (k, &id) in options.iter().enumerate() {
-        if charm_card(Rect::new(x0 + k as f32 * 350.0, 300.0, 320.0, 240.0), id, true) {
+        if charm_card(Rect::new(x0 + k as f32 * 350.0, 300.0, 320.0, 240.0), id, true, &run.charms) {
             chosen = Some(id);
         }
     }
@@ -3575,7 +3628,8 @@ pub fn pick(options: &[usize]) -> Option<usize> {
 
 /// A boss fell: the player picks one skill to upgrade. Returns its index in `COMBOS`.
 pub fn upgrade(run: &Run, ids: &[usize]) -> Option<usize> {
-    lively_centered("The boss falls", 640.0, 128.0, 44.0, GOLD, Motion::Wave);
+    let boss = run.here() == NodeKind::Boss;
+    lively_centered(if boss { "The boss falls" } else { "Old lore in the hoard" }, 640.0, 128.0, 44.0, GOLD, Motion::Wave);
     centered("Claim its strength. One rite grows fiercer, and hungrier.", 640.0, 164.0, 18.0, MUTED);
     let n = ids.len() as f32;
     let (w, gap) = (280.0, 20.0);
@@ -3597,6 +3651,8 @@ pub fn upgrade(run: &Run, ids: &[usize]) -> Option<usize> {
         }
         let x = r.x + 20.0;
         text(&format!("LV {lvl}  >  LV {}", lvl + 1), x, r.y + 30.0, 16.0, ACCENT);
+        let more = "+1 brand socket";
+        text(more, r.right() - 20.0 - measure(more, 13.0).width, r.y + 30.0, 13.0, MUTED);
         text(c.title(lvl), x, r.y + 60.0, 18.0, MUTED);
         text(c.title(lvl + 1), x, r.y + 98.0, 26.0, if lvl + 1 >= MAX_LEVEL { MASTERED } else { GOLD_C });
         for (row, (label, l)) in [("NOW", lvl), ("UPGRADED", lvl + 1)].into_iter().enumerate() {
@@ -3612,9 +3668,10 @@ pub fn upgrade(run: &Run, ids: &[usize]) -> Option<usize> {
                 gem(e, p, 11.0);
             }
         }
-        let y = wrapped_fit(&rite_text(c, lvl, run.brand_of(id)), x, r.y + 280.0, w - 40.0, 16.0, 44.0, MUTED);
+        let brands = run.brands_of(id);
+        let y = wrapped_fit(&rite_text(c, lvl, &brands), x, r.y + 280.0, w - 40.0, 16.0, 44.0, MUTED);
         text("becomes", x, y + 6.0, 14.0, ACCENT);
-        wrapped_fit(&rite_text(c, lvl + 1, run.brand_of(id)), x, y + 30.0, w - 40.0, 18.0, r.bottom() - y - 30.0, GOLD_C);
+        wrapped_fit(&rite_text(c, lvl + 1, &brands), x, y + 30.0, w - 40.0, 18.0, r.bottom() - y - 30.0, GOLD_C);
     }
     particles();
     chosen
@@ -3625,7 +3682,8 @@ thread_local!(static BRANDING: std::cell::Cell<Option<usize>> = const { std::cel
 /// An elite fell: pick a brand, then the rite to burn it onto. Returns (index in `COMBOS`, index in `BRANDS`).
 pub fn brand(run: &Run, offers: &[usize]) -> Option<(usize, usize)> {
     let Some(chosen) = BRANDING.with(|b| b.get()) else {
-        lively_centered("The elite falls", 640.0, 200.0, 44.0, GOLD, Motion::Wave);
+        let elite = run.here() == NodeKind::Elite;
+        lively_centered(if elite { "The elite falls" } else { "Brands in the hoard" }, 640.0, 200.0, 44.0, GOLD, Motion::Wave);
         centered("Claim its mark. Burnt into a rite, it asks no gem in return.", 640.0, 236.0, 18.0, MUTED);
         let x0 = 640.0 - (offers.len() as f32 * 300.0 - 20.0) / 2.0;
         for (k, &id) in offers.iter().enumerate() {
@@ -3641,7 +3699,7 @@ pub fn brand(run: &Run, offers: &[usize]) -> Option<(usize, usize)> {
     };
     let b = &BRANDS[chosen];
     lively_centered(&format!("Burn {} onto a rite", b.name), 640.0, 128.0, 40.0, GOLD, Motion::Wave);
-    centered("A rite bears one brand. A new burn sears the old away.", 640.0, 164.0, 18.0, MUTED);
+    centered("A rite bears one brand per level. Once it is full, a new burn sears the oldest away.", 640.0, 164.0, 18.0, MUTED);
     let ids = run.rites();
     let n = ids.len() as f32;
     let (w, gap) = (280.0, 20.0);
@@ -3660,10 +3718,14 @@ pub fn brand(run: &Run, offers: &[usize]) -> Option<(usize, usize)> {
         for (j, &e) in c.cost(lvl).iter().enumerate() {
             gem(e, vec2(x + 12.0 + j as f32 * 30.0, r.y + 76.0), 11.0);
         }
-        let old = run.brand_of(id);
-        let y = wrapped_fit(&rite_text(c, lvl, old), x, r.y + 120.0, w - 40.0, 16.0, 80.0, MUTED);
-        text(&old.map_or("becomes".into(), |o| format!("{} is replaced", o.name)), x, y + 6.0, 14.0, ACCENT);
-        wrapped_fit(&rite_text(c, lvl, Some(b)), x, y + 30.0, w - 40.0, 18.0, r.bottom() - y - 30.0, GOLD_C);
+        let old = run.brands_of(id);
+        let full = run.sockets_full(id);
+        let socks = format!("BRANDS {}/{lvl}", old.len());
+        text(&socks, r.right() - 20.0 - measure(&socks, 13.0).width, r.y + 40.0, 13.0, if full { MUTED } else { ACCENT });
+        let y = wrapped_fit(&rite_text(c, lvl, &old), x, r.y + 120.0, w - 40.0, 16.0, 80.0, MUTED);
+        text(&if full { format!("{} is seared away", old[0].name) } else { "becomes".into() }, x, y + 6.0, 14.0, ACCENT);
+        let new: Vec<&Brand> = old.iter().skip(usize::from(full)).copied().chain([b]).collect();
+        wrapped_fit(&rite_text(c, lvl, &new), x, y + 30.0, w - 40.0, 18.0, r.bottom() - y - 30.0, GOLD_C);
     }
     if button(Rect::new(565.0, 576.0, 150.0, 40.0), "Back", !modal(), false) {
         BRANDING.with(|b| b.set(None));
@@ -3724,7 +3786,9 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
     text(&run.shards.to_string(), 102.0, 568.0, 32.0, GOLD_C);
 
     // the wares
-    let mut sel = fx(|fx| fx.pick).filter(|&k| shop.stock.get(k).is_some_and(|w| w.is_some()));
+    // spots past the pacts: the brand on the shelf, then the lesson
+    let (brand_k, lesson_k) = (shop.stock.len(), shop.stock.len() + 1);
+    let mut sel = fx(|fx| fx.pick).filter(|&k| shop.stock.get(k).is_some_and(|w| w.is_some()) || (k == brand_k && shop.brand.is_some()) || (k == lesson_k && shop.lesson));
     let mut hover = None;
     for k in 0..shop.stock.len() {
         let r = Rect::new(370.0 + k as f32 * 220.0, 140.0, 200.0, 216.0);
@@ -3747,7 +3811,12 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
         let lift = if hot { -6.0 } else { 0.0 } + (t as f32 * 2.5 + k as f32).sin() * 2.0;
         charm_icon(id, Rect::new(r.center().x - 44.0, r.y + 18.0 + lift, 88.0, 88.0), if sel == Some(k) { 0.3 } else { 0.0 });
         pact_name(id, r.center().x - measure(c.name, 18.0).width / 2.0, r.y + 134.0, 18.0, INK);
-        rich_centered(c.rarity.name(), r.center().x, r.y + 154.0, 14.0, edge);
+        // rarity, then the pact's set and how many of it you hold
+        let held = run.set_count(c.set as usize);
+        let set = format!("  {} {}/{SET_AT}", c.set.def().name, held.min(SET_AT));
+        let x = r.center().x - (measure(c.rarity.name(), 14.0).width + measure(&set, 14.0).width) / 2.0;
+        rich(c.rarity.name(), x, r.y + 154.0, 14.0, edge);
+        text(&set, x + measure(c.rarity.name(), 14.0).width, r.y + 154.0, 14.0, if held + 1 >= SET_AT { GOLD_C } else { MUTED });
         let tag = Rect::new(r.center().x - 52.0, r.y + 168.0, 104.0, 34.0);
         let afford = run.shards >= price;
         block(tag, WELL);
@@ -3763,15 +3832,48 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
         }
     }
 
+    let r = Rect::new(370.0 + brand_k as f32 * 220.0, 140.0, 200.0, 216.0);
+    match shop.brand {
+        None => {
+            plate(r, WELL);
+            stamped("SOLD", r.center().x, r.center().y + 12.0, 34.0, fade(MUTED, 0.6));
+        }
+        Some(id) => {
+            let price = Run::brand_price(shop);
+            let hot = r.contains(mouse()) && !modal();
+            if hot {
+                hover = Some((brand_k, price));
+            }
+            plate(r, if hot || sel == Some(brand_k) { CARD_HI } else { CARD });
+            if sel == Some(brand_k) || hot {
+                outline(r, INK);
+            }
+            text("BRAND", r.x + 10.0, r.y + 22.0, 13.0, ACCENT);
+            stamped(BRANDS[id].name, r.center().x, r.y + 84.0, 34.0, INK);
+            fit_text(&BRANDS[id].effect.text(1), r.x + 14.0, r.y + 134.0, r.w - 28.0, 15.0, MUTED);
+            let tag = Rect::new(r.center().x - 52.0, r.y + 168.0, 104.0, 34.0);
+            block(tag, WELL);
+            shard(vec2(tag.x + 22.0, tag.center().y), 8.0);
+            text(&price.to_string(), tag.x + 40.0, tag.y + 25.0, 22.0, if run.shards >= price { GOLD_C } else { MUTED });
+            if hot && clicked() {
+                sel = Some(brand_k);
+                play(Sfx::Click);
+            }
+        }
+    }
+
     // a closer look at the chosen ware, and the button that buys it
     let panel = Rect::new(356.0, 410.0, 884.0, 156.0);
     plate(panel, CARD);
-    match sel.and_then(|k| shop.stock[k].map(|id| (k, id))) {
+    match sel.and_then(|k| shop.stock.get(k).copied().flatten().map(|id| (k, id))) {
         Some((k, id)) => {
             let c = &CHARMS[id];
             charm_icon(id, Rect::new(panel.x + 22.0, panel.y + 22.0, 64.0, 64.0), 0.0);
             pact_name(id, panel.x + 106.0, panel.y + 46.0, 28.0, INK);
             rich(c.rarity.name(), panel.x + 106.0, panel.y + 70.0, 16.0, rarity_color(c.rarity));
+            let (line, awake) = set_line(&run.charms, id);
+            let after = panel.x + 106.0 + measure(c.rarity.name(), 16.0).width + 18.0;
+            fit_text(&format!("{} set {}", c.set.def().name, &line[c.set.def().name.len() + 1..]), after, panel.y + 70.0, panel.right() - 260.0 - after, 15.0, if awake { GOLD_C } else { MUTED });
             wrapped(c.desc, panel.x + 106.0, panel.y + 100.0, 500.0, 18.0, INK);
             let price = Run::price(shop, k);
             if button(Rect::new(panel.right() - 240.0, panel.y + 56.0, 210.0, 48.0), &format!("Buy for {price}"), run.shards >= price, true) && run.buy(shop, k) {
@@ -3781,15 +3883,57 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
                 sel = None;
             }
         }
+        None if sel.is_some() => {
+            // the brand or the lesson: bought by choosing the rite it goes to
+            let lesson = sel == Some(lesson_k);
+            let (name, what, price) = match shop.brand.filter(|_| !lesson) {
+                Some(b) => (BRANDS[b].name, format!("Brand: {}. Free to cast; one per rite level.", BRANDS[b].effect.text(1)), Run::brand_price(shop)),
+                None => ("Lesson", "A rite grows a level, and a brand socket with it.".to_string(), Run::lesson_price(shop)),
+            };
+            text(name, panel.x + 22.0, panel.y + 46.0, 28.0, INK);
+            wrapped(&what, panel.x + 22.0, panel.y + 76.0, 300.0, 15.0, MUTED);
+            let mut tip = None;
+            for (j, id) in run.rites().into_iter().enumerate() {
+                let (c, lvl) = (&COMBOS[id], run.level(id));
+                let r = Rect::new(panel.x + 350.0 + (j % 2) as f32 * 262.0, panel.y + 20.0 + (j / 2) as f32 * 62.0, 252.0, 52.0);
+                if r.contains(mouse()) {
+                    tip = Some(id);
+                }
+                let ok = run.shards >= price && (!lesson || lvl < MAX_LEVEL);
+                if button(r, c.title(lvl), ok, false) && if lesson { run.buy_lesson(shop, id) } else { run.buy_brand(shop, id) } {
+                    play(if lesson { Sfx::LevelUp } else { Sfx::Coins });
+                    burst(r.center(), 24, 240.0, 7.0, GOLD_C);
+                    say(if lesson { "Practice. It shows already." } else { "Hold still. It only stings once." });
+                    sel = None;
+                }
+            }
+            let line = match tip {
+                Some(id) if lesson && run.level(id) >= MAX_LEVEL => "Mastered: nothing left to teach.".into(),
+                Some(id) if lesson => rite_text(&COMBOS[id], run.level(id) + 1, &run.brands_of(id)),
+                Some(id) => {
+                    let old = run.brands_of(id);
+                    let full = run.sockets_full(id);
+                    let new: Vec<&Brand> = old.iter().skip(usize::from(full)).copied().chain(shop.brand.map(|b| &BRANDS[b])).collect();
+                    rite_text(&COMBOS[id], run.level(id), &new)
+                }
+                None => format!("{price} shards. Choose the rite."),
+            };
+            wrapped_fit(&line, panel.x + 22.0, panel.y + 126.0, 310.0, 14.0, 28.0, if tip.is_some() { GOLD_C } else { MUTED });
+        }
         None => centered("Click a ware to take a closer look.", panel.center().x, panel.center().y + 6.0, 18.0, MUTED),
     }
 
     // services
+    let lesson = Run::lesson_price(shop);
+    if button(Rect::new(356.0, 590.0, 320.0, 44.0), &format!("Lesson for {lesson}"), shop.lesson && run.shards >= lesson, sel == Some(lesson_k)) {
+        sel = Some(lesson_k);
+        play(Sfx::Click);
+    }
     let restock = Run::restock_price(shop);
     if button(Rect::new(692.0, 590.0, 260.0, 44.0), &format!("Restock for {restock}"), run.shards >= restock && run.can_restock(shop), false) && run.restock(shop) {
         play(Sfx::Coins);
         sel = None;
-        for k in 0..SHOP_SIZE {
+        for k in 0..=SHOP_SIZE {
             burst(vec2(470.0 + k as f32 * 220.0, 250.0), 14, 200.0, 7.0, ACCENT);
         }
         say("Fresh from the deep. Have a look.");
