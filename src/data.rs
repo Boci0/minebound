@@ -79,6 +79,10 @@ pub struct Mods {
     pub rite_pct: i32,
     /// burn on yourself as each wave starts
     pub self_burn: i32,
+    /// how far past `MAX_SURGE` your surge can climb
+    pub surge_room: i32,
+    /// the foe's loaded rites break with this many percent less damage
+    pub easy_break: i32,
 }
 
 pub type Tweak = fn(&mut Mods);
@@ -151,6 +155,11 @@ pub enum Effect {
     DrainAll,
     /// the foe's burn stops halving for the rest of the battle
     Simmer,
+    // the forge's rites
+    /// more damage when it is the caster's first rite this turn
+    Opener(i32),
+    /// the caster gains this many thorns for the rest of the battle
+    Spikes(i32),
 }
 use Effect::*;
 
@@ -200,7 +209,7 @@ pub fn rite_text(c: &Combo, lvl: usize, brands: &[&Brand]) -> String {
 impl Effect {
     /// True if a rite with this effect deals damage. The player's rites without one only do what they say.
     pub fn hits(self) -> bool {
-        matches!(self, Damage(_) | PerSurge(_) | Detonate | PerReveal(_) | ShieldBlast(_) | PerBurn(_) | PerQuarterLost(_))
+        matches!(self, Damage(_) | PerSurge(_) | Detonate | PerReveal(_) | ShieldBlast(_) | PerBurn(_) | PerQuarterLost(_) | Opener(_))
     }
 
     pub fn text(self, lvl: usize) -> String {
@@ -259,6 +268,8 @@ impl Effect {
             Unused => "unused picks count too".into(),
             KeepHalf => "keep half your shield".into(),
             Stoke(n) => format!("+{n} power this battle"),
+            Opener(v) => format!("+{} damage as your first rite this turn", at_level(v, lvl)),
+            Spikes(n) => format!("+{} thorns this battle", at_level(n, lvl)),
             Cleanse => "clear your burn and weaken".into(),
             DrainAll => "foe loses all its gems".into(),
             Simmer => "foe's burn stops fading".into(),
@@ -343,6 +354,84 @@ pub static COMBOS: &[Combo] = &[
     combo("Maelstrom", ["Abyssal Gyre", "Leviathan"], &[Tide, Gale, Stone], &[Shield(6), Heal(4)], Some(Cleanse)),
     combo("Short Circuit", ["Arc Flash", "Blackout"], &[Ember, Gale, Spark], &[Damage(6), Drain(1)], Some(DrainAll)),
     combo("Boilover", ["Scalding Flood", "Hellbroth"], &[Ember, Tide, Spark], &[Burn(3), PerBurn(1)], Some(Simmer)),
+    // bought at the forge with ore: each takes the place of the base rite with the same elements
+    // bought at the forge with ore: each takes the place of the base rite with the same elements, and
+    // each asks for one way of playing the pair that its base rite never does
+    combo("Scald Rain", ["Boiling Rain", "Kettle Storm"], &[Ember, Tide], &[Damage(2), Burn(5)], Some(Detonate)),
+    combo("Kindle", ["Stoke the Coals", "Undying Flame"], &[Ember, Gale], &[Stoke(2), Shield(4)], Some(Stoke(1))),
+    combo("Blood Pyre", ["Bloodfire", "Last Rites"], &[Ember, Stone], &[SelfDamage(4), Damage(9)], Some(Lifesteal(50))),
+    combo("Spark Gap", ["Arc Gap", "First Light"], &[Ember, Spark], &[Opener(7)], Some(Sure)),
+    combo("Undertow", ["Riptide", "Drowning Deep"], &[Tide, Gale], &[Damage(3), Blind(1)], Some(DrainAll)),
+    combo("Tidal Ram", ["Breaker Wave", "Tsunami"], &[Tide, Stone], &[ShieldBlast(200)], Some(KeepHalf)),
+    combo("Capacitor", ["Leyden Jar", "Storm Cell"], &[Tide, Spark], &[Surge(8)], Some(Duds(2))),
+    combo("Rockslide", ["Avalanche", "Mountainfall"], &[Gale, Stone], &[Damage(2), Bury(3)], Some(Shatter(2))),
+    combo("Ball Lightning", ["Chain Lightning", "Storm Crown"], &[Gale, Spark], &[PerReveal(1)], Some(Unused)),
+    combo("Iron Thorns", ["Barbed Hide", "Iron Maiden"], &[Stone, Spark], &[Shield(4), Spikes(1)], Some(Hold)),
+];
+
+/// The rites every fighter starts with; the rest of `COMBOS` are the forge's, swapped in one for one.
+pub const BASE_COMBOS: usize = 17;
+/// What a forge rite brings besides itself: a keystone, on all the time while it is swapped in, that
+/// turns its bearer toward one way of playing. In `COMBOS` order past `BASE_COMBOS`.
+pub struct Keystone {
+    /// the way of playing it opens, as its badge in battle says it
+    pub style: &'static str,
+    pub text: &'static str,
+    /// how the style plays, shown on hover in the forge
+    pub hint: &'static str,
+    /// the `Mods` field it changes; its badge flashes when battle reports it
+    pub hook: &'static str,
+    pub apply: Tweak,
+}
+
+pub static KEYSTONES: &[Keystone] = &[
+    Keystone { style: "Burn", text: "Burn on the foe deals 2 more each turn.", hint: "Burn: stack burn and let it eat them. Mastered, Scald Rain sets it all off.", hook: "burn_bonus", apply: |m| m.burn_bonus += 2 },
+    Keystone { style: "Ramp", text: "+1 power every turn.", hint: "Ramp: weak at first, stronger every turn the fight lasts. Cast Kindle early.", hook: "enrage", apply: |m| m.enrage += 1 },
+    Keystone { style: "Blood", text: "Below half HP: +3 power.", hint: "Blood: pay HP to hit harder, and hit hardest when nearly dead.", hook: "desperate", apply: |m| m.desperate += 3 },
+    Keystone { style: "Alpha", text: "Your first rite each turn deals 20% more.", hint: "Alpha: one huge opening blow each turn, Spark Gap best of all.", hook: "first_pct", apply: |m| m.first_pct += 20 },
+    Keystone { style: "Breaker", text: "Their loaded rites break with a third less damage.", hint: "Breaker: break every load they make, so their turns land at half.", hook: "easy_break", apply: |m| m.easy_break += 34 },
+    Keystone { style: "Wall", text: "Every crystal you mine gives 1 shield.", hint: "Wall: mine to build shield, then throw it all with Tidal Ram.", hook: "claim_shield", apply: |m| m.claim_shield += 1 },
+    Keystone { style: "Battery", text: "Surge carries over between turns and can reach 15.", hint: "Battery: bank surge over quiet turns, then spend it all in one.", hook: "keep_surge", apply: |m| {
+        m.keep_surge += 1;
+        m.surge_room += 5
+    } },
+    Keystone { style: "Quarry", text: "The foe's boards start with 1 more fault.", hint: "Quarry: wreck their boards so their own picks cave in on them.", hook: "foe_mines", apply: |m| m.foe_mines += 1 },
+    Keystone { style: "Digger", text: "+1 pick each turn, but 2 less power.", hint: "Digger: mine more, hit softer, and cast Ball Lightning after every pick is used.", hook: "reveals", apply: |m| {
+        m.reveals += 1;
+        m.power -= 2
+    } },
+    Keystone { style: "Thorns", text: "Start each battle with 2 thorns.", hint: "Thorns: let them hit you; every rite they cast hurts them.", hook: "thorns", apply: |m| m.thorns += 2 },
+];
+
+/// Ore for one forge rite.
+pub const RITE_PRICE: u32 = 60;
+
+/// A wager, bought once at the forge with ore and then switched on or off before a descent: each
+/// changes every enemy (or the run) and pays more ore at the end.
+pub struct Wager {
+    pub name: &'static str,
+    pub desc: &'static str,
+    pub price: u32,
+    /// more ore at the end of a run, in percent
+    pub ore_pct: u32,
+    /// enemies' HP, in percent
+    pub hp_pct: i32,
+    pub foe: Tweak,
+    /// its sigil, as a sprite index
+    pub icon: usize,
+}
+
+/// Index of the wager that hands every enemy a random pact, and the one that hands you one each floor.
+pub const WILD_GIFTS: usize = 4;
+pub const WILD_HANDS: usize = 5;
+
+pub static WAGERS: &[Wager] = &[
+    Wager { name: "Iron Hides", desc: "Enemies have 30% more HP.", price: 40, ore_pct: 25, hp_pct: 130, foe: |_| {}, icon: HD + 88 },
+    Wager { name: "Bloodlust", desc: "Enemies gain 1 power every second turn.", price: 40, ore_pct: 25, hp_pct: 100, foe: |m| m.slow_enrage += 1, icon: HD + 47 },
+    Wager { name: "Brambles", desc: "Enemies have 2 thorns.", price: 40, ore_pct: 20, hp_pct: 100, foe: |m| m.thorns += 2, icon: HD + 9 },
+    Wager { name: "Glass Foes", desc: "Enemies have half HP but 3 more power.", price: 50, ore_pct: 15, hp_pct: 50, foe: |m| m.power += 3, icon: HD + 53 },
+    Wager { name: "Wild Gifts", desc: "Every enemy holds a random pact.", price: 60, ore_pct: 20, hp_pct: 100, foe: |_| {}, icon: HD + 25 },
+    Wager { name: "Wild Hands", desc: "A random pact for you on every floor.", price: 80, ore_pct: 0, hp_pct: 100, foe: |_| {}, icon: HD + 45 },
 ];
 
 /// Position of `c` in `COMBOS`.
@@ -352,7 +441,7 @@ pub fn combo_id(c: &Combo) -> usize {
 
 /// Only the combos a fighter can actually make with its elements.
 pub fn combos_for(elements: &[Element]) -> Vec<&'static Combo> {
-    COMBOS.iter().filter(|c| c.needs.iter().all(|e| elements.contains(e))).collect()
+    COMBOS[..BASE_COMBOS].iter().filter(|c| c.needs.iter().all(|e| elements.contains(e))).collect()
 }
 
 pub struct Hero {

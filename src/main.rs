@@ -268,6 +268,11 @@ async fn main() {
                 Some(Go::Play) => {
                     let seed = fixed_seed.unwrap_or((miniquad::date::now() * 1000.0) as u64);
                     let (mut run, mut stage) = Run::with_deeds(seed, pick.1, pick.0, save.deeds);
+                    run.arm(save.wagers_on, save.loadout[pick.1]);
+                    // Wild Hands' pact is held already, so the opening pick cannot offer it again
+                    if let Stage::Pick(options) = &mut stage {
+                        options.retain(|i| !run.charms.contains(i));
+                    }
                     // debug builds only: MINEBOUND_ENDINGS=1 starts every run as Ctrl+E does, for when keys can't be sent
                     if cfg!(debug_assertions) && std::env::var_os("MINEBOUND_ENDINGS").is_some() {
                         stage = run.debug_endings();

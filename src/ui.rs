@@ -160,6 +160,8 @@ struct Fx {
     said: (&'static str, f64),
     /// when each of your charms last took effect, by charm id
     charm_t: std::collections::HashMap<usize, f64>,
+    /// the same for each keystone on, by index in `KEYSTONES`
+    key_t: std::collections::HashMap<usize, f64>,
     /// gems you have slotted into each skill, by skill name; it fires when every socket is full
     sockets: std::collections::HashMap<&'static str, Vec<Element>>,
     /// the gem being dragged, by index in your stacks
@@ -200,6 +202,9 @@ thread_local! {
     static HOWTO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// the deeds sheet is up over the map of The Below
     static DEEDS_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FORGE_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// a sheet over the map is being drawn: its own words may show tooltips though it is modal
+    static SHEET_TIPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// game time and this frame's step: real time, slowed for a kill and stopped for a hit-stop
     static CLOCK: std::cell::Cell<(f64, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
     /// real times until which (slow motion, hit-stop) last
@@ -543,7 +548,7 @@ fn mouse() -> Vec2 {
 
 /// True while a panel (settings, retreat) is open over the screen.
 fn modal() -> bool {
-    SETTINGS.with(|s| s.get()) || RETREAT.with(|r| r.get()) || RULES.with(|r| r.get()) || HOWTO.with(|h| h.get()) || DEEDS_ON.with(|d| d.get())
+    SETTINGS.with(|s| s.get()) || RETREAT.with(|r| r.get()) || RULES.with(|r| r.get()) || HOWTO.with(|h| h.get()) || DEEDS_ON.with(|d| d.get()) || FORGE_ON.with(|f| f.get())
 }
 
 /// A left click meant for the screen. While a panel is open it swallows every click.
@@ -950,7 +955,7 @@ fn tip(t: (&'static str, &'static str)) {
 
 /// A tooltip of any text; a newline in `body` starts a new paragraph.
 fn tip_text(head: &str, body: String) {
-    if !modal() {
+    if !modal() || (SHEET_TIPS.with(|t| t.get()) && !SETTINGS.with(|s| s.get())) {
         TIP.with(|c| *c.borrow_mut() = Some((head.to_string(), body)));
     }
 }
@@ -1422,6 +1427,47 @@ fn charm_bar(charms: &[usize]) {
     }
 }
 
+/// Where the `j`th keystone's badge sits: in a column under the charm bar.
+fn key_slot(j: usize) -> Rect {
+    Rect::new(56.0, 104.0 + j as f32 * 34.0, 124.0, 28.0)
+}
+
+/// The keystones on, as badges that jump and light when they take effect; hover one for what it does.
+fn key_bar(keys: &[usize]) {
+    let now = now();
+    let times = fx(|fx| fx.key_t.clone());
+    for (j, &k) in keys.iter().enumerate() {
+        let since = times.get(&k).map_or(9.0, |t| (now - t) as f32);
+        let lit = (1.0 - since / 0.7).max(0.0);
+        let jump = if since < 0.35 { (since / 0.35 * std::f32::consts::PI).sin() * 7.0 } else { 0.0 };
+        let r = key_slot(j);
+        let r = Rect::new(r.x, r.y - jump, r.w, r.h);
+        block(r, mix(BG, INK, lit * 0.3));
+        outline(r, if lit > 0.0 { INK } else { FAINT });
+        draw_poly_lines(r.x + 14.0, r.center().y, 4, 6.0, 0.0, 1.5, if lit > 0.0 { GOLD } else { INK });
+        text(KEYSTONES[k].style, r.x + 28.0, r.center().y + 5.0, 14.0, INK);
+        if r.contains(mouse()) {
+            let rite = COMBOS[BASE_COMBOS + k].name;
+            tip_text(&format!("{} · keystone of {rite}", KEYSTONES[k].style), KEYSTONES[k].text.to_string());
+        }
+    }
+}
+
+/// What rite `c` of `f` does besides damage that the screen would not otherwise say, as (on the
+/// foe, word) pairs: power, thorns, surge, picks and gems.
+fn callouts(f: &Fighter, c: &Combo) -> Vec<(bool, String)> {
+    f.effects(c)
+        .filter_map(|(e, l)| match e {
+            Effect::Stoke(n) => Some((false, format!("+{n} POWER"))),
+            Effect::Spikes(n) => Some((false, format!("+{} THORNS", at_level(n, l)))),
+            Effect::Surge(v) => Some((false, format!("+{} SURGE", at_level(v, l)))),
+            Effect::Blind(n) => Some((true, format!("-{n} PICKS"))),
+            Effect::Drain(n) => Some((true, format!("-{} GEMS", at_level(n as i32, l)))),
+            _ => None,
+        })
+        .collect()
+}
+
 /// What the title and the overworld ask the game to do next.
 pub enum Go {
     Play,
@@ -1688,6 +1734,9 @@ pub fn world(save: &mut Save, pick: &mut (usize, usize), today: u64) -> Option<G
     if button(Rect::new(tx + 122.0, 40.0, 170.0, 36.0), &deeds, true, fresh > 0) {
         DEEDS_ON.with(|d| d.set(true));
     }
+    if button(Rect::new(tx + 304.0, 40.0, 170.0, 36.0), &format!("Forge · {} ore", save.ore), true, false) {
+        FORGE_ON.with(|f| f.set(true));
+    }
 
     // the land: unexplored tiles are raised grey; around each open place it lies turned over, its
     // edge numbered like a half-solved board (about one hidden tile in five counts as a mine)
@@ -1852,12 +1901,153 @@ pub fn world(save: &mut Save, pick: &mut (usize, usize), today: u64) -> Option<G
     if ok && (descend || (is_key_pressed(KeyCode::Enter) && !modal())) {
         go = Some(if daily_on { Go::Daily } else { Go::Play });
     }
-    if DEEDS_ON.with(|d| d.get()) && deeds_sheet(save) {
+    SHEET_TIPS.with(|t| t.set(true));
+    let deeds_closed = DEEDS_ON.with(|d| d.get()) && deeds_sheet(save);
+    let forge_closed = FORGE_ON.with(|f| f.get()) && forge_sheet(save, &mut pick.1);
+    SHEET_TIPS.with(|t| t.set(false));
+    if deeds_closed {
         DEEDS_ON.with(|d| d.set(false));
         save.deeds_seen = save.deeds;
         save.store();
     }
+    if forge_closed {
+        FORGE_ON.with(|f| f.set(false));
+    }
     go
+}
+
+/// The forge, over the map: spend ore on wagers (switched on or off for every descent after) and on
+/// rites to swap in for a bearer's, picked here too. Stores the save on every change. True once closed.
+fn forge_sheet(save: &mut Save, hero: &mut usize) -> bool {
+    let press = is_mouse_button_pressed(MouseButton::Left) && !SETTINGS.with(|s| s.get());
+    overlay();
+    draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.7));
+    let panel = Rect::new(120.0, 24.0, 1040.0, 672.0);
+    plate(panel, CARD);
+    stamped("Forge", 640.0, panel.y + 52.0, 38.0, INK);
+    let pct: u32 = WAGERS.iter().enumerate().filter(|(k, _)| save.wagers_on & 1 << k != 0).map(|(_, w)| w.ore_pct).sum();
+    // the ore held, big, with what the wagers on add to the next run's
+    let ore = save.ore.to_string();
+    let tail = format!("  ore   ·   wagers on: +{pct}% ore at the end of a run");
+    let (ow, tw) = (measure(&ore, 26.0).width, measure(&tail, 15.0).width);
+    let ox = 640.0 - (ow + tw) / 2.0;
+    text(&ore, ox, panel.y + 88.0, 26.0, GOLD);
+    text(&tail, ox + ow, panel.y + 86.0, 15.0, MUTED);
+    let mut changed = false;
+
+    // wagers, on the left: buy once, then switch on or off
+    let (lx, cw) = (panel.x + 36.0, 456.0);
+    let owned = save.wagers.count_ones();
+    text(&format!("WAGERS · {owned} of {} bought", WAGERS.len()), lx, panel.y + 128.0, 15.0, ACCENT);
+    text("Harder foes, more ore.", lx, panel.y + 148.0, 14.0, MUTED);
+    for (k, w) in WAGERS.iter().enumerate() {
+        let card = Rect::new(lx, panel.y + 162.0 + k as f32 * 74.0, cw, 66.0);
+        let (have, on) = (save.wagers & 1 << k != 0, save.wagers_on & 1 << k != 0);
+        if on {
+            block(card, CARD_HI);
+        }
+        outline(card, if on { INK } else { FAINT });
+        let icon = Rect::new(card.x + 10.0, card.y + 10.0, 46.0, 46.0);
+        outline(icon, if have { INK } else { FAINT });
+        sprite(w.icon, icon.x + 5.0, icon.y + 5.0, 36.0, if on { WHITE } else if have { fade(WHITE, 0.6) } else { fade(WHITE, 0.25) });
+        let tx = icon.right() + 14.0;
+        text(w.name, tx, card.y + 26.0, 18.0, if have { INK } else { MUTED });
+        let bonus = if w.ore_pct > 0 { format!("+{}% ore", w.ore_pct) } else { "no bonus".into() };
+        text(&bonus, tx + measure(w.name, 18.0).width + 12.0, card.y + 26.0, 14.0, if on { GOLD } else { MUTED });
+        wrapped_fit(w.desc, tx, card.y + 48.0, 262.0, 14.0, 18.0, MUTED);
+        let b = Rect::new(card.right() - 112.0, card.y + 16.0, 100.0, 34.0);
+        if !have {
+            if panel_button(b, &format!("Buy {}", w.price), false, press) && save.buy_wager(k) {
+                play(Sfx::Coins);
+                changed = true;
+            }
+        } else if panel_button(b, if on { "On" } else { "Off" }, on, press) {
+            play(Sfx::Click);
+            save.wagers_on ^= 1 << k;
+            changed = true;
+        }
+    }
+
+    // rites, on the right: pick a bearer, then for each of its pairs the base rite or the forge's
+    let rx = panel.x + 540.0;
+    draw_line(rx - 24.0, panel.y + 116.0, rx - 24.0, panel.bottom() - 80.0, 1.0, FAINT);
+    text("RITES · each brings a keystone, a new way to play", rx, panel.y + 128.0, 15.0, ACCENT);
+    for (i, h) in HEROES.iter().enumerate() {
+        let r = Rect::new(rx + i as f32 * 50.0, panel.y + 140.0, 44.0, 44.0);
+        if !is_open(save.deeds, Unlock::Hero(h.name)) {
+            outline(r, FAINT);
+            sprite(h.sprite, r.x + 5.0, r.y + 5.0, 34.0, fade(WHITE, 0.08));
+            continue;
+        }
+        let on = i == *hero;
+        let hot = r.contains(mouse());
+        if hot {
+            block(r, CARD_HI);
+            tip_text(h.name, h.passive_desc.to_string());
+        }
+        outline(r, if on { INK } else { FAINT });
+        sprite(h.sprite, r.x + 5.0, r.y + 5.0, 34.0, if on || hot { WHITE } else { fade(WHITE, 0.45) });
+        if hot && press && !on {
+            play(Sfx::Click);
+            *hero = i;
+        }
+    }
+    let h = &HEROES[*hero];
+    text(h.name, rx + 264.0, panel.y + 168.0, 24.0, INK);
+    let mut y = panel.y + 198.0;
+    for base in combos_for(&h.elements) {
+        let Some(alt) = (BASE_COMBOS..COMBOS.len()).find(|&i| COMBOS[i].needs == base.needs) else { continue };
+        let k = alt - BASE_COMBOS;
+        let (have, on) = (save.alts & 1 << k != 0, save.loadout[*hero] & 1 << k != 0);
+        for (j, &e) in base.needs.iter().enumerate() {
+            gem(e, vec2(rx + 9.0 + j as f32 * 20.0, y + 8.0), 7.0);
+        }
+        // each card is its own button: buy the forge's rite, or use whichever is not in use
+        for (n, (c, picked)) in [(base, !on), (&COMBOS[alt], on)].into_iter().enumerate() {
+            let card = Rect::new(rx + n as f32 * 238.0, y + 22.0, 228.0, 112.0);
+            let buy = n == 1 && !have;
+            let can = !picked && (!buy || save.ore >= RITE_PRICE);
+            let hot = can && card.contains(mouse());
+            // the forge rite's card says its keystone; how to play it and its mastery show on hover
+            if n == 1 && card.contains(mouse()) {
+                let master = c.master.map_or(String::new(), |m| format!("\nMastered: {}", m.text(MAX_LEVEL)));
+                tip_text(c.name, format!("{}{master}", KEYSTONES[k].hint));
+            }
+            if picked || hot {
+                block(card, CARD_HI);
+            }
+            outline(card, if picked || hot { INK } else { FAINT });
+            let (cx, cw) = (card.x + 12.0, card.w - 24.0);
+            text(c.name, cx, card.y + 22.0, 17.0, if picked || hot { INK } else { MUTED });
+            let (tag, tint) = match () {
+                _ if picked => ("in use".to_string(), INK),
+                _ if buy => (format!("{RITE_PRICE} ore"), if can { GOLD } else { MUTED }),
+                _ => ("use".to_string(), if hot { INK } else { MUTED }),
+            };
+            right(&tag, card.right() - 12.0, card.y + 21.0, 13.0, tint);
+            wrapped_fit(&rite_text(c, 1, &[]), cx, card.y + 42.0, cw, 13.0, 32.0, if picked { INK } else { MUTED });
+            if n == 1 {
+                wrapped_fit(&format!("Always: {}", KEYSTONES[k].text), cx, card.y + 76.0, cw, 13.0, 32.0, if picked || hot { GOLD } else { MUTED });
+            } else if let Some(m) = c.master {
+                wrapped_fit(&format!("Mastered: {}", m.text(MAX_LEVEL)), cx, card.y + 80.0, cw, 12.0, 30.0, MUTED);
+            }
+            if hot && press {
+                if buy {
+                    save.buy_alt(k);
+                    play(Sfx::Coins);
+                }
+                // a rite just bought goes straight into use
+                play(Sfx::Click);
+                save.loadout[*hero] ^= 1 << k;
+                changed = true;
+            }
+        }
+        y += 134.0;
+    }
+    if changed {
+        save.store();
+    }
+    panel_button(Rect::new(540.0, panel.bottom() - 58.0, 200.0, 40.0), "Close", true, press)
 }
 
 /// Every deed, done or not, and what it opens, on one sheet over the map. True once closed.
@@ -1951,7 +2141,7 @@ fn conditions(f: &Fighter) -> String {
     let mut st = format!("Power {}", f.power);
     let dodge = if f.mods.graze > 0 { "Graze" } else { "Evade" };
     let shield = if f.brittle { "Brittle shield" } else { "Shield" };
-    for (label, v) in [(shield, f.shield), ("Armor", f.mods.armor), (dodge, f.evades_left), ("Burn", f.burn), ("Weak", f.weak), ("Duds", f.duds)] {
+    for (label, v) in [(shield, f.shield), ("Armor", f.mods.armor), ("Thorns", f.mods.thorns), (dodge, f.evades_left), ("Burn", f.burn), ("Weak", f.weak), ("Duds", f.duds)] {
         if v > 0 {
             st += &format!(" · {label} {v}");
         }
@@ -2473,6 +2663,7 @@ fn queued(now: f64) -> f64 {
 /// run's summary, holding the expedition it unlocks, if any.
 pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, ai_timer: &mut f32) -> bool {
     let (floor, charms) = (run.floor, &run.charms[..]);
+    let keys = run.keystones();
     let over = b.over();
     let intro = fx(|fx| fx.intro).filter(|t| now() - t < WAVE_IN);
     // your clicks wait for your turn's banner and for a felled enemy's replacement
@@ -2522,6 +2713,14 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                         let at = STAND[side] + if side == 1 { vec2(280.0, 70.0) } else { vec2(170.0, -70.0) };
                         fx.floats.push((at, mastery_word(m).into(), MASTERED, first, 30.0));
                     }
+                    // what the rite does besides damage, said where it lands, as it lands
+                    if !miss {
+                        for (k, (side, word)) in callouts(&b.f[from], &COMBOS[skill.0]).into_iter().enumerate() {
+                            let side = if side { 1 - from } else { from };
+                            let at = STAND[side] + if side == 1 { vec2(-250.0, 40.0) } else { vec2(150.0, -20.0) } + vec2(0.0, k as f32 * 30.0);
+                            fx.floats.push((at, word, GOLD, lands_at(&shot), 26.0));
+                        }
+                    }
                     fx.busy = lands_at(&shot) + SETTLE;
                     // your rite's voice as it is thrown; a miss or a blow on you sounds as it lands (a
                     // beat after the bolt's own pop, so they do not blur)
@@ -2548,6 +2747,12 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                     if CHARMS[id].hook == hook {
                         fx(|fx| fx.charm_t.insert(id, now));
                         burst(charm_slot(k, charms.len()).center(), 12, 140.0, 5.0, GOLD_C);
+                    }
+                }
+                for (j, &k) in keys.iter().enumerate() {
+                    if KEYSTONES[k].hook == hook {
+                        fx(|fx| fx.key_t.insert(k, now));
+                        burst(key_slot(j).center(), 12, 140.0, 5.0, GOLD);
                     }
                 }
             }
@@ -3142,7 +3347,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         right("drag gems in, or right-click to pick", rx + 350.0, 316.0, 14.0, MUTED);
     }
     let ready = b.ready(0);
-    let list = combos_for(&me.elements);
+    let list = me.rite_list();
     // right-click off the board picks the next rite down; then a click on a gem sends it there
     let mut aim = fx(|fx| fx.aim).filter(|&i| i < list.len());
     let on_board = Rect::new(BOARD.x, BOARD.y, W as f32 * STEP, W as f32 * STEP).contains(mouse());
@@ -3339,6 +3544,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
 
     particles();
     charm_bar(charms);
+    key_bar(&keys);
     if let Some(k) = drag {
         if let Some(&e) = b.f[0].stacks.get(k) {
             gem(e, mouse(), 15.0);
@@ -3661,7 +3867,7 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     let mut y = wrapped(twist.desc, x, 186.0, 282.0, 16.0, INK) + 6.0;
     text("RITES", x, y + 8.0, 15.0, ACCENT);
     y += 16.0;
-    for c in combos_for(&HEROES[run.hero].elements) {
+    for c in run.rites().into_iter().map(|i| &COMBOS[i]) {
         let lvl = run.level(combo_id(c));
         // the gems it takes at its level, not the base two or three
         let cost = c.cost(lvl);
@@ -4201,6 +4407,7 @@ fn summary(run: &Run, b: Option<&Battle>, won: bool, opened: Option<usize>) -> b
         ("Fights won", wins.to_string()),
         ("Rite damage", ((dealt as f32 * (1.0 - (1.0 - count).powi(3))).round() as i32).to_string()),
         ("Best hit", if best.0 > 0 { format!("{} · {}", best.0, best.1) } else { "none".into() }),
+        ("Ore banked", format!("+{}", run.ore(wins, won))),
     ];
     for (k, (label, value)) in rows.iter().enumerate() {
         let at = 0.5 + k as f32 * 0.3;
@@ -4208,7 +4415,7 @@ fn summary(run: &Run, b: Option<&Battle>, won: bool, opened: Option<usize>) -> b
             play(Sfx::Flip);
         }
         let p = appear(at);
-        let y = r.y + 236.0 + k as f32 * 40.0;
+        let y = r.y + 232.0 + k as f32 * 31.0;
         text(label, r.x + 60.0 + 30.0 * (1.0 - p), y, 20.0, fade(MUTED, p));
         right(value, r.right() - 60.0, y, 22.0, fade(INK, p));
     }

@@ -35,7 +35,7 @@ pub const HOOKS: &[&str] = &[
     "thorns", "foe_mines", "fewer_mines", "lifesteal_pct", "opening", "shield_turn", "surge_start", "surge_pct",
     "keep_surge", "rite_bonus", "rite_burn", "first_pct", "claim_zap", "claim_heal", "claim_shield", "claim_bonus",
     "salvage", "mine_spite", "armor", "evade", "reveal_shield", "hoard_shield", "chain", "mine_surge", "sense", "echo",
-    "desperate", "heal_after", "foe_mine_gift", "enrage", "slow_enrage", "foe_surge_cap",
+    "desperate", "heal_after", "foe_mine_gift", "enrage", "slow_enrage", "foe_surge_cap", "easy_break",
 ];
 
 #[derive(Clone, Default)]
@@ -95,6 +95,8 @@ pub struct Fighter {
     pub ups: Vec<usize>,
     /// brands burnt onto rites: (index in `COMBOS`, index in `BRANDS`), up to the rite's level each, oldest first
     pub brands: Vec<(usize, usize)>,
+    /// the rites it can cast, by index in `COMBOS`; empty means the base ones its elements make
+    pub rites: Vec<usize>,
 }
 
 impl Fighter {
@@ -106,6 +108,11 @@ impl Fighter {
     pub fn new(name: &str, sprite: usize, desc: &str, hp: i32, max_hp: i32, power: i32, elements: &[Element], mods: Mods, aggro: usize) -> Fighter {
         let (name, desc, elements) = (name.into(), desc.into(), elements.to_vec());
         Fighter { name, sprite, desc, hp, max_hp, power: power + mods.power, elements, aggro, mods, ..Default::default() }
+    }
+
+    /// The rites it can cast: the forge's swaps if it has any, else the base ones its elements make.
+    pub fn rite_list(&self) -> Vec<&'static Combo> {
+        if self.rites.is_empty() { combos_for(&self.elements) } else { self.rites.iter().map(|&i| &COMBOS[i]).collect() }
     }
 
     pub fn level(&self, c: &Combo) -> usize {
@@ -284,7 +291,7 @@ impl Battle {
 
     /// Combos `s` can pay for right now, at their level.
     pub fn ready(&self, s: usize) -> Vec<&'static Combo> {
-        COMBOS.iter().filter(|c| self.f[s].payment(c, &self.f[s].stacks).is_some()).collect()
+        self.f[s].rite_list().into_iter().filter(|c| self.f[s].payment(c, &self.f[s].stacks).is_some()).collect()
     }
 
 
@@ -295,9 +302,10 @@ impl Battle {
 
     /// How high `s` can push its surge: some opponents jam it.
     pub fn surge_cap(&self, s: usize) -> i32 {
+        let top = MAX_SURGE + self.f[s].mods.surge_room.max(0);
         match self.f[1 - s].mods.foe_surge_cap {
-            0 => MAX_SURGE,
-            jam => jam.min(MAX_SURGE),
+            0 => top,
+            jam => jam.min(top),
         }
     }
 
@@ -413,6 +421,7 @@ impl Battle {
                     let q = ((f.max_hp - f.hp) * 4 / f.max_hp.max(1)).clamp(0, 3);
                     (format!("{q} quarters of HP lost"), at_level(v, l) * q)
                 }
+                Effect::Opener(v) if nth == 0 => ("first rite this turn".into(), at_level(v, l)),
                 Effect::ShieldBlast(p) => {
                     blast = shield.max(0) * at_level(p, l) / 100;
                     continue;
@@ -457,7 +466,7 @@ impl Battle {
 
     /// The biggest combo of `s` the given stacks can pay for.
     pub fn best_combo(&self, s: usize, stacks: &[Element]) -> Option<&'static Combo> {
-        COMBOS.iter().filter(|c| self.f[s].payment(c, stacks).is_some()).max_by_key(|c| self.f[s].cost(c).len())
+        self.f[s].rite_list().into_iter().filter(|c| self.f[s].payment(c, stacks).is_some()).max_by_key(|c| self.f[s].cost(c).len())
     }
 
     /// Total damage if `s` cast every rite its stacks pay for now, biggest first.
@@ -665,7 +674,7 @@ impl Battle {
             self.f[1].loaded.push(c);
         }
         if !self.f[1].loaded.is_empty() {
-            self.f[1].break_at = (self.loaded_damage() * BREAK_PCT / 100).max(BREAK_MIN);
+            self.f[1].break_at = (self.loaded_damage() * (BREAK_PCT - self.f[0].mods.easy_break) / 100).max(BREAK_MIN);
             let names: Vec<&str> = self.f[1].loaded.iter().map(|c| c.title(self.f[1].level(c))).collect();
             self.log.push(format!("{} loads {}", self.f[1].name, names.join(", ")));
             self.events.push(Event::Load);
@@ -923,7 +932,8 @@ impl Battle {
                     (self.f[t].shield, self.f[t].brittle) = (0, false);
                 }
                 // in hit_damage, worked out before any effect lands
-                Effect::PerSurge(_) | Effect::Detonate | Effect::PerReveal(_) | Effect::PerBurn(_) | Effect::PerQuarterLost(_) => {}
+                Effect::PerSurge(_) | Effect::Detonate | Effect::PerReveal(_) | Effect::PerBurn(_) | Effect::PerQuarterLost(_) | Effect::Opener(_) => {}
+                Effect::Spikes(n) => self.f[a].mods.thorns += up(n),
                 Effect::Surge(v) => self.f[a].surge = (self.f[a].surge + up(v)).min(self.surge_cap(a)),
                 // capped until mastered, or casting it again and again would grow shield without end
                 Effect::DoubleShield(cap) => self.f[a].shield += self.f[a].shield.clamp(0, double_cap(cap, lvl).unwrap_or(i32::MAX)),
@@ -1007,6 +1017,7 @@ impl Battle {
                 // a break blunts the load rather than stopping it: enemies always land something
                 self.f[t].broken = true;
                 self.events.push(Event::Break);
+                self.procs(a, &[("easy_break", self.f[a].mods.easy_break > 0)]);
                 self.log.push(format!("The loaded rites of {} crack: they will hit for half", self.f[t].name));
             }
         }
@@ -1559,6 +1570,23 @@ mod tests {
     }
 
     #[test]
+    fn forge_rites_pay_off_only_when_played_for() {
+        // Spark Gap: only as the turn's first rite
+        let gap = combo("Spark Gap");
+        let mut b = duel();
+        b.f[0].elements = vec![Ember, Spark];
+        let first = b.hit_damage(0, gap);
+        b.f[0].cast_n = 1;
+        assert_eq!(b.hit_damage(0, gap), first - 7);
+        // Iron Thorns: thorns for the rest of the battle, so cast it early
+        let mut b = duel();
+        b.f[0].elements = vec![Stone, Spark];
+        b.f[0].stacks = vec![Stone, Spark, Stone, Spark];
+        assert!(b.cast(combo("Iron Thorns")) && b.cast(combo("Iron Thorns")));
+        assert_eq!((b.f[0].mods.thorns, b.f[0].shield, b.f[1].hp), (2, 8, 100), "no hit, two casts, 2 thorns");
+    }
+
+    #[test]
     fn setup_rites_spend_no_surge_and_mastery_and_echo_add_up() {
         // a rite that deals no damage keeps your surge and your first-rite slot for the hit after it
         let mut b = duel();
@@ -1608,6 +1636,7 @@ mod tests {
         let mut b = duel();
         b.f[0].mods.echo = 1;
         b.f[0].shield = 20;
+        b.f[0].elements = vec![Tide, Stone, Spark];
         b.f[0].stacks = vec![Tide, Stone, Spark];
         let promised = b.attack_damage(0);
         assert!(b.cast(combo("Geode Surge")));
@@ -1713,6 +1742,23 @@ mod tests {
         b.end_turn();
         assert!(b.f[1].loaded.is_empty());
         assert_eq!(b.f[0].hp, hp - due, "it fires the moment its turn starts");
+    }
+
+    #[test]
+    fn breaker_and_battery_keystones_move_the_break_and_the_surge_cap() {
+        let break_at = |easy| {
+            let mut b = duel();
+            b.f[0].mods.easy_break = easy;
+            b.f[1].stacks = vec![Tide, Spark, Tide, Spark];
+            b.load();
+            b.f[1].break_at
+        };
+        assert!(break_at(34) < break_at(0), "Breaker: their loads break sooner");
+        let mut b = duel();
+        b.f[0].mods.surge_room = 5;
+        assert_eq!(b.surge_cap(0), MAX_SURGE + 5);
+        b.f[1].mods.foe_surge_cap = 3;
+        assert_eq!(b.surge_cap(0), 3, "a foe's damper still holds it down");
     }
 
     #[test]

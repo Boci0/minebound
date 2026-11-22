@@ -132,6 +132,9 @@ pub struct Run {
     given: Vec<usize>,
     /// deeds the save had done as the run began, one bit per `save::DEEDS`: what they open can come up
     pub deeds: u32,
+    /// wagers on, one bit per `WAGERS`, and forge rites swapped in, one bit per `COMBOS` past `BASE_COMBOS`
+    pub wagers: u32,
+    pub alts: u32,
 }
 
 impl Run {
@@ -173,6 +176,8 @@ impl Run {
             bare_shops: 0,
             given: vec![],
             deeds,
+            wagers: 0,
+            alts: 0,
         };
         run.gen_map();
         run.note = format!("{}, floor 1.", EXPEDITIONS[exp].name);
@@ -200,6 +205,9 @@ impl Run {
         }
         if let Some(b) = self.blessing {
             (BLESSINGS[b].apply)(&mut m);
+        }
+        for k in self.keystones() {
+            (KEYSTONES[k].apply)(&mut m);
         }
         (TWISTS[self.twist].me)(&mut m);
         (EXPEDITIONS[self.exp].me)(&mut m);
@@ -264,9 +272,56 @@ impl Run {
         self.brands.iter().filter(|b| b.0 == id).count() >= self.level(id)
     }
 
-    /// The rites this hero can make, by index in `COMBOS`.
+    /// The rites this hero can make, by index in `COMBOS`: its base ones, with forge rites swapped in.
     pub fn rites(&self) -> Vec<usize> {
-        combos_for(&HEROES[self.hero].elements).iter().map(|c| combo_id(c)).collect()
+        let alt = |c: &Combo| (BASE_COMBOS..COMBOS.len()).find(|&i| self.alts & 1 << (i - BASE_COMBOS) != 0 && COMBOS[i].needs == c.needs);
+        combos_for(&HEROES[self.hero].elements).iter().map(|c| alt(c).unwrap_or_else(|| combo_id(c))).collect()
+    }
+
+    /// The keystones on: one for each forge rite swapped in, by index in `KEYSTONES`.
+    pub fn keystones(&self) -> Vec<usize> {
+        self.rites().into_iter().filter(|&i| i >= BASE_COMBOS).map(|i| i - BASE_COMBOS).collect()
+    }
+
+    /// The hero's trait, then each keystone on, as the battle's passive tooltip says it.
+    fn trait_text(&self) -> String {
+        self.keystones().iter().fold(HEROES[self.hero].passive_desc.to_string(), |s, &k| format!("{s}\n{}: {}", COMBOS[BASE_COMBOS + k].name, KEYSTONES[k].text))
+    }
+
+    /// Sets the forge's wagers and rite swaps for this run, before its first room; Wild Hands hands
+    /// over floor 1's pact now.
+    pub fn arm(&mut self, wagers: u32, alts: u32) {
+        (self.wagers, self.alts) = (wagers, alts);
+        self.wild_hands();
+    }
+
+    fn wagered(&self, k: usize) -> bool {
+        self.wagers & 1 << k != 0
+    }
+
+    /// With Wild Hands on, a random pact not yet held, as a floor begins.
+    fn wild_hands(&mut self) {
+        if !self.wagered(WILD_HANDS) {
+            return;
+        }
+        let pool: Vec<usize> = (0..CHARMS.len()).filter(|&i| self.pact_open(i) && !self.charms.contains(&i)).collect();
+        if !pool.is_empty() {
+            let id = pool[self.rng.below(pool.len())];
+            self.add_charm(id);
+            self.note += &format!(" Wild Hands gives {}.", CHARMS[id].name);
+        }
+    }
+
+    /// Ore this run banks, ended as `won` after `wins` fights: 2 a fight, 10 a boss, 20 an ending,
+    /// and more for each wager on. Developer runs bank none.
+    pub fn ore(&self, wins: usize, won: bool) -> u32 {
+        if self.debug {
+            return 0;
+        }
+        let bosses = self.floor + won as usize;
+        let base = 2 * wins as u32 + 10 * bosses as u32 + 20 * self.found.len() as u32;
+        let pct: u32 = (0..WAGERS.len()).filter(|&k| self.wagered(k)).map(|k| WAGERS[k].ore_pct).sum();
+        base * (100 + pct) / 100
     }
 
     /// Burns `brand` onto rite `id`; with its sockets full, the oldest brand on it goes.
@@ -454,6 +509,11 @@ impl Run {
         (d.mods)(&mut m);
         (TWISTS[self.twist].foe)(&mut m);
         (x.foe)(&mut m);
+        let mut hp = hp;
+        for w in WAGERS.iter().enumerate().filter(|(k, _)| self.wagered(*k)).map(|(_, w)| w) {
+            (w.foe)(&mut m);
+            hp = (hp * w.hp_pct / 100).max(1);
+        }
         // only bosses come unscaled
         if !scale {
             (x.boss)(&mut m);
@@ -504,10 +564,21 @@ impl Run {
                     }
                     _ => vec![self.enemy(self.boss_def(), false, 1, 190)],
                 };
+                let mut foes = foes;
+                if self.wagered(WILD_GIFTS) {
+                    for f in &mut foes {
+                        let id = self.rng.below(CHARMS.len());
+                        let power = f.mods.power;
+                        (CHARMS[id].apply)(&mut f.mods);
+                        f.power += f.mods.power - power;
+                        f.desc += &format!(" Wild gift: {}.", CHARMS[id].name);
+                    }
+                }
                 let h = &HEROES[self.hero];
-                let mut me = Fighter::new(h.name, h.sprite, h.passive_desc, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
+                let mut me = Fighter::new(h.name, h.sprite, &self.trait_text(), self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
                 me.ups = self.ups.clone();
                 me.brands = self.brands.clone();
+                me.rites = self.rites();
                 Stage::Battle(Battle::new(me, foes, Rng::new(self.rng.next())))
             }
             NodeKind::Encounter => Stage::Event(&ENCOUNTERS[self.rng.below(ENCOUNTERS.len())], None),
@@ -608,6 +679,7 @@ impl Run {
                 Some(e) => format!("{}, past the last boss.", ENDINGS[e].name),
                 None => format!("{}, floor {}.", EXPEDITIONS[self.exp].name, self.floor + 1),
             };
+            self.wild_hands();
         }
         Stage::Map
     }
@@ -923,12 +995,37 @@ mod tests {
     thread_local! {
         /// the deeds `play` starts its runs with (none, unless a probe says otherwise)
         static PLAY_DEEDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        /// the forge rites `play` swaps in (none, unless a probe says otherwise)
+        static PLAY_ALTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         /// per fight: (node kind, last foe faced, hero won, [loads, breaks, hero HP lost, turns])
         static PROBE: std::cell::RefCell<Vec<(usize, String, bool, [usize; 4])>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
     /// Plays every hero with no deeds and with all of them, and how runs holding each opened pact or
     /// brand did. `cargo test --release probe_deeds -- --ignored --nocapture`
+    /// Each bearer's wins with its base rites, then with each forge rite swapped in alone. The bot
+    /// casts its biggest rite, so it plays none of them as meant: read it for broken, not for fine.
+    /// `cargo test --release probe_forge_rites -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn probe_forge_rites() {
+        const RUNS: u64 = 300;
+        let wins = |hero, alts| {
+            PLAY_ALTS.with(|a| a.set(alts));
+            (0..RUNS).map(|s| play(s, hero, 0, &[])).filter(|r| r.1 || r.0.floor >= FLOORS).count()
+        };
+        for hero in 0..FIRST_HEROES + 1 {
+            let mut line = format!("{:12} base {:3}", HEROES[hero].name, wins(hero, 0));
+            for base in combos_for(&HEROES[hero].elements) {
+                if let Some(alt) = (BASE_COMBOS..COMBOS.len()).find(|&i| COMBOS[i].needs == base.needs) {
+                    line += &format!("  {} {:3}", COMBOS[alt].name, wins(hero, 1 << (alt - BASE_COMBOS)));
+                }
+            }
+            println!("{line}  (of {RUNS})");
+        }
+        PLAY_ALTS.with(|a| a.set(0));
+    }
+
     #[test]
     #[ignore]
     fn probe_deeds() {
@@ -1012,6 +1109,7 @@ mod tests {
     /// Plays a whole run, carrying `keys` from the start. Returns the run as it ended, and whether it won.
     fn play(seed: u64, hero: usize, exp: usize, keys: &[usize]) -> (Run, bool) {
         let (mut run, mut stage) = Run::with_deeds(seed, hero, exp, PLAY_DEEDS.with(|d| d.get()));
+        run.arm(0, PLAY_ALTS.with(|a| a.get()));
         run.keys = keys.to_vec();
         run.hp = run.max_hp();
         let mut pick = Rng::new(seed ^ 0xABCD);

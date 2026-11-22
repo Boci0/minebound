@@ -1,7 +1,7 @@
 //! Progress kept between launches, as a few lines of text in %APPDATA%\Minebound\save.txt.
 //! No mid-run save: only what the overworld and the settings need.
 
-use crate::data::{ENDINGS, EXPEDITIONS, FIRST_HEROES, HEROES, SETS, SET_AT};
+use crate::data::{BASE_COMBOS, COMBOS, ENDINGS, EXPEDITIONS, FIRST_HEROES, HEROES, RITE_PRICE, SETS, SET_AT, WAGERS};
 use crate::run::{Run, FLOORS};
 
 /// What a deed opens: a pact, a brand or a hero, by name.
@@ -53,16 +53,26 @@ pub struct Save {
     /// deeds done, one bit per index in `DEEDS`, and those the deeds sheet has shown since
     pub deeds: u32,
     pub deeds_seen: u32,
+    /// ore banked from runs, spent at the forge
+    pub ore: u32,
+    /// wagers bought and wagers on, one bit per `WAGERS`
+    pub wagers: u32,
+    pub wagers_on: u32,
+    /// forge rites bought, one bit per `COMBOS` past `BASE_COMBOS`, and each hero's swapped in
+    pub alts: u32,
+    pub loadout: Vec<u32>,
 }
 
 impl Default for Save {
     fn default() -> Save {
-        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8), rules_seen: false, daily: (0, 0), endings: 0, deeds: 0, deeds_seen: 0 }
+        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8), rules_seen: false, daily: (0, 0), endings: 0, deeds: 0, deeds_seen: 0, ore: 0, wagers: 0, wagers_on: 0, alts: 0, loadout: vec![0; HEROES.len()] }
     }
 }
 
 pub const CLEARED: usize = FLOORS + 1;
 const ALL_DEEDS: u32 = (1 << DEEDS.len()) - 1;
+const ALL_WAGERS: u32 = (1 << WAGERS.len()) - 1;
+const ALL_ALTS: u32 = (1 << (COMBOS.len() - BASE_COMBOS)) - 1;
 
 /// Deeds a run did, ended as `won`, by what it holds as it ends.
 fn deeds_in(run: &Run, won: bool) -> u32 {
@@ -103,6 +113,14 @@ impl Save {
                 (Some("daily"), &[day, r]) => save.daily = (day as u64, r.min(CLEARED)),
                 (Some("endings"), &[bits]) => save.endings = bits as u32 & ((1 << ENDINGS.len()) - 1),
                 (Some("deeds"), &[done, seen]) => (save.deeds, save.deeds_seen) = (done as u32 & ALL_DEEDS, seen as u32 & ALL_DEEDS),
+                (Some("ore"), &[n]) => save.ore = n as u32,
+                (Some("wagers"), &[have, on]) => (save.wagers, save.wagers_on) = (have as u32 & ALL_WAGERS, on as u32 & have as u32 & ALL_WAGERS),
+                (Some("alts"), &[have]) => save.alts = have as u32 & ALL_ALTS,
+                (Some("loadout"), heroes) => {
+                    for (h, &b) in heroes.iter().enumerate().take(HEROES.len()) {
+                        save.loadout[h] = b as u32;
+                    }
+                }
                 (Some("best"), &[x, ref heroes @ ..]) if x < EXPEDITIONS.len() => {
                     for (h, &b) in heroes.iter().enumerate().take(HEROES.len()) {
                         save.best[x][h] = b.min(CLEARED);
@@ -111,6 +129,10 @@ impl Save {
                 _ => {}
             }
         }
+        // only rites bought can be swapped in
+        for l in &mut save.loadout {
+            *l &= save.alts;
+        }
         // a save from before deeds gets every one its progress already shows
         save.deeds |= save.deeds_from_progress();
         save
@@ -118,6 +140,12 @@ impl Save {
 
     fn text(&self) -> String {
         let mut s = format!("unlocked {}\nvolume {} {}\nrules {}\ndaily {} {}\nendings {}\ndeeds {} {}\n", self.unlocked, self.volume.0, self.volume.1, if self.rules_seen { RULES } else { 0 }, self.daily.0, self.daily.1, self.endings, self.deeds, self.deeds_seen);
+        let loadout: Vec<String> = self.loadout.iter().map(|b| b.to_string()).collect();
+        s += &format!("ore {}
+wagers {} {}
+alts {}
+loadout {}
+", self.ore, self.wagers, self.wagers_on, self.alts, loadout.join(" "));
         for (x, heroes) in self.best.iter().enumerate() {
             let list: Vec<String> = heroes.iter().map(|b| b.to_string()).collect();
             s += &format!("best {x} {}\n", list.join(" "));
@@ -156,10 +184,12 @@ impl Save {
     /// ending's floor ends it. A run that used a developer shortcut is not kept.
     /// Returns the expedition this opened, if any.
     pub fn finish(&mut self, run: &Run, won: bool) -> Option<usize> {
+        let ore = run.ore(run.wins, won);
         let (reached, won) = (run.floor + 1, won || run.floor >= FLOORS);
         if !run.debug {
             self.endings |= run.found.iter().fold(0, |bits, &e| bits | 1 << e);
             self.deeds |= deeds_in(run, won);
+            self.ore += ore;
         }
         let opened = match (run.debug, run.daily) {
             (true, _) => None,
@@ -186,6 +216,26 @@ impl Save {
             (7, bearers >= FIRST_HEROES),
         ];
         done.iter().filter(|d| d.1).fold(0, |bits, d| bits | 1 << d.0)
+    }
+
+    /// Buys wager `k` with ore, if not held and affordable. True if bought.
+    pub fn buy_wager(&mut self, k: usize) -> bool {
+        let ok = self.wagers & 1 << k == 0 && self.ore >= WAGERS[k].price;
+        if ok {
+            self.ore -= WAGERS[k].price;
+            self.wagers |= 1 << k;
+        }
+        ok
+    }
+
+    /// Buys forge rite `k` (its index past `BASE_COMBOS`) with ore, if not held and affordable. True if bought.
+    pub fn buy_alt(&mut self, k: usize) -> bool {
+        let ok = self.alts & 1 << k == 0 && self.ore >= RITE_PRICE;
+        if ok {
+            self.ore -= RITE_PRICE;
+            self.alts |= 1 << k;
+        }
+        ok
     }
 
     /// Deeds done but not yet shown on the deeds sheet.
@@ -244,6 +294,56 @@ mod tests {
         assert_eq!(junk.unlocked, EXPEDITIONS.len());
         assert_eq!(junk.volume, (6, 8));
         assert_eq!(Save::parse("endings 255").endings, 7, "only endings that exist");
+    }
+
+    #[test]
+    fn runs_bank_ore_that_buys_wagers_and_rites_which_change_the_next_run() {
+        use crate::data::{combo_id, combos_for, BASE_COMBOS, COMBOS, WAGERS, WILD_HANDS};
+        let mut s = Save::default();
+        // a lost run on floor 2 after 5 fights: 2 a fight, 10 for floor 1's boss
+        let (mut run, _) = Run::new(3, 0, 0);
+        (run.floor, run.wins) = (1, 5);
+        s.finish(&run, false);
+        assert_eq!(s.ore, 20);
+        // wagers on pay more; a developer run pays nothing
+        run.wagers = 0b11;
+        assert_eq!(run.ore(5, false), 20 * (100 + WAGERS[0].ore_pct + WAGERS[1].ore_pct) / 100);
+        run.debug = true;
+        assert_eq!(run.ore(5, true), 0);
+        // buying costs ore and cannot happen twice or on credit
+        s.ore = 100;
+        assert!(s.buy_wager(0) && !s.buy_wager(0));
+        assert!(s.buy_alt(0) && !s.buy_alt(0) && !s.buy_alt(1), "60 + 40 spent, 0 left");
+        assert_eq!(s.ore, 0);
+        // a swapped rite takes the place of the base rite with its elements; the rest stay
+        let scald = HEROES.iter().position(|h| h.name == "Scaldwright").unwrap();
+        (s.wagers_on, s.loadout[scald]) = (1, 1);
+        let (mut r, _) = Run::new(3, scald, 0);
+        let base = r.rites();
+        r.arm(s.wagers_on, s.loadout[scald]);
+        let swapped = r.rites();
+        assert_eq!(swapped.len(), base.len());
+        assert!(swapped.contains(&BASE_COMBOS) && !base.contains(&BASE_COMBOS));
+        let replaced: Vec<_> = base.iter().filter(|i| !swapped.contains(i)).collect();
+        assert_eq!(replaced.len(), 1);
+        assert_eq!(COMBOS[*replaced[0]].needs, COMBOS[BASE_COMBOS].needs);
+        // every forge rite has a base rite to swap with and a hint, and no hero starts with one
+        assert_eq!(crate::data::KEYSTONES.len(), COMBOS.len() - BASE_COMBOS);
+        // a forge rite swapped in brings its keystone into the run's numbers
+        assert_eq!(r.keystones(), vec![0]);
+        assert_eq!(r.mods().burn_bonus, Run::new(3, scald, 0).0.mods().burn_bonus + 2);
+        for c in &COMBOS[BASE_COMBOS..] {
+            assert!(COMBOS[..BASE_COMBOS].iter().any(|b| b.needs == c.needs), "{} swaps with a base rite", c.name);
+        }
+        assert!(HEROES.iter().all(|h| combos_for(&h.elements).iter().all(|c| combo_id(c) < BASE_COMBOS)));
+        // a save keeps all of it, and drops a swap for a rite it never bought
+        assert_eq!(Save::parse(&s.text()), s);
+        assert_eq!(Save::parse("alts 1
+loadout 3 2").loadout[..2], [1, 0]);
+        // Wild Hands hands over a pact before the first room
+        let (mut w, _) = Run::new(3, 0, 0);
+        w.arm(1 << WILD_HANDS, 0);
+        assert_eq!(w.charms.len(), 1);
     }
 
     #[test]

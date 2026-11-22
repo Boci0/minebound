@@ -26,7 +26,7 @@ full view.
   - [Controls](#controls) and [the right-click shortcut](#the-right-click-shortcut)
   - [Your boards](#your-boards) and [rites](#rites-and-damage)
   - [Heroes](#heroes), [a run](#a-run), [pacts](#pacts), [brands](#brands), [blessings](#blessings)
-  - [Enemies](#enemies), [expeditions](#expeditions), [deeds](#deeds) and [tips](#tips)
+  - [Enemies](#enemies), [expeditions](#expeditions), [deeds](#deeds), [the forge](#the-forge) and [tips](#tips)
 - [Building from source](#building-from-source)
 - [Development](#development)
 - [Credits](#credits)
@@ -36,9 +36,12 @@ full view.
 
 - **Five heroes**, each with their own elements, rites and play style; the fifth is earned with a deed.
 - **Deeds** to do across runs, each opening a new pact, brand or hero for every run after.
+- **The Forge**: every run banks ore, won or lost. Spend it on wagers that make enemies tougher for
+  more ore, and on forge rites that swap in for a bearer's own and turn it toward a new play style.
 - **A board of cracking ground**: mine crystals in plain view, but every one you take cracks the
   tiles around it, and a tile cracked three times caves in on you.
-- **Five elements** and 17 rites that need the right mix of gems, each upgradable to level 3.
+- **Five elements** and 17 rites that need the right mix of gems, each upgradable to level 3,
+  plus 10 forge rites to buy and swap in.
 - **Element reactions**: hit a marked foe with a new element to ignite, douse, gust, crush or arc.
 - **Branching runs** across three floors: battles, elites, encounters, shops, shrines, treasure
   and a boss at the end of each floor.
@@ -468,6 +471,43 @@ done. Progress from before deeds existed counts.
 | Dawn Delver | Clear a daily descent | Brand: Siphon |
 | Two Paths | Clear a descent with two different bearers | Pact: Bone Pact |
 | Full Company | Clear a descent with each of the first four bearers | Bearer: Galvanist |
+
+### The Forge
+
+Every run banks **ore** as it ends, won or lost: 2 for each fight won, 10 for each boss and 20 for
+each secret ending, more with wagers on. The run's summary says how much. Spend it at the **Forge**,
+a button on the map of The Below. The daily descent banks ore too, but never uses wagers or forge
+rites, so it stays the same for everyone.
+
+**Wagers** are bought once, then switched on or off for every descent after. Each one on changes the
+enemies and pays more ore.
+
+| Wager | What it does | Ore | Price |
+| --- | --- | --- | --- |
+| Iron Hides | Enemies have 30% more HP | +25% | 40 |
+| Bloodlust | Enemies gain 1 power every second turn | +25% | 40 |
+| Brambles | Enemies have 2 thorns | +20% | 40 |
+| Glass Foes | Enemies have half HP but 3 more power | +15% | 50 |
+| Wild Gifts | Every enemy holds a random pact | +20% | 60 |
+| Wild Hands | A random pact for you on every floor | none | 80 |
+
+**Forge rites** cost 60 ore each. Each takes the place of the base rite with the same two elements,
+for whichever bearer you choose it for, and you can swap back at any time. While one is in use it
+brings a **keystone**: a passive that is on all battle and turns the bearer toward one way of playing.
+Keystones show as badges under your pacts in battle and light up when they take effect.
+
+| Forge rite | Replaces | Does | Keystone |
+| --- | --- | --- | --- |
+| Scald Rain | Steam Burst | +2 damage, 5 burn | Burn: burn on the foe deals 2 more each turn |
+| Kindle | Raze | +2 power this battle, 4 shield | Ramp: +1 power every turn |
+| Blood Pyre | Magma | You lose 4 HP, +9 damage | Blood: below half HP, +3 power |
+| Spark Gap | Plasma | +7 damage as your first rite this turn | Alpha: your first rite each turn deals 20% more |
+| Undertow | Mistveil | +3 damage, foe gets 1 fewer pick | Breaker: their loaded rites break with a third less damage |
+| Tidal Ram | Bulwark | Your shield becomes 200% damage | Wall: every crystal you mine gives 1 shield |
+| Capacitor | Conduction | +8 surge | Battery: surge carries over between turns and can reach 15 |
+| Rockslide | Sandstorm | +2 damage, crack 3 foe tiles | Quarry: the foe's boards start with 1 more fault |
+| Ball Lightning | Thunderclap | +1 damage per pick used | Digger: +1 pick each turn, but 2 less power |
+| Iron Thorns | Lodestone | 4 shield, +1 thorns this battle | Thorns: start each battle with 2 thorns |
 
 ### Tips
 
