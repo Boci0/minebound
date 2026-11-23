@@ -95,7 +95,7 @@ pub struct Fighter {
     pub ups: Vec<usize>,
     /// brands burnt onto rites: (index in `COMBOS`, index in `BRANDS`), up to the rite's level each, oldest first
     pub brands: Vec<(usize, usize)>,
-    /// the rites it can cast, by index in `COMBOS`; empty means the base ones its elements make
+    /// the rites it can cast, by index in `COMBOS`; empty means the enemy rites its elements make
     pub rites: Vec<usize>,
 }
 
@@ -110,7 +110,7 @@ impl Fighter {
         Fighter { name, sprite, desc, hp, max_hp, power: power + mods.power, elements, aggro, mods, ..Default::default() }
     }
 
-    /// The rites it can cast: the forge's swaps if it has any, else the base ones its elements make.
+    /// The rites it can cast: a hero's basics and the rites it found, else the ones its elements make.
     pub fn rite_list(&self) -> Vec<&'static Combo> {
         if self.rites.is_empty() { combos_for(&self.elements) } else { self.rites.iter().map(|&i| &COMBOS[i]).collect() }
     }
@@ -191,6 +191,7 @@ fn spend(stacks: &mut Vec<Element>, cost: &[Element]) {
 }
 
 /// Things that just happened, for the screen to animate and voice.
+#[derive(Debug)]
 pub enum Event {
     Flip,
     /// `side` claimed the crystals on these tiles of its `element` board. Carried here because the
@@ -213,6 +214,9 @@ pub enum Event {
     Brittle { side: usize },
     /// a rite shattered `side`'s shield before its hit (Pierce); a brittle one is gone without shattering back
     Pierced { side: usize },
+    /// the turn passes: both sides' HP (and the wave) as it does, before the next turn's first blow, so
+    /// a heal and the hit that follows it in the same moment show as two numbers, not their sum
+    Pass { hp: [i32; 2], wave: usize },
 }
 
 /// `f[0]` is the player, `f[1]` the current enemy. Both sides obey exactly the same rules.
@@ -291,7 +295,13 @@ impl Battle {
 
     /// Combos `s` can pay for right now, at their level.
     pub fn ready(&self, s: usize) -> Vec<&'static Combo> {
-        self.f[s].rite_list().into_iter().filter(|c| self.f[s].payment(c, &self.f[s].stacks).is_some()).collect()
+        self.f[s].rite_list().into_iter().filter(|c| self.f[s].payment(c, &self.f[s].stacks).is_some() && !self.wasted(s, c)).collect()
+    }
+
+    /// A rite that only heals does nothing at full HP, so it is not cast then: its gems would be lost.
+    pub fn wasted(&self, s: usize, c: &Combo) -> bool {
+        let f = &self.f[s];
+        f.hp >= f.max_hp && f.effects(c).all(|(e, _)| matches!(e, Effect::Heal(_)))
     }
 
 
@@ -399,6 +409,10 @@ impl Battle {
         steps.push((format!("{gems} gems x {power} power"), d.to_string()));
         plus(steps, &mut d, format!("rite {} this turn", nth + 1), nth * f.mods.chain);
         plus(steps, &mut d, "rite bonus".into(), f.mods.rite_bonus);
+        // a rite the hero found (not a basic; enemies carry no found rites) outdoes Attack gem for gem
+        if !f.rites.is_empty() && !is_basic(c) {
+            plus(steps, &mut d, "found rite".into(), gems * FOUND_PER_GEM);
+        }
         let lvl = f.level(c);
         let mut blast = 0;
         for (e, l) in f.effects(c) {
@@ -422,6 +436,7 @@ impl Battle {
                     (format!("{q} quarters of HP lost"), at_level(v, l) * q)
                 }
                 Effect::Opener(v) if nth == 0 => ("first rite this turn".into(), at_level(v, l)),
+                Effect::PerTurn(v) => (format!("turn {}", self.turn), at_level(v, l) * self.turn as i32),
                 Effect::ShieldBlast(p) => {
                     blast = shield.max(0) * at_level(p, l) / 100;
                     continue;
@@ -466,7 +481,7 @@ impl Battle {
 
     /// The biggest combo of `s` the given stacks can pay for.
     pub fn best_combo(&self, s: usize, stacks: &[Element]) -> Option<&'static Combo> {
-        self.f[s].rite_list().into_iter().filter(|c| self.f[s].payment(c, stacks).is_some()).max_by_key(|c| self.f[s].cost(c).len())
+        self.f[s].rite_list().into_iter().filter(|c| self.f[s].payment(c, stacks).is_some() && !self.wasted(s, c)).max_by_key(|c| self.f[s].cost(c).len())
     }
 
     /// Total damage if `s` cast every rite its stacks pay for now, biggest first.
@@ -695,6 +710,7 @@ impl Battle {
         let hoard = if f.stacks.len() >= 3 { f.mods.hoard_shield } else { 0 };
         f.shield += banked + hoard;
         self.procs(a, &[("reveal_shield", banked > 0), ("hoard_shield", hoard > 0)]);
+        self.events.push(Event::Pass { hp: [self.f[0].hp, self.f[1].hp], wave: self.wave });
         self.active = 1 - a;
         if self.active == 0 {
             self.turn += 1;
@@ -838,7 +854,7 @@ impl Battle {
     /// Cast `c` paying exactly the gems in `paid`, as the player chose them in its sockets.
     pub fn cast_with(&mut self, c: &'static Combo, paid: &[Element]) -> bool {
         let a = self.active;
-        if self.over() || !self.f[a].fits(c, paid) || !pays(&self.f[a].stacks, paid) {
+        if self.over() || self.wasted(a, c) || !self.f[a].fits(c, paid) || !pays(&self.f[a].stacks, paid) {
             return false;
         }
         spend(&mut self.f[a].stacks, paid);
@@ -932,7 +948,7 @@ impl Battle {
                     (self.f[t].shield, self.f[t].brittle) = (0, false);
                 }
                 // in hit_damage, worked out before any effect lands
-                Effect::PerSurge(_) | Effect::Detonate | Effect::PerReveal(_) | Effect::PerBurn(_) | Effect::PerQuarterLost(_) | Effect::Opener(_) => {}
+                Effect::PerSurge(_) | Effect::Detonate | Effect::PerReveal(_) | Effect::PerBurn(_) | Effect::PerQuarterLost(_) | Effect::Opener(_) | Effect::PerTurn(_) => {}
                 Effect::Spikes(n) => self.f[a].mods.thorns += up(n),
                 Effect::Surge(v) => self.f[a].surge = (self.f[a].surge + up(v)).min(self.surge_cap(a)),
                 // capped until mastered, or casting it again and again would grow shield without end
@@ -967,6 +983,19 @@ impl Battle {
                 Effect::Cleanse => (self.f[a].burn, self.f[a].weak) = (0, 0),
                 Effect::DrainAll => self.f[t].stacks.clear(),
                 Effect::Simmer => self.f[t].simmer = true,
+                Effect::Armor(n) => self.f[a].mods.armor += up(n),
+                Effect::Regen(n) => self.f[a].mods.regen += up(n),
+                Effect::Defuse(n) => {
+                    let keep = self.f[t].loaded.len().saturating_sub(up(n as i32) as usize);
+                    self.f[t].loaded.truncate(keep);
+                }
+                Effect::Gems(n) => {
+                    for _ in 0..n {
+                        let k = self.rng.below(self.f[a].elements.len());
+                        let e = self.f[a].elements[k];
+                        self.f[a].stacks.push(e);
+                    }
+                }
             }
         }
         if hits {
@@ -1720,6 +1749,25 @@ mod tests {
             // the last pick: with a rite still paid for the hero keeps the turn, else it passes
             assert_eq!(b.active == 1, ends);
         }
+    }
+
+    #[test]
+    fn a_heal_is_not_cast_at_full_hp_so_its_gem_is_kept() {
+        let mut b = duel();
+        let heal = &COMBOS[crate::data::basic(2, Gale)];
+        b.f[0].rites = vec![crate::data::basic(2, Gale)];
+        b.f[0].stacks = vec![Gale, Gale];
+        b.f[0].hp = b.f[0].max_hp;
+        assert!(b.ready(0).is_empty() && !b.cast(heal));
+        assert_eq!(b.f[0].stacks.len(), 2, "the gem stays");
+        b.f[0].hp -= 3;
+        assert!(b.cast(heal) && b.f[0].hp == b.f[0].max_hp);
+        assert!(!b.cast(heal), "full again: the second waits");
+        assert_eq!(b.f[0].stacks.len(), 1);
+        // the hand-over carries the HP of that moment, so the screen can show the heal before what follows
+        b.events.clear();
+        b.end_turn();
+        assert!(matches!(b.events.first(), Some(Event::Pass { hp, .. }) if hp[0] == b.f[0].max_hp));
     }
 
     #[test]

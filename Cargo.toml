@@ -1,5 +1,6 @@
 [package]
 name = "minebound"
+default-run = "minebound"
 version = "1.4.1"
 edition = "2021"
 license = "MIT"
@@ -19,3 +20,9 @@ macroquad = { path = "vendor/macroquad" }
 # optimise dependencies in debug builds too: audio decoding is otherwise many times slower
 [profile.dev.package."*"]
 opt-level = 3
+
+# text-mode play for playtesting (src/bin/play.rs); it reuses the rules modules, so their tests already run with the game
+[[bin]]
+name = "play"
+path = "src/bin/play.rs"
+test = false

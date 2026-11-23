@@ -155,11 +155,22 @@ pub enum Effect {
     DrainAll,
     /// the foe's burn stops halving for the rest of the battle
     Simmer,
-    // the forge's rites
+    // rites found in a run
     /// more damage when it is the caster's first rite this turn
     Opener(i32),
     /// the caster gains this many thorns for the rest of the battle
     Spikes(i32),
+    // found in a run
+    /// every hit on the caster deals this much less for the rest of the battle
+    Armor(i32),
+    /// the caster heals this much at the start of each of its turns for the rest of the battle
+    Regen(i32),
+    /// the foe loses this many of its loaded rites
+    Defuse(usize),
+    /// the caster gains this many gems of its own elements; it does not grow with the rite
+    Gems(usize),
+    /// more damage for each turn of this wave
+    PerTurn(i32),
 }
 use Effect::*;
 
@@ -209,7 +220,7 @@ pub fn rite_text(c: &Combo, lvl: usize, brands: &[&Brand]) -> String {
 impl Effect {
     /// True if a rite with this effect deals damage. The player's rites without one only do what they say.
     pub fn hits(self) -> bool {
-        matches!(self, Damage(_) | PerSurge(_) | Detonate | PerReveal(_) | ShieldBlast(_) | PerBurn(_) | PerQuarterLost(_) | Opener(_))
+        matches!(self, Damage(_) | PerSurge(_) | Detonate | PerReveal(_) | ShieldBlast(_) | PerBurn(_) | PerQuarterLost(_) | Opener(_) | PerTurn(_))
     }
 
     pub fn text(self, lvl: usize) -> String {
@@ -273,6 +284,15 @@ impl Effect {
             Cleanse => "clear your burn and weaken".into(),
             DrainAll => "foe loses all its gems".into(),
             Simmer => "foe's burn stops fading".into(),
+            Armor(n) => format!("+{} armor this battle", at_level(n, lvl)),
+            Regen(n) => format!("heal {} each turn this battle", at_level(n, lvl)),
+            Defuse(n) => {
+                let k = at_level(n as i32, lvl);
+                format!("foe loses {k} loaded rite{}", if k == 1 { "" } else { "s" })
+            }
+            // never grows: a rite must always cost more gems than it gives, or it could be cast forever
+            Gems(n) => format!("gain {n} gem{}", if n == 1 { "" } else { "s" }),
+            PerTurn(v) => format!("+{} damage per turn of the fight", at_level(v, lvl)),
         }
     }
 }
@@ -354,57 +374,55 @@ pub static COMBOS: &[Combo] = &[
     combo("Maelstrom", ["Abyssal Gyre", "Leviathan"], &[Tide, Gale, Stone], &[Shield(6), Heal(4)], Some(Cleanse)),
     combo("Short Circuit", ["Arc Flash", "Blackout"], &[Ember, Gale, Spark], &[Damage(6), Drain(1)], Some(DrainAll)),
     combo("Boilover", ["Scalding Flood", "Hellbroth"], &[Ember, Tide, Spark], &[Burn(3), PerBurn(1)], Some(Simmer)),
-    // bought at the forge with ore: each takes the place of the base rite with the same elements
-    // bought at the forge with ore: each takes the place of the base rite with the same elements, and
-    // each asks for one way of playing the pair that its base rite never does
+    // found in a run, never cast by enemies
     combo("Scald Rain", ["Boiling Rain", "Kettle Storm"], &[Ember, Tide], &[Damage(2), Burn(5)], Some(Detonate)),
     combo("Kindle", ["Stoke the Coals", "Undying Flame"], &[Ember, Gale], &[Stoke(2), Shield(4)], Some(Stoke(1))),
-    combo("Blood Pyre", ["Bloodfire", "Last Rites"], &[Ember, Stone], &[SelfDamage(4), Damage(9)], Some(Lifesteal(50))),
     combo("Spark Gap", ["Arc Gap", "First Light"], &[Ember, Spark], &[Opener(7)], Some(Sure)),
     combo("Undertow", ["Riptide", "Drowning Deep"], &[Tide, Gale], &[Damage(3), Blind(1)], Some(DrainAll)),
     combo("Tidal Ram", ["Breaker Wave", "Tsunami"], &[Tide, Stone], &[ShieldBlast(200)], Some(KeepHalf)),
-    combo("Capacitor", ["Leyden Jar", "Storm Cell"], &[Tide, Spark], &[Surge(8)], Some(Duds(2))),
-    combo("Rockslide", ["Avalanche", "Mountainfall"], &[Gale, Stone], &[Damage(2), Bury(3)], Some(Shatter(2))),
-    combo("Ball Lightning", ["Chain Lightning", "Storm Crown"], &[Gale, Spark], &[PerReveal(1)], Some(Unused)),
     combo("Iron Thorns", ["Barbed Hide", "Iron Maiden"], &[Stone, Spark], &[Shield(4), Spikes(1)], Some(Hold)),
+    combo("Slag Wall", ["Slag Bastion", "Magma Rampart"], &[Ember, Stone], &[Damage(2), Armor(1), Burn(2)], Some(Spikes(2))),
+    combo("Monsoon", ["Long Rains", "Endless Monsoon"], &[Tide, Gale], &[Regen(2), Reveal(1)], Some(Cleanse)),
+    combo("Sinkhole", ["Swallow Hole", "Abyssal Maw"], &[Tide, Stone], &[Defuse(1), Bury(1)], Some(Blind(1))),
+    combo("Wellspring", ["Ley Spring", "Font of Storms"], &[Tide, Spark], &[Gems(1), Surge(2)], Some(Reveal(1))),
+    combo("Erosion", ["Weathering", "Ages Wear"], &[Gale, Stone], &[PerTurn(2)], Some(Weaken(1))),
+    combo("Updraft", ["Thermal", "Jetstream"], &[Gale, Spark], &[Reveal(2), Surge(2)], Some(Duds(2))),
+    combo("Ashfall", ["Cinder Veil", "Black Sky"], &[Ember, Gale, Stone], &[Damage(4), Burn(3), Blind(1)], Some(Simmer)),
+    combo("Stormfront", ["Squall Line", "Supercell"], &[Tide, Gale, Spark], &[Damage(5), Defuse(1)], Some(Blind(2))),
+    combo("Bastion", ["Fortress", "Unbroken"], &[Tide, Stone, Spark], &[Armor(2), Regen(2)], Some(Hold)),
+    combo("Geyser Engine", ["Pressure Engine", "Deep Engine"], &[Tide, Stone, Spark], &[Gems(1), Shield(6)], Some(Steal(2))),
+    combo("Steam Engine", ["Boiler Heart", "Iron Lung"], &[Ember, Tide, Spark], &[Stoke(1), Surge(3)], Some(Reveal(2))),
+    combo("Thunder Anvil", ["Storm Anvil", "Skyforge"], &[Ember, Stone, Spark], &[Damage(5), Armor(1)], Some(Stoke(2))),
+    combo("Arc Furnace", ["Arc Kiln", "Star Furnace"], &[Ember, Stone, Spark], &[PerSurge(2), Gems(1)], Some(KeepSurge)),
+    // the basics every hero starts a run with, one gem each: Attack, Shield and Heal paid in each
+    // element, in `Element` order (see `basic`)
+    combo("Attack", ["Attack", "Attack"], &[Ember], &[Damage(4)], None),
+    combo("Shield", ["Shield", "Shield"], &[Ember], &[Shield(10)], None),
+    combo("Heal", ["Heal", "Heal"], &[Ember], &[Heal(5)], None),
+    combo("Attack", ["Attack", "Attack"], &[Tide], &[Damage(4)], None),
+    combo("Shield", ["Shield", "Shield"], &[Tide], &[Shield(10)], None),
+    combo("Heal", ["Heal", "Heal"], &[Tide], &[Heal(5)], None),
+    combo("Attack", ["Attack", "Attack"], &[Gale], &[Damage(4)], None),
+    combo("Shield", ["Shield", "Shield"], &[Gale], &[Shield(10)], None),
+    combo("Heal", ["Heal", "Heal"], &[Gale], &[Heal(5)], None),
+    combo("Attack", ["Attack", "Attack"], &[Stone], &[Damage(4)], None),
+    combo("Shield", ["Shield", "Shield"], &[Stone], &[Shield(10)], None),
+    combo("Heal", ["Heal", "Heal"], &[Stone], &[Heal(5)], None),
+    combo("Attack", ["Attack", "Attack"], &[Spark], &[Damage(4)], None),
+    combo("Shield", ["Shield", "Shield"], &[Spark], &[Shield(10)], None),
+    combo("Heal", ["Heal", "Heal"], &[Spark], &[Heal(5)], None),
 ];
 
-/// The rites every fighter starts with; the rest of `COMBOS` are the forge's, swapped in one for one.
+/// The rites enemies make from their elements; the run's rites and the basics follow them in `COMBOS`.
 pub const BASE_COMBOS: usize = 17;
-/// What a forge rite brings besides itself: a keystone, on all the time while it is swapped in, that
-/// turns its bearer toward one way of playing. In `COMBOS` order past `BASE_COMBOS`.
-pub struct Keystone {
-    /// the way of playing it opens, as its badge in battle says it
-    pub style: &'static str,
-    pub text: &'static str,
-    /// how the style plays, shown on hover in the forge
-    pub hint: &'static str,
-    /// the `Mods` field it changes; its badge flashes when battle reports it
-    pub hook: &'static str,
-    pub apply: Tweak,
-}
-
-pub static KEYSTONES: &[Keystone] = &[
-    Keystone { style: "Burn", text: "Burn on the foe deals 2 more each turn.", hint: "Burn: stack burn and let it eat them. Mastered, Scald Rain sets it all off.", hook: "burn_bonus", apply: |m| m.burn_bonus += 2 },
-    Keystone { style: "Ramp", text: "+1 power every turn.", hint: "Ramp: weak at first, stronger every turn the fight lasts. Cast Kindle early.", hook: "enrage", apply: |m| m.enrage += 1 },
-    Keystone { style: "Blood", text: "Below half HP: +3 power.", hint: "Blood: pay HP to hit harder, and hit hardest when nearly dead.", hook: "desperate", apply: |m| m.desperate += 3 },
-    Keystone { style: "Alpha", text: "Your first rite each turn deals 20% more.", hint: "Alpha: one huge opening blow each turn, Spark Gap best of all.", hook: "first_pct", apply: |m| m.first_pct += 20 },
-    Keystone { style: "Breaker", text: "Their loaded rites break with a third less damage.", hint: "Breaker: break every load they make, so their turns land at half.", hook: "easy_break", apply: |m| m.easy_break += 34 },
-    Keystone { style: "Wall", text: "Every crystal you mine gives 1 shield.", hint: "Wall: mine to build shield, then throw it all with Tidal Ram.", hook: "claim_shield", apply: |m| m.claim_shield += 1 },
-    Keystone { style: "Battery", text: "Surge carries over between turns and can reach 15.", hint: "Battery: bank surge over quiet turns, then spend it all in one.", hook: "keep_surge", apply: |m| {
-        m.keep_surge += 1;
-        m.surge_room += 5
-    } },
-    Keystone { style: "Quarry", text: "The foe's boards start with 1 more fault.", hint: "Quarry: wreck their boards so their own picks cave in on them.", hook: "foe_mines", apply: |m| m.foe_mines += 1 },
-    Keystone { style: "Digger", text: "+1 pick each turn, but 2 less power.", hint: "Digger: mine more, hit softer, and cast Ball Lightning after every pick is used.", hook: "reveals", apply: |m| {
-        m.reveals += 1;
-        m.power -= 2
-    } },
-    Keystone { style: "Thorns", text: "Start each battle with 2 thorns.", hint: "Thorns: let them hit you; every rite they cast hurts them.", hook: "thorns", apply: |m| m.thorns += 2 },
-];
-
-/// Ore for one forge rite.
-pub const RITE_PRICE: u32 = 60;
+/// Where the basics start in `COMBOS`.
+pub const BASICS: usize = 36;
+/// Rites a hero carries at most; a new one past that takes the place of one held.
+pub const MAX_RITES: usize = 4;
+/// Damage a found rite adds per gem it takes, so it beats spending the same gems on Attack.
+pub const FOUND_PER_GEM: i32 = 4;
+/// Enemy rites no run offers: each does what a basic does, or no hero's elements make it.
+const NOT_OFFERED: &[&str] = &["Bulwark", "Mistveil", "Forgefire", "Maelstrom", "Short Circuit", "Geode Surge"];
 
 /// A wager, bought once at the forge with ore and then switched on or off before a descent: each
 /// changes every enemy (or the run) and pays more ore at the end.
@@ -439,9 +457,23 @@ pub fn combo_id(c: &Combo) -> usize {
     COMBOS.iter().position(|x| std::ptr::eq(x, c)).expect("combos come from COMBOS")
 }
 
-/// Only the combos a fighter can actually make with its elements.
+/// The enemy rites a fighter can make with its elements.
 pub fn combos_for(elements: &[Element]) -> Vec<&'static Combo> {
     COMBOS[..BASE_COMBOS].iter().filter(|c| c.needs.iter().all(|e| elements.contains(e))).collect()
+}
+
+/// The rites a run can teach a hero of these elements, by index in `COMBOS`.
+pub fn pool(elements: &[Element]) -> Vec<usize> {
+    (0..BASICS).filter(|&i| !NOT_OFFERED.contains(&COMBOS[i].name) && COMBOS[i].needs.iter().all(|e| elements.contains(e))).collect()
+}
+
+/// The basic of kind `k` (0 Attack, 1 Shield, 2 Heal) paid in `e`, by index in `COMBOS`.
+pub fn basic(k: usize, e: Element) -> usize {
+    BASICS + 3 * e as usize + k
+}
+
+pub fn is_basic(c: &Combo) -> bool {
+    combo_id(c) >= BASICS
 }
 
 pub struct Hero {
@@ -453,6 +485,8 @@ pub struct Hero {
     pub elements: [Element; 3],
     pub passive: Tweak,
     pub passive_desc: &'static str,
+    /// the elements its Attack, Shield and Heal take, one gem each
+    pub basics: [Element; 3],
 }
 
 pub static HEROES: &[Hero] = &[
@@ -467,6 +501,7 @@ pub static HEROES: &[Hero] = &[
             m.armor += 3;
         },
         passive_desc: "Ashen hide: cave-ins deal 1 less, every hit on you 3 less.",
+        basics: [Ember, Stone, Gale],
     },
     Hero {
         name: "Stormreader",
@@ -479,6 +514,7 @@ pub static HEROES: &[Hero] = &[
             m.reveal_shield += 3;
         },
         passive_desc: "Quick read: +1 pick a turn; each unused pick becomes 3 shield.",
+        basics: [Spark, Tide, Gale],
     },
     Hero {
         name: "Deepforger",
@@ -491,6 +527,7 @@ pub static HEROES: &[Hero] = &[
             m.keep_shield += 1;
         },
         passive_desc: "Plated: shield never wears off and stops 2 damage a point.",
+        basics: [Spark, Stone, Tide],
     },
     Hero {
         name: "Scaldwright",
@@ -503,6 +540,7 @@ pub static HEROES: &[Hero] = &[
             m.lifesteal_pct += 15;
         },
         passive_desc: "Searing touch: rites add 1 burn and heal 15% of their damage.",
+        basics: [Ember, Spark, Tide],
     },
     // opened by a deed (see `save::DEEDS`)
     Hero {
@@ -516,6 +554,7 @@ pub static HEROES: &[Hero] = &[
             m.mine_surge += 2;
         },
         passive_desc: "Live wire: each surge step is worth +15%, and every cave-in on your boards gives 2 surge.",
+        basics: [Spark, Stone, Ember],
     },
 ];
 
@@ -1225,5 +1264,28 @@ mod tests {
         // bigger numbers keep the +50% per level
         assert_eq!((1..=3).map(|l| at_level(6, l)).collect::<Vec<_>>(), [6, 9, 12]);
         assert_eq!((1..=3).map(|l| at_level(3, l)).collect::<Vec<_>>(), [3, 4, 6]);
+    }
+
+    #[test]
+    fn basics_sit_where_basic_finds_them_and_every_hero_has_eight_rites_to_find() {
+        assert_eq!(COMBOS.len(), BASICS + 15);
+        for e in [Ember, Tide, Gale, Stone, Spark] {
+            for (k, name) in ["Attack", "Shield", "Heal"].into_iter().enumerate() {
+                let c = &COMBOS[basic(k, e)];
+                assert!(c.name == name && c.needs == [e] && is_basic(c));
+            }
+        }
+        for h in HEROES {
+            assert!(h.basics.iter().all(|e| h.elements.contains(e)), "{} pays its basics in its own elements", h.name);
+            let p = pool(&h.elements);
+            assert_eq!(p.len(), 8, "{}", h.name);
+            assert!(p.iter().all(|&i| i < BASICS && !NOT_OFFERED.contains(&COMBOS[i].name)));
+        }
+        // a rite that gives gems back always costs more than it gives, even fired twice by Echo Chamber
+        for c in &COMBOS[..BASICS] {
+            let gives: usize = c.effects.iter().chain(&c.master).map(|e| if let Gems(n) = e { *n } else { 0 }).sum();
+            let echo = if c.needs.len() == 3 { 2 } else { 1 };
+            assert!(echo * gives < c.needs.len(), "{} could be cast forever", c.name);
+        }
     }
 }

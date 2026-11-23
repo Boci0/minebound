@@ -5,6 +5,7 @@ mod battle;
 mod ctl;
 mod board;
 mod data;
+mod devlog;
 mod rng;
 mod run;
 mod save;
@@ -203,6 +204,8 @@ fn conf() -> macroquad::conf::Conf {
 
 #[macroquad::main(conf)]
 async fn main() {
+    devlog::catch_panics();
+    devlog::log(|| format!("launch {:?}", std::env::args().collect::<Vec<_>>()));
     // `minebound <seed>` replays a run; otherwise the clock picks one
     let fixed_seed: Option<u64> = std::env::args().nth(1).and_then(|s| s.parse().ok());
     // Pirata One for titles and IBM Plex Mono for everything else (both SIL OFL), built into the exe
@@ -268,7 +271,7 @@ async fn main() {
                 Some(Go::Play) => {
                     let seed = fixed_seed.unwrap_or((miniquad::date::now() * 1000.0) as u64);
                     let (mut run, mut stage) = Run::with_deeds(seed, pick.1, pick.0, save.deeds);
-                    run.arm(save.wagers_on, save.loadout[pick.1]);
+                    run.arm(save.wagers_on);
                     // Wild Hands' pact is held already, so the opening pick cannot offer it again
                     if let Stage::Pick(options) = &mut stage {
                         options.retain(|i| !run.charms.contains(i));
@@ -277,8 +280,12 @@ async fn main() {
                     if cfg!(debug_assertions) && std::env::var_os("MINEBOUND_ENDINGS").is_some() {
                         stage = run.debug_endings();
                     }
-                    // debug builds only: MINEBOUND_MASTERED=1 starts with every rite at level 3, to see the masteries
+                    // debug builds only: MINEBOUND_MASTERED=1 starts with four rites at level 3, to see the masteries
+                    // (MINEBOUND_RITES=a,b,.. picks them by index in the hero's pool)
                     if cfg!(debug_assertions) && std::env::var_os("MINEBOUND_MASTERED").is_some() {
+                        let all = minebound_pool(pick.1);
+                        let want: Vec<usize> = std::env::var("MINEBOUND_RITES").ok().map(|v| v.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_else(|| (0..4).collect());
+                        run.held = want.iter().filter_map(|&i| all.get(i).copied()).take(4).collect();
                         run.ups = run.rites().into_iter().flat_map(|id| [id, id]).collect();
                         run.debug = true;
                     }
@@ -370,6 +377,10 @@ async fn main() {
                         ui::status(run);
                         ui::brand(run, offers).map(|(id, brand)| run.burn_brand(id, brand))
                     }
+                    Stage::Learn(offers) => {
+                        ui::status(run);
+                        ui::learn(run, offers).map(|choice| run.learn(choice))
+                    }
                     Stage::Shop(shop) => {
                         ui::status(run);
                         ui::shop(run, shop).then(|| run.leave_shop(shop))
@@ -384,7 +395,7 @@ async fn main() {
                     }
                 };
                 // you may walk away from an expedition anywhere but mid-fight; how far you got still counts
-                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
+                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Learn(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
                     // past the last boss a retreat still counts as a win: show what it opened
                     if let Some(x) = save.finish(run, false) {
                         pick.0 = x;
@@ -400,6 +411,7 @@ async fn main() {
                             pick.0 = x;
                         }
                     }
+                    devlog::log(|| run.snapshot(&n));
                     *stage = n;
                     ui::transition();
                     // the summary was already read over the last fight
@@ -411,6 +423,7 @@ async fn main() {
             to = Some(Screen::World);
         }
         if let Some(s) = to {
+            devlog::log(|| format!("screen {}", match &s { Screen::Title => "title", Screen::World => "world", Screen::Run(..) => "run", Screen::Gallery(_) => "gallery" }));
             screen = s;
             ui::transition();
         }
@@ -455,4 +468,9 @@ mod tests {
         // a sprite on a transparent background, not an empty or solid tile
         assert!(small.chunks_exact(4).any(|p| p[3] == 255) && small.chunks_exact(4).any(|p| p[3] == 0));
     }
+}
+
+/// The rites hero `h` can find in a run, by index in `COMBOS`.
+fn minebound_pool(h: usize) -> Vec<usize> {
+    data::pool(&data::HEROES[h].elements)
 }

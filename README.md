@@ -10,7 +10,8 @@
 
 You and your enemy each mine your own boards, one board per element, every tile in view. Mine a
 crystal for a gem of that board's element, but every tile around it takes a crack, and a tile with
-three cracks caves in on you. Spend your gems on rites that need the right mix of elements. Some
+three cracks caves in on you. Every run starts with three basics, Attack, Shield and Heal, one gem each; rites that need the
+right mix of elements are found along the way. Some
 rites reach into the enemy's board, breaking its crystals or cracking its ground. Every crystal you
 mine builds surge, up to double damage, and every rite you cast spends a step of it, so each turn
 asks the same question: fire now, or mine one more? The enemy plays by exactly the same rules, in
@@ -23,7 +24,7 @@ full view.
 - [Features](#features)
 - [Installation](#installation)
 - [How to play](#how-to-play)
-  - [Controls](#controls) and [the right-click shortcut](#the-right-click-shortcut)
+  - [Controls](#controls)
   - [Your boards](#your-boards) and [rites](#rites-and-damage)
   - [Heroes](#heroes), [a run](#a-run), [pacts](#pacts), [brands](#brands), [blessings](#blessings)
   - [Enemies](#enemies), [expeditions](#expeditions), [deeds](#deeds), [the forge](#the-forge) and [tips](#tips)
@@ -37,11 +38,11 @@ full view.
 - **Five heroes**, each with their own elements, rites and play style; the fifth is earned with a deed.
 - **Deeds** to do across runs, each opening a new pact, brand or hero for every run after.
 - **The Forge**: every run banks ore, won or lost. Spend it on wagers that make enemies tougher for
-  more ore, and on forge rites that swap in for a bearer's own and turn it toward a new play style.
+  more ore.
 - **A board of cracking ground**: mine crystals in plain view, but every one you take cracks the
   tiles around it, and a tile cracked three times caves in on you.
-- **Five elements** and 17 rites that need the right mix of gems, each upgradable to level 3,
-  plus 10 forge rites to buy and swap in.
+- **Start with the basics**: every run begins with Attack, Shield and Heal alone. Find up to four
+  of 30 rites from elites, treasure and shops, eight for each hero, and upgrade them to level 3.
 - **Element reactions**: hit a marked foe with a new element to ignite, douse, gust, crush or arc.
 - **Branching runs** across three floors: battles, elites, encounters, shops, shrines, treasure
   and a boss at the end of each floor.
@@ -53,7 +54,7 @@ full view.
 - **14 enemies**, each breaking one rule: armour, dodging, lifesteal, surge jamming, gem theft
   and more.
 - **Six expeditions**, from Shallow Mines to The Null, each harder than the last.
-- **Drag or click**: drag gems into a rite, or right click to pick a rite and click gems into it.
+- **One click to cast**: click a basic or a lit rite and it fires. You can still drag gems into a rite to choose which ones it spends.
 - **Seeded runs**: replay any run exactly by its seed.
 
 ## Installation
@@ -83,7 +84,8 @@ You and the enemy each work your own boards, one board per element. Every board 
 **crystals** in plain view. Mine one and it pays you a **gem** of that board's element, but every
 tile around it cracks. A tile with three cracks **caves in**: it hurts whoever's board it is on, and
 a crystal there is lost. Gems pay for **rites**: spells that need a set mix of elements, such as one
-Ember and one Gale. Fill a rite's sockets and it fires at once.
+Ember and one Gale. Fill a rite's sockets and it fires at once. You start each run with only the
+three **basics**, Attack, Shield and Heal, which take one gem each, and find rites as you go.
 
 Each crystal you mine builds **surge**, which multiplies rite damage, and every rite you cast spends
 a step of it. You get only a few picks a turn, and digging a **vent** to ease the pressure costs one
@@ -97,8 +99,8 @@ same rules, and you can watch its board the whole time.
 | Mine a crystal | Left click a crystal |
 | Dig a vent | Left click a tile without a crystal |
 | Switch board | Click a board tab under the board, or press 1 to 3 (free, any time in your turn) |
+| Cast a basic or a rite | Click it: it pays its gems from your gem row and fires |
 | Socket a gem by dragging | Drag a gem from your gem row (bottom left) onto a rite; it fills the matching socket |
-| Socket a gem by clicking | Right click anywhere off the board to pick a rite, then left click a gem (see below) |
 | Take a gem back | Click the filled socket |
 | End your turn (unspent gems are kept) | End turn, or Space |
 | Explain a rule word | Hover any word that floats |
@@ -108,20 +110,6 @@ same rules, and you can watch its board the whole time.
 | Sound on / off | M |
 | Next song | N |
 | Volume settings | Esc, or the gear icon |
-
-#### The right-click shortcut
-
-You don't have to drag gems:
-
-1. **Right click** anywhere off the board. The first rite in your list is picked: it gets a
-   frame and a pointer at its left edge.
-2. Each further right click moves the pick one rite down, and wraps back to the top after the
-   last.
-3. **Left click a gem** in your gem row. It goes into the picked rite's matching socket. Keep
-   clicking gems until the rite is full and fires.
-
-Dragging still works, and dropping a gem on a rite always sends it there, whichever rite is picked. If you click a gem before picking a rite, the
-game reminds you to right click first.
 
 ![A battle: your board of crystals and cracked ground in the middle, the rites on the right, the enemy's board top right](docs/screenshots/battle.png)
 
@@ -146,10 +134,11 @@ game reminds you to right click first.
 
 ### Rites and damage
 
-- A rite's damage is **power × gems spent, plus its bonus**, multiplied by surge. Hover a rite's
+- A rite's damage is **power × gems spent, plus its bonus**, multiplied by surge. A rite you found adds 4
+  more per gem, so it beats spending the same gems on Attack. Hover a rite's
   damage number to see each step that makes it.
-- A rite deals damage only if its text says so. Bulwark, Lodestone, Mistveil and Sandstorm deal
-  none; they only do what they say.
+- A rite deals damage only if its text says so. Shield, Heal, Lodestone and Sandstorm deal none;
+  they only do what they say.
 - **Surge**: each crystal you mine this turn adds a step, worth +10%, up to 10 steps (+100%).
   Every rite that deals damage spends one step, so casting early makes later rites weaker. Rites
   that deal no damage spend nothing.
@@ -179,47 +168,75 @@ element not in the mark reacts, once per new element:
 
 Hover **Marked** in a fighter's stats to see which elements would react.
 
-Each hero can cast four rites: the three made from two of their elements, and the one made from all
-three. Beating a boss lets you **upgrade** a rite, up to level 3; so can a shop's lesson or a level
-found in treasure. Each level renames the rite, raises its numbers by about half, adds one more gem
-to its cost, and opens one more brand socket. A level 3 rite is **mastered**: it
-gains a trick of its own (last column), with its own look when cast.
+**Basics.** Every hero starts a run with three, each paid with one gem of an element set by the
+hero (see [Heroes](#heroes)):
 
-| Rite | Gems | Effect at level 1 | Mastered (level 3) |
-| --- | --- | --- | --- |
-| Steam Burst | Ember, Tide | +4 damage, +1 pick | Your next 3 cave-ins do no harm |
-| Raze | Ember, Gale | +2 damage, +2 damage per quarter of your HP lost | Heal 50% of its damage |
-| Magma | Ember, Stone | Shatter foe's shield, +3 damage | Can't miss, ignores armour |
-| Plasma | Ember, Spark | +3 damage, +1 damage per surge | Spends no surge |
-| Mistveil | Tide, Gale | Heal 8, +2 picks (no damage) | Prop up 3 tiles on each of your boards |
-| Bulwark | Tide, Stone | Gain 12 shield (no damage) | Your shield won't wear off next turn |
-| Conduction | Tide, Spark | +3 damage, then +4 surge | Steal 2 foe gems |
-| Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, crack 2 foe tiles (no damage) | Foe gets 2 fewer picks next turn |
-| Thunderclap | Gale, Spark | Break 1 foe crystal, +2 damage | +8 damage per crystal broken |
-| Lodestone | Stone, Spark | Double your shield (adding at most 12, 24 at level 2; no damage), and it turns brittle: the next rite that hits you is blocked, then all of the shield shatters onto the attacker as damage | No limit on the doubling |
-| Upheaval | Ember, Gale, Stone | You lose 4 HP, +11 damage | Double damage if the foe is at half HP or below |
-| Tempest | Tide, Gale, Spark | +1 damage per pick used this turn | Unused picks count too |
-| Geode Surge | Tide, Stone, Spark | +6 damage, and your shield becomes 150% damage, then it's gone | Keep half your shield |
-| Forgefire | Ember, Stone, Spark | +8 damage | +2 power for the rest of the battle |
-| Maelstrom | Tide, Gale, Stone | Gain 6 shield, heal 4 | Clear your burn and weaken |
-| Short Circuit | Ember, Gale, Spark | +6 damage, foe loses 1 gem | Foe loses all its gems |
-| Boilover | Ember, Tide, Spark | Burn 3 on foe, +1 damage per burn on the foe | The foe's burn stops fading |
+| Basic | Does |
+| --- | --- |
+| Attack | Your power + 4 damage |
+| Shield | Gain 10 shield |
+| Heal | Heal 5 |
+
+**Rites** are found during a run: an elite or a treasure lets you choose one of three (or take a
+pact instead), and each shop sells one for 55 shards. A hero only finds rites made from its own
+elements, and holds at most four; learning a fifth means letting one go, with its levels and
+brands. Beating a boss lets you **upgrade** a rite, up to level 3; so can a shop's lesson or a
+level found in treasure. Each level renames the rite, raises its numbers by about half, adds one
+more gem to its cost, and opens one more brand socket. A level 3 rite is **mastered**: it gains a
+trick of its own, with its own look when cast.
+
+| Rite | Gems | Effect at level 1 | Mastered (level 3) | Found by |
+| --- | --- | --- | --- | --- |
+| Steam Burst | Ember, Tide | +4 damage, +1 pick | Your next 3 cave-ins do no harm | Scaldwright |
+| Raze | Ember, Gale | +2 damage, +2 damage per quarter of your HP lost | Heal 50% of its damage | Ashwarden |
+| Magma | Ember, Stone | Shatter foe's shield, +3 damage | Can't miss, ignores armour | Ashwarden, Galvanist |
+| Plasma | Ember, Spark | +3 damage, +1 damage per surge | Spends no surge | Scaldwright, Galvanist |
+| Conduction | Tide, Spark | +3 damage, then +4 surge | Steal 2 foe gems | Stormreader, Deepforger, Scaldwright |
+| Sandstorm | Gale, Stone | Foe's attacks halved for 2 turns, crack 2 foe tiles (no damage) | Foe gets 2 fewer picks next turn | Ashwarden |
+| Thunderclap | Gale, Spark | Break 1 foe crystal, +2 damage | +8 damage per crystal broken | Stormreader |
+| Lodestone | Stone, Spark | Double your shield (adding at most 12, 24 at level 2; no damage), and it turns brittle: the next rite that hits you is blocked, then all of the shield shatters onto the attacker as damage | No limit on the doubling | Deepforger, Galvanist |
+| Upheaval | Ember, Gale, Stone | You lose 4 HP, +11 damage | Double damage if the foe is at half HP or below | Ashwarden |
+| Tempest | Tide, Gale, Spark | +1 damage per pick used this turn | Unused picks count too | Stormreader |
+| Boilover | Ember, Tide, Spark | Burn 3 on foe, +1 damage per burn on the foe | The foe's burn stops fading | Scaldwright |
+| Scald Rain | Ember, Tide | +2 damage, burn 5 on foe | Detonate the foe's burn | Scaldwright |
+| Kindle | Ember, Gale | +2 power this battle, gain 4 shield | +1 more power this battle | Ashwarden |
+| Spark Gap | Ember, Spark | +7 damage as your first rite this turn | Can't miss, ignores armour | Scaldwright, Galvanist |
+| Undertow | Tide, Gale | +3 damage, foe gets 1 fewer pick | Foe loses all its gems | Stormreader |
+| Tidal Ram | Tide, Stone | Your shield becomes 200% damage | Keep half your shield | Deepforger |
+| Iron Thorns | Stone, Spark | Gain 4 shield, +1 thorns this battle | Your shield won't wear off next turn | Deepforger, Galvanist |
+| Slag Wall | Ember, Stone | +2 damage, +1 armour this battle, burn 2 on foe | +2 thorns this battle | Ashwarden, Galvanist |
+| Monsoon | Tide, Gale | Heal 2 each turn this battle, +1 pick (no damage) | Clear your burn and weaken | Stormreader |
+| Sinkhole | Tide, Stone | Foe loses 1 loaded rite, crack 1 foe tile (no damage) | Foe gets 1 fewer pick | Deepforger |
+| Wellspring | Tide, Spark | Gain 1 gem of your elements, +2 surge | +1 pick | Stormreader, Deepforger, Scaldwright |
+| Erosion | Gale, Stone | +2 damage for each turn of the fight so far | Halve foe's hits for 1 turn | Ashwarden |
+| Updraft | Gale, Spark | +2 picks, +2 surge | Your next 2 cave-ins do no harm | Stormreader |
+| Ashfall | Ember, Gale, Stone | +4 damage, burn 3 on foe, foe gets 1 fewer pick | The foe's burn stops fading | Ashwarden |
+| Stormfront | Tide, Gale, Spark | +5 damage, foe loses 1 loaded rite | Foe gets 2 fewer picks | Stormreader |
+| Bastion | Tide, Stone, Spark | +2 armour and heal 2 each turn, this battle (no damage) | Your shield won't wear off next turn | Deepforger |
+| Geyser Engine | Tide, Stone, Spark | Gain 1 gem of your elements, gain 6 shield | Steal 2 foe gems | Deepforger |
+| Steam Engine | Ember, Tide, Spark | +1 power this battle, +3 surge | +2 picks | Scaldwright |
+| Thunder Anvil | Ember, Stone, Spark | +5 damage, +1 armour this battle | +2 power this battle | Galvanist |
+| Arc Furnace | Ember, Stone, Spark | +2 damage per surge, gain 1 gem of your elements | Spends no surge | Galvanist |
+
+Enemies cast the first eleven too, plus six no hero finds: Bulwark, Mistveil, Geode Surge,
+Forgefire, Maelstrom and Short Circuit.
 
 **Burn** stacks. At the start of its turn, the burning side loses 1 HP per burn, straight through
 shield, and then the burn halves. **Detonate** (the Fuse brand) sets off all the burn at once.
 
 ### Heroes
 
-All five play by the same rules. Each brings three elements and a trait that keeps them alive.
+All five play by the same rules. Each brings three elements, the element each basic is paid in,
+and a trait that keeps them alive.
 Galvanist joins once you do the deed Full Company (see [Deeds](#deeds)).
 
-| Hero | HP | Power | Elements | Rites | Trait |
+| Hero | HP | Power | Elements | Attack, Shield, Heal paid in | Trait |
 | --- | --- | --- | --- | --- | --- |
-| Ashwarden | 100 | 7 | Ember, Gale, Stone | Raze, Magma, Sandstorm, Upheaval | Cave-ins deal 1 less damage, and every hit on you 3 less |
-| Stormreader | 94 | 7 | Tide, Gale, Spark | Mistveil, Conduction, Thunderclap, Tempest | +1 pick each turn; each pick left unused becomes 3 shield |
-| Deepforger | 96 | 6 | Tide, Stone, Spark | Bulwark, Conduction, Lodestone, Geode Surge | Shield never wears off, and each point stops 2 damage |
-| Scaldwright | 96 | 6 | Ember, Tide, Spark | Steam Burst, Plasma, Conduction, Boilover | Every rite adds 1 burn on the foe and heals you for 15% of its damage |
-| Galvanist | 92 | 7 | Ember, Stone, Spark | Magma, Plasma, Lodestone, Forgefire | Each surge step is worth +15%, and every cave-in on your boards gives 2 surge |
+| Ashwarden | 100 | 7 | Ember, Gale, Stone | Ember, Stone, Gale | Cave-ins deal 1 less damage, and every hit on you 3 less |
+| Stormreader | 94 | 7 | Tide, Gale, Spark | Spark, Tide, Gale | +1 pick each turn; each pick left unused becomes 3 shield |
+| Deepforger | 96 | 6 | Tide, Stone, Spark | Spark, Stone, Tide | Shield never wears off, and each point stops 2 damage |
+| Scaldwright | 96 | 6 | Ember, Tide, Spark | Ember, Spark, Tide | Every rite adds 1 burn on the foe and heals you for 15% of its damage |
+| Galvanist | 92 | 7 | Ember, Stone, Spark | Spark, Stone, Ember | Each surge step is worth +15%, and every cave-in on your boards gives 2 surge |
 
 Ashwarden is a berserker who hits harder as he gets hurt. Stormreader turns picks into damage or
 shield. Deepforger builds a wall of shield and throws it. Scaldwright stacks burn and cashes it in.
@@ -245,12 +262,12 @@ help or hurt.
 | Node | What happens |
 | --- | --- |
 | Battle | One to three enemies in a row (more on later floors). Win 18–24 shards. |
-| Elite | A normal enemy, then an elite. Win 25–34 shards and a **brand**. Appears from the third column. |
+| Elite | A normal enemy, then an elite. Win 25–34 shards and choose a rite to learn, or a pact. Appears from the third column; on the first floor from the fourth, and the elite fights alone. |
 | Shrine | A normal battle. Win it and choose a **blessing**. Every floor has at least one. |
-| Shop | Three pacts (one at 25% off), a brand, a lesson that levels up a rite (one per shop), and restocks. |
-| Treasure | Choose one pact from three, or sometimes a level for a rite or a brand. |
-| Encounter | A short event with a choice: shards, max HP or pacts, often for a price or a gamble. |
-| Boss | A floor's boss. Win 40 shards and upgrade one of your rites. |
+| Shop | Three pacts (one at 25% off), a brand, a rite to learn, a lesson that levels up a rite (one per shop), and restocks. The last rooms before every boss are shops. |
+| Treasure | Choose a rite to learn or a pact, or sometimes a level for a rite or a brand. |
+| Encounter | A short event with a choice: shards, max HP or pacts, often for a price or a gamble. No event comes twice in a run. |
+| Boss | A floor's boss. Win 40 shards and upgrade one of your rites (or learn one, if you hold none). |
 
 You heal to **full HP after every battle**, so only the fight in front of you can kill you. Damage
 does carry from one wave to the next inside a battle.
@@ -418,7 +435,8 @@ details.
 | The Wyrm Below | Boss, floor 3 | Its rites set you burning; below half HP, +3 power |
 | The Hive Queen | Boss, floor 3 | One extra pick; each of her rites after the first in a turn hits 8 harder |
 
-Each floor's elites come from its own three, and its boss is one of its four, at random; the map shows which one waits for you.
+Each floor's elites come from its own three, and its boss is one of its four, at random; the map shows which one waits for you. Enemies grow tougher
+with each floor: normals and elites gain power and much more HP, and bosses gain 40% HP per floor.
 
 ### Expeditions
 
@@ -476,8 +494,8 @@ done. Progress from before deeds existed counts.
 
 Every run banks **ore** as it ends, won or lost: 2 for each fight won, 10 for each boss and 20 for
 each secret ending, more with wagers on. The run's summary says how much. Spend it at the **Forge**,
-a button on the map of The Below. The daily descent banks ore too, but never uses wagers or forge
-rites, so it stays the same for everyone.
+a button on the map of The Below. The daily descent banks ore too, but never uses wagers, so it stays
+the same for everyone.
 
 **Wagers** are bought once, then switched on or off for every descent after. Each one on changes the
 enemies and pays more ore.
@@ -490,24 +508,6 @@ enemies and pays more ore.
 | Glass Foes | Enemies have half HP but 3 more power | +15% | 50 |
 | Wild Gifts | Every enemy holds a random pact | +20% | 60 |
 | Wild Hands | A random pact for you on every floor | none | 80 |
-
-**Forge rites** cost 60 ore each. Each takes the place of the base rite with the same two elements,
-for whichever bearer you choose it for, and you can swap back at any time. While one is in use it
-brings a **keystone**: a passive that is on all battle and turns the bearer toward one way of playing.
-Keystones show as badges under your pacts in battle and light up when they take effect.
-
-| Forge rite | Replaces | Does | Keystone |
-| --- | --- | --- | --- |
-| Scald Rain | Steam Burst | +2 damage, 5 burn | Burn: burn on the foe deals 2 more each turn |
-| Kindle | Raze | +2 power this battle, 4 shield | Ramp: +1 power every turn |
-| Blood Pyre | Magma | You lose 4 HP, +9 damage | Blood: below half HP, +3 power |
-| Spark Gap | Plasma | +7 damage as your first rite this turn | Alpha: your first rite each turn deals 20% more |
-| Undertow | Mistveil | +3 damage, foe gets 1 fewer pick | Breaker: their loaded rites break with a third less damage |
-| Tidal Ram | Bulwark | Your shield becomes 200% damage | Wall: every crystal you mine gives 1 shield |
-| Capacitor | Conduction | +8 surge | Battery: surge carries over between turns and can reach 15 |
-| Rockslide | Sandstorm | +2 damage, crack 3 foe tiles | Quarry: the foe's boards start with 1 more fault |
-| Ball Lightning | Thunderclap | +1 damage per pick used | Digger: +1 pick each turn, but 2 less power |
-| Iron Thorns | Lodestone | 4 shield, +1 thorns this battle | Thorns: start each battle with 2 thorns |
 
 ### Tips
 
@@ -523,7 +523,7 @@ Keystones show as badges under your pacts in battle and light up when they take 
   board it is mining. Its gems are visible under its board.
 - **Waves are where it hurts.** You heal to full between battles, but not between the waves of
   one battle, so a two- or three-wave fight is the one to plan for.
-- **Set up for free.** Bulwark, Lodestone, Mistveil and Sandstorm spend no surge, so cast them
+- **Set up for free.** Shield, Heal, Lodestone and Sandstorm spend no surge, so cast them
   before the rite that hits.
 - **Spend shards.** They don't carry over between runs.
 

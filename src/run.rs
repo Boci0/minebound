@@ -12,6 +12,8 @@ pub const SHOP_SIZE: usize = 3;
 pub const BRAND_PRICE: i32 = 40;
 /// a lesson levels up a rite; one per shop
 pub const LESSON_PRICE: i32 = 60;
+/// a new rite to learn; one per shop
+pub const RITE_SHOP_PRICE: i32 = 55;
 /// the first restock; each one after costs this much more
 pub const RESTOCK_PRICE: i32 = 10;
 
@@ -48,8 +50,10 @@ pub enum Stage {
     Upgrade(Vec<usize>),
     /// a shrine fight was won: pick one of these blessings (by index in `BLESSINGS`), or keep yours
     Blessing(Vec<usize>),
-    /// an elite fell: pick one of these brands (by index in `BRANDS`) and a rite to burn it onto
+    /// a hoard holds brands: pick one of these (by index in `BRANDS`) and a rite to burn it onto
     Brand(Vec<usize>),
+    /// an elite fell (or a hoard teaches): learn one of these rites (by index in `COMBOS`), or none
+    Learn(Vec<usize>),
     Shop(Shop),
     Event(&'static Encounter, Option<String>),
     End(bool),
@@ -67,6 +71,8 @@ pub struct Shop {
     pub brand: Option<usize>,
     /// the lesson is still for sale
     pub lesson: bool,
+    /// the rite for sale (index in `COMBOS`), until bought
+    pub rite: Option<usize>,
 }
 
 /// Who carries day `day`'s daily descent, and where (one of the first three expeditions): (hero, expedition).
@@ -94,6 +100,8 @@ pub struct Run {
     pub bonus_hp: i32,
     pub shards: i32,
     pub charms: Vec<usize>,
+    /// the rites found this run, by index in `COMBOS`, at most `MAX_RITES`
+    pub held: Vec<usize>,
     /// upgraded skills, by index in `COMBOS`; a repeat is another level
     pub ups: Vec<usize>,
     /// brands burnt onto rites: (index in `COMBOS`, index in `BRANDS`), up to the rite's level each, oldest first
@@ -132,9 +140,10 @@ pub struct Run {
     given: Vec<usize>,
     /// deeds the save had done as the run began, one bit per `save::DEEDS`: what they open can come up
     pub deeds: u32,
-    /// wagers on, one bit per `WAGERS`, and forge rites swapped in, one bit per `COMBOS` past `BASE_COMBOS`
+    /// wagers on, one bit per `WAGERS`
     pub wagers: u32,
-    pub alts: u32,
+    /// encounters met this run, by index in `ENCOUNTERS`: none comes twice until all have
+    met: Vec<usize>,
 }
 
 impl Run {
@@ -154,6 +163,7 @@ impl Run {
             bonus_hp: 0,
             shards: 20,
             charms: vec![],
+            held: vec![],
             ups: vec![],
             brands: vec![],
             blessing: None,
@@ -175,9 +185,9 @@ impl Run {
             kindled: None,
             bare_shops: 0,
             given: vec![],
+            met: vec![],
             deeds,
             wagers: 0,
-            alts: 0,
         };
         run.gen_map();
         run.note = format!("{}, floor 1.", EXPEDITIONS[exp].name);
@@ -205,9 +215,6 @@ impl Run {
         }
         if let Some(b) = self.blessing {
             (BLESSINGS[b].apply)(&mut m);
-        }
-        for k in self.keystones() {
-            (KEYSTONES[k].apply)(&mut m);
         }
         (TWISTS[self.twist].me)(&mut m);
         (EXPEDITIONS[self.exp].me)(&mut m);
@@ -272,26 +279,52 @@ impl Run {
         self.brands.iter().filter(|b| b.0 == id).count() >= self.level(id)
     }
 
-    /// The rites this hero can make, by index in `COMBOS`: its base ones, with forge rites swapped in.
+    /// The rites found this run, by index in `COMBOS`.
     pub fn rites(&self) -> Vec<usize> {
-        let alt = |c: &Combo| (BASE_COMBOS..COMBOS.len()).find(|&i| self.alts & 1 << (i - BASE_COMBOS) != 0 && COMBOS[i].needs == c.needs);
-        combos_for(&HEROES[self.hero].elements).iter().map(|c| alt(c).unwrap_or_else(|| combo_id(c))).collect()
+        self.held.clone()
     }
 
-    /// The keystones on: one for each forge rite swapped in, by index in `KEYSTONES`.
-    pub fn keystones(&self) -> Vec<usize> {
-        self.rites().into_iter().filter(|&i| i >= BASE_COMBOS).map(|i| i - BASE_COMBOS).collect()
+    /// What the hero casts in a fight: its three basics, then the rites it found.
+    pub fn casts(&self) -> Vec<usize> {
+        HEROES[self.hero].basics.iter().enumerate().map(|(k, &e)| basic(k, e)).chain(self.held.iter().copied()).collect()
     }
 
-    /// The hero's trait, then each keystone on, as the battle's passive tooltip says it.
-    fn trait_text(&self) -> String {
-        self.keystones().iter().fold(HEROES[self.hero].passive_desc.to_string(), |s, &k| format!("{s}\n{}: {}", COMBOS[BASE_COMBOS + k].name, KEYSTONES[k].text))
+    /// Up to `n` rites the hero's elements make and it does not hold yet, at random.
+    fn rite_offer(&mut self, n: usize) -> Vec<usize> {
+        let mut pool: Vec<usize> = pool(&HEROES[self.hero].elements).into_iter().filter(|i| !self.held.contains(i)).collect();
+        (0..n.min(pool.len())).map(|_| pool.remove(self.rng.below(pool.len()))).collect()
     }
 
-    /// Sets the forge's wagers and rite swaps for this run, before its first room; Wild Hands hands
-    /// over floor 1's pact now.
-    pub fn arm(&mut self, wagers: u32, alts: u32) {
-        (self.wagers, self.alts) = (wagers, alts);
+    /// Takes rite `id` (letting `drop` go first, its levels and brands with it); None takes nothing.
+    /// After a boss the pact pick follows.
+    pub fn learn(&mut self, choice: Option<(usize, Option<usize>)>) -> Stage {
+        if let Some((id, drop)) = choice {
+            self.teach(id, drop);
+        }
+        if self.here() == NodeKind::Boss { self.pick() } else { self.after_node() }
+    }
+
+    fn teach(&mut self, id: usize, drop: Option<usize>) {
+        if let Some(d) = drop {
+            self.held.retain(|&x| x != d);
+            self.ups.retain(|&x| x != d);
+            self.brands.retain(|b| b.0 != d);
+        }
+        if self.held.len() < MAX_RITES && !self.held.contains(&id) {
+            self.held.push(id);
+        }
+    }
+
+    /// Rites to learn, if any are left to find; else a pact pick.
+    fn learn_or_pick(&mut self) -> Stage {
+        let offers = self.rite_offer(3);
+        if offers.is_empty() { self.pick() } else { Stage::Learn(offers) }
+    }
+
+    /// Sets the forge's wagers for this run, before its first room; Wild Hands hands over floor 1's
+    /// pact now.
+    pub fn arm(&mut self, wagers: u32) {
+        self.wagers = wagers;
         self.wild_hands();
     }
 
@@ -395,16 +428,17 @@ impl Run {
         ids
     }
 
-    /// A hoard: half the time pacts, else a level for a rite or a brand.
+    /// A hoard: pacts, a rite to learn, a level for a rite or a brand. Levels and brands need a rite held.
     fn treasure(&mut self) -> Stage {
         let ids: Vec<usize> = self.rites().into_iter().filter(|&id| self.level(id) < MAX_LEVEL).collect();
         match self.rng.below(4) {
+            0 => self.pick(),
             2 if !ids.is_empty() => Stage::Upgrade(ids),
-            3 => {
+            3 if !self.held.is_empty() => {
                 let mut pool = self.brand_pool();
                 Stage::Brand((0..3).map(|_| pool.remove(self.rng.below(pool.len()))).collect())
             }
-            _ => self.pick(),
+            _ => self.learn_or_pick(),
         }
     }
 
@@ -432,7 +466,8 @@ impl Run {
         match self.rng.below(100) {
             0..=29 => NodeKind::Battle,
             30..=49 | 85..=93 => NodeKind::Encounter,
-            50..=64 if col >= 2 => NodeKind::Elite,
+            // the first floor's elites wait a room longer, so a rite can be found before the first
+            50..=64 if col >= 2 + usize::from(self.floor == 0) => NodeKind::Elite,
             50..=64 => NodeKind::Battle,
             65..=74 => NodeKind::Shop,
             75..=84 => NodeKind::Shrine,
@@ -454,6 +489,10 @@ impl Run {
         let mut map: Vec<Vec<Node>> = Vec::new();
         for (c, &n) in sizes.iter().enumerate() {
             map.push((0..n).map(|_| Node { kind: self.kind_for(c), next: vec![] }).collect());
+        }
+        // the last rooms before the boss are shops, so every path can spend its shards and buy a rite
+        for n in &mut map[cols - 1] {
+            n.kind = NodeKind::Shop;
         }
         // every floor has at least one shrine, somewhere between the first fight and the rest stop
         if !map.iter().flatten().any(|n| n.kind == NodeKind::Shrine) {
@@ -498,10 +537,10 @@ impl Run {
     fn enemy(&self, d: &EnemyDef, scale: bool, slow: i32, hp_pct: i32) -> Fighter {
         // an ending's floor scales on from the last one: each ending past the first is deeper still
         let floor = self.floor as i32;
-        // bosses grow only past the first ending's floor, so a later ending's boss keeps up with its floor;
+        // bosses gain 40% HP per floor up to the last, then grow past the first ending's floor so a later ending's boss keeps up;
         // +1 power since bosses load every turn instead of saving up for one big blow (smaller loads break easier)
         let deeper = self.floor.saturating_sub(FLOORS) as i32;
-        let (hp, power) = if scale { (d.hp * (350 + 200 * floor) / 100 * 125 / 100, d.power + floor + 2) } else { (d.hp * (220 + 40 * deeper) / 100, d.power + deeper + 1) };
+        let (hp, power) = if scale { (d.hp * (350 + 320 * floor) / 100 * 125 / 100, d.power + floor + 2) } else { (d.hp * (220 + 40 * floor.min(FLOORS as i32 - 1) + 40 * deeper) / 100, d.power + deeper + 1) };
         let hp = hp * hp_pct / 100;
         let x = &EXPEDITIONS[self.exp];
         let hp = self.keys.iter().fold(hp * x.hp_pct / 100, |hp, &k| hp * ENDINGS[k].hp_pct / 100);
@@ -536,6 +575,28 @@ impl Run {
         self.enemy(d, true, 2, 130)
     }
 
+    /// One line of where the run stands, for the dev log.
+    pub fn snapshot(&self, stage: &Stage) -> String {
+        let stage = match stage {
+            Stage::Map => "map".to_string(),
+            Stage::Battle(b) => format!("battle vs {} ({} waves)", b.f[1].name, b.waves),
+            Stage::Pick(v) => format!("pick a pact of {}", v.len()),
+            Stage::Upgrade(v) => format!("upgrade one of {}", v.len()),
+            Stage::Blessing(v) => format!("blessing of {}", v.len()),
+            Stage::Brand(v) => format!("brand of {}", v.len()),
+            Stage::Learn(v) => format!("learn one of {:?}", v.iter().map(|&i| COMBOS[i].name).collect::<Vec<_>>()),
+            Stage::Shop(s) => format!("shop (rite {:?})", s.rite.map(|i| COMBOS[i].name)),
+            Stage::Event(e, _) => format!("encounter {}", e.title),
+            Stage::End(won) => format!("end, won {won}"),
+        };
+        let rites: Vec<String> = self.held.iter().map(|&i| format!("{} L{}", COMBOS[i].name, 1 + self.ups.iter().filter(|&&u| u == i).count())).collect();
+        format!(
+            "stage {stage} | floor {} at {:?} | hp {}/{} shards {} | rites {rites:?} brands {} | pacts {:?} | blessing {:?}",
+            self.floor + 1, self.pos, self.hp, self.max_hp(), self.shards, self.brands.len(),
+            self.charms.iter().map(|&c| CHARMS[c].name).collect::<Vec<_>>(), self.blessing.map(|b| BLESSINGS[b].name)
+        )
+    }
+
     pub fn enter(&mut self, col: usize, row: usize) -> Stage {
         self.pos = Some((col, row));
         self.trail.push((col, row));
@@ -560,7 +621,12 @@ impl Run {
                                 &pool[self.rng.below(pool.len())]
                             }
                         };
-                        vec![self.random_normal(), self.enemy(elite, true, 2, 100)]
+                        // on the first floor the elite fights alone: a hero with only basics meets it fresh
+                        if self.floor == 0 {
+                            vec![self.enemy(elite, true, 2, 100)]
+                        } else {
+                            vec![self.random_normal(), self.enemy(elite, true, 2, 100)]
+                        }
                     }
                     _ => vec![self.enemy(self.boss_def(), false, 1, 190)],
                 };
@@ -575,13 +641,21 @@ impl Run {
                     }
                 }
                 let h = &HEROES[self.hero];
-                let mut me = Fighter::new(h.name, h.sprite, &self.trait_text(), self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
+                let mut me = Fighter::new(h.name, h.sprite, h.passive_desc, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
                 me.ups = self.ups.clone();
                 me.brands = self.brands.clone();
-                me.rites = self.rites();
+                me.rites = self.casts();
                 Stage::Battle(Battle::new(me, foes, Rng::new(self.rng.next())))
             }
-            NodeKind::Encounter => Stage::Event(&ENCOUNTERS[self.rng.below(ENCOUNTERS.len())], None),
+            NodeKind::Encounter => {
+                if self.met.len() >= ENCOUNTERS.len() {
+                    self.met.clear();
+                }
+                let fresh: Vec<usize> = (0..ENCOUNTERS.len()).filter(|i| !self.met.contains(i)).collect();
+                let e = fresh[self.rng.below(fresh.len())];
+                self.met.push(e);
+                Stage::Event(&ENCOUNTERS[e], None)
+            }
             NodeKind::Shop => Stage::Shop(self.stock(0, &[])),
             NodeKind::Treasure => self.treasure(),
         }
@@ -650,16 +724,13 @@ impl Run {
             NodeKind::Battle => self.after_node(),
             NodeKind::Boss => {
                 let ids: Vec<usize> = self.rites().into_iter().filter(|&id| self.level(id) < MAX_LEVEL).collect();
-                if ids.is_empty() { self.pick() } else { Stage::Upgrade(ids) }
+                if ids.is_empty() { self.learn_or_pick() } else { Stage::Upgrade(ids) }
             }
             NodeKind::Shrine => {
                 let mut pool: Vec<usize> = (0..BLESSINGS.len()).filter(|&b| Some(b) != self.blessing).collect();
                 Stage::Blessing((0..3).map(|_| pool.remove(self.rng.below(pool.len()))).collect())
             }
-            NodeKind::Elite => {
-                let mut pool = self.brand_pool();
-                Stage::Brand((0..3).map(|_| pool.remove(self.rng.below(pool.len()))).collect())
-            }
+            NodeKind::Elite => self.learn_or_pick(),
             _ => self.pick(),
         }
     }
@@ -686,7 +757,7 @@ impl Run {
 
     /// Leaves a shop. The second shop in a row left without buying offers the Clockwork Eye.
     pub fn leave_shop(&mut self, shop: &Shop) -> Stage {
-        let bought = shop.stock.iter().any(|w| w.is_none()) || shop.brand.is_none() || !shop.lesson;
+        let bought = shop.stock.iter().any(|w| w.is_none()) || shop.brand.is_none() || !shop.lesson || shop.rite.is_none();
         self.bare_shops = if bought { 0 } else { self.bare_shops + 1 };
         if self.bare_shops >= 2 {
             self.bare_shops = 0;
@@ -766,7 +837,8 @@ impl Run {
         let markup = self.keys.iter().fold(100, |p, &k| p * ENDINGS[k].price_pct / 100);
         let pool = self.brand_pool();
         let brand = Some(pool[self.rng.below(pool.len())]);
-        Shop { stock: ids.into_iter().map(Some).collect(), sale, restocks, markup, brand, lesson: true }
+        let rite = self.rite_offer(1).first().copied();
+        Shop { stock: ids.into_iter().map(Some).collect(), sale, restocks, markup, brand, lesson: true, rite }
     }
 
     pub fn price(shop: &Shop, k: usize) -> i32 {
@@ -780,6 +852,21 @@ impl Run {
 
     pub fn lesson_price(shop: &Shop) -> i32 {
         LESSON_PRICE * shop.markup / 100
+    }
+
+    pub fn rite_price(shop: &Shop) -> i32 {
+        RITE_SHOP_PRICE * shop.markup / 100
+    }
+
+    /// Buys the shop's rite, letting `drop` go if every rite slot is taken.
+    pub fn buy_rite(&mut self, shop: &mut Shop, drop: Option<usize>) -> bool {
+        let price = Self::rite_price(shop);
+        let room = self.held.len() < MAX_RITES || drop.is_some_and(|d| self.held.contains(&d));
+        let Some(id) = shop.rite.filter(|_| self.shards >= price && room) else { return false };
+        self.shards -= price;
+        self.teach(id, drop.filter(|_| self.held.len() >= MAX_RITES));
+        shop.rite = None;
+        true
     }
 
     /// Buys the shop's brand and burns it onto rite `id`.
@@ -831,9 +918,9 @@ impl Run {
         }
         self.shards -= price;
         let shelf: Vec<usize> = shop.stock.iter().flatten().copied().collect();
-        let lesson = shop.lesson;
+        let (lesson, rite) = (shop.lesson, shop.rite);
         *shop = self.stock(shop.restocks + 1, &shelf);
-        shop.lesson = lesson;
+        (shop.lesson, shop.rite) = (lesson, rite);
         true
     }
 }
@@ -845,6 +932,7 @@ mod tests {
     #[test]
     fn a_rite_holds_one_brand_per_level_and_sears_the_oldest() {
         let (mut run, _) = Run::new(1, 0, 0);
+        run.held = pool(&HEROES[0].elements)[..1].to_vec();
         let id = run.rites()[0];
         let names = |run: &Run| run.brands_of(id).iter().map(|b| b.name).collect::<Vec<_>>();
         run.burn_brand(id, 0);
@@ -860,6 +948,7 @@ mod tests {
     #[test]
     fn a_shop_sells_one_lesson_and_one_brand() {
         let (mut run, _) = Run::new(1, 0, 0);
+        run.held = pool(&HEROES[0].elements)[..1].to_vec();
         let id = run.rites()[0];
         let mut shop = run.stock(0, &[]);
         run.shards = 500;
@@ -869,6 +958,58 @@ mod tests {
         assert!(!shop.lesson, "a restock brings no new lesson");
         assert!(run.buy_brand(&mut shop, id) && run.brands_of(id).len() == 1 && shop.brand.is_none());
         assert!(matches!(run.leave_shop(&shop), Stage::Map));
+    }
+
+    #[test]
+    fn a_run_starts_with_basics_alone_and_learns_up_to_four_rites() {
+        let (mut run, _) = Run::new(1, 0, 0);
+        assert!(run.rites().is_empty());
+        let casts = run.casts();
+        assert_eq!(casts.len(), 3);
+        assert!(casts.iter().all(|&i| is_basic(&COMBOS[i])));
+        let all = pool(&HEROES[0].elements);
+        for &id in &all[..MAX_RITES] {
+            run.learn(Some((id, None)));
+        }
+        assert_eq!(run.rites(), all[..MAX_RITES]);
+        // full: a fifth is learnt only by letting one go, and its levels and brands go with it
+        run.learn(Some((all[MAX_RITES], None)));
+        assert_eq!(run.rites().len(), MAX_RITES);
+        run.ups.push(all[0]);
+        run.brands.push((all[0], 0));
+        run.learn(Some((all[MAX_RITES], Some(all[0]))));
+        assert!(run.rites().contains(&all[MAX_RITES]) && !run.rites().contains(&all[0]));
+        assert!(run.ups.is_empty() && run.brands.is_empty());
+        // offers never repeat a rite held
+        for _ in 0..20 {
+            assert!(run.rite_offer(3).iter().all(|i| !run.held.contains(i)));
+        }
+        // the shop's rite: room needed, else one let go
+        let mut shop = run.stock(0, &[]);
+        run.shards = 500;
+        if let Some(id) = shop.rite {
+            assert!(!run.buy_rite(&mut shop, None), "no room");
+            assert!(run.buy_rite(&mut shop, Some(run.held[0])) && run.held.contains(&id) && shop.rite.is_none());
+        }
+    }
+
+    #[test]
+    fn every_floor_ends_in_shops_floor_one_elites_come_late_and_events_do_not_repeat() {
+        for seed in 0..40 {
+            let (mut run, _) = Run::new(seed, 0, 0);
+            let cols = run.cols();
+            assert!(run.map[cols - 1].iter().all(|n| n.kind == NodeKind::Shop), "seed {seed}: the rooms before the boss are shops");
+            assert!(run.map[..3].iter().flatten().all(|n| n.kind != NodeKind::Elite), "seed {seed}: no elite in floor 1's first three rooms");
+            let mut seen = vec![];
+            for _ in 0..ENCOUNTERS.len() {
+                run.pos = None;
+                run.map[0][0].kind = NodeKind::Encounter;
+                if let Stage::Event(e, _) = run.enter(0, 0) {
+                    assert!(!seen.contains(&e.title), "seed {seed}: {} came twice", e.title);
+                    seen.push(e.title);
+                }
+            }
+        }
     }
 
     #[test]
@@ -995,37 +1136,12 @@ mod tests {
     thread_local! {
         /// the deeds `play` starts its runs with (none, unless a probe says otherwise)
         static PLAY_DEEDS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-        /// the forge rites `play` swaps in (none, unless a probe says otherwise)
-        static PLAY_ALTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         /// per fight: (node kind, last foe faced, hero won, [loads, breaks, hero HP lost, turns])
         static PROBE: std::cell::RefCell<Vec<(usize, String, bool, [usize; 4])>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
     /// Plays every hero with no deeds and with all of them, and how runs holding each opened pact or
     /// brand did. `cargo test --release probe_deeds -- --ignored --nocapture`
-    /// Each bearer's wins with its base rites, then with each forge rite swapped in alone. The bot
-    /// casts its biggest rite, so it plays none of them as meant: read it for broken, not for fine.
-    /// `cargo test --release probe_forge_rites -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn probe_forge_rites() {
-        const RUNS: u64 = 300;
-        let wins = |hero, alts| {
-            PLAY_ALTS.with(|a| a.set(alts));
-            (0..RUNS).map(|s| play(s, hero, 0, &[])).filter(|r| r.1 || r.0.floor >= FLOORS).count()
-        };
-        for hero in 0..FIRST_HEROES + 1 {
-            let mut line = format!("{:12} base {:3}", HEROES[hero].name, wins(hero, 0));
-            for base in combos_for(&HEROES[hero].elements) {
-                if let Some(alt) = (BASE_COMBOS..COMBOS.len()).find(|&i| COMBOS[i].needs == base.needs) {
-                    line += &format!("  {} {:3}", COMBOS[alt].name, wins(hero, 1 << (alt - BASE_COMBOS)));
-                }
-            }
-            println!("{line}  (of {RUNS})");
-        }
-        PLAY_ALTS.with(|a| a.set(0));
-    }
-
     #[test]
     #[ignore]
     fn probe_deeds() {
@@ -1037,7 +1153,8 @@ mod tests {
                 PLAY_DEEDS.with(|d| d.set(deeds));
                 let runs: Vec<(Run, bool)> = (0..RUNS).map(|s| play(s, hero, 0, &[])).collect();
                 let wins = runs.iter().filter(|r| r.1 || r.0.floor >= FLOORS).count();
-                line += &format!("  deeds {:3}: wins {wins:3}/{RUNS}", if deeds == 0 { "no" } else { "all" });
+                let past: Vec<String> = (1..FLOORS).map(|f| runs.iter().filter(|r| r.1 || r.0.floor >= f).count().to_string()).collect();
+                line += &format!("  deeds {:3}: wins {wins:3}/{RUNS}, past floors {}", if deeds == 0 { "no" } else { "all" }, past.join("/"));
                 if deeds != 0 {
                     ends.extend(runs);
                 }
@@ -1109,7 +1226,7 @@ mod tests {
     /// Plays a whole run, carrying `keys` from the start. Returns the run as it ended, and whether it won.
     fn play(seed: u64, hero: usize, exp: usize, keys: &[usize]) -> (Run, bool) {
         let (mut run, mut stage) = Run::with_deeds(seed, hero, exp, PLAY_DEEDS.with(|d| d.get()));
-        run.arm(0, PLAY_ALTS.with(|a| a.get()));
+        run.arm(0);
         run.keys = keys.to_vec();
         run.hp = run.max_hp();
         let mut pick = Rng::new(seed ^ 0xABCD);
@@ -1146,13 +1263,23 @@ mod tests {
                     let id = socket(&run, &mut pick);
                     run.burn_brand(id, offers[pick.below(offers.len())])
                 }
+                // a new rite while there is room, else the weakest-looking swap: keep what it has
+                Stage::Learn(offers) => {
+                    let take = (run.held.len() < MAX_RITES).then(|| (offers[pick.below(offers.len())], None));
+                    run.learn(take)
+                }
                 Stage::Shop(mut shop) => {
+                    if run.held.len() < MAX_RITES {
+                        run.buy_rite(&mut shop, None);
+                    }
                     let ids: Vec<usize> = run.rites().into_iter().filter(|&id| run.level(id) < MAX_LEVEL).collect();
                     if !ids.is_empty() {
                         run.buy_lesson(&mut shop, ids[pick.below(ids.len())]);
                     }
-                    let id = socket(&run, &mut pick);
-                    run.buy_brand(&mut shop, id);
+                    if !run.held.is_empty() {
+                        let id = socket(&run, &mut pick);
+                        run.buy_brand(&mut shop, id);
+                    }
                     for k in 0..shop.stock.len() {
                         run.buy(&mut shop, k);
                     }
@@ -1197,8 +1324,8 @@ mod tests {
         run.map[1][0].kind = NodeKind::Elite;
         let Stage::Battle(mut b) = run.enter(1, 0) else { panic!("an elite fight") };
         b.debug_win();
-        assert!(matches!(run.finish_battle(&b), Stage::Brand(_)));
-        let Stage::Event(offer, None) = run.burn_brand(run.rites()[0], 0) else { panic!("the seal is offered") };
+        let Stage::Learn(offers) = run.finish_battle(&b) else { panic!("an elite teaches a rite") };
+        let Stage::Event(offer, None) = run.learn(Some((offers[0], None))) else { panic!("the seal is offered") };
         run.choose(&offer.choices[0], None);
         assert_eq!((run.keys.clone(), run.mods().rite_pct, run.mods().self_burn), (vec![0, 1], 25, 4));
         // the Clockwork Eye: two shops in a row left without buying; buying in between starts the count again
@@ -1233,6 +1360,7 @@ mod tests {
         while !matches!(stage, Stage::Map) {
             stage = match stage {
                 Stage::Upgrade(ids) => run.upgrade(ids[0]),
+                Stage::Learn(offers) => run.learn(Some((offers[0], None))),
                 Stage::Pick(_) => run.after_node(),
                 _ => panic!("only rewards before the next floor"),
             };
@@ -1249,6 +1377,7 @@ mod tests {
         while !matches!(stage, Stage::Map) {
             stage = match stage {
                 Stage::Upgrade(ids) => run.upgrade(ids[0]),
+                Stage::Learn(offers) => run.learn(Some((offers[0], None))),
                 Stage::Pick(_) => run.after_node(),
                 _ => panic!("only rewards before the next floor"),
             };
