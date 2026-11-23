@@ -232,7 +232,7 @@ checksum = "60302e4db3a61da70c0cb7991976248362f30319e88850c487b9b95bbf059e00"
 
 [[package]]
 name = "minebound"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "macroquad",
  "quad-snd",
