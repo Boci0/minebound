@@ -448,7 +448,7 @@ Six descents, each harder than the last. Clearing one opens the next.
 | Flooded Caverns | Enemies have 10% more HP |
 | Ember Depths | Enemies have 10% more HP; bosses gain +1 power every 2 turns; your boards start with about 9 faults |
 | Crystal Hollows | Enemies have 15% more HP; bosses gain +1 power every 2 turns; 1 fewer pick each turn; your boards start with about 10 faults |
-| The Rift | Every law of Crystal Hollows; every floor's twist is a curse; every rite costs 1 more gem, of any element; your boards start with about 11 faults |
+| The Rift | Every law of Crystal Hollows; every floor's twist is a curse; every rite costs 1 more gem, of any element (Attack, Shield and Heal still take one); your boards start with about 11 faults |
 | The Null | Every law of The Rift; enemies have 25% more HP and +1 power; your boards start with about 12 faults |
 
 On The Rift and The Null, the extra gem shows as its own socket on each rite, marked with a ring

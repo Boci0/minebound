@@ -151,7 +151,7 @@ impl Fighter {
         }
         let mut rest = stacks.to_vec();
         spend(&mut rest, &paid);
-        for _ in 0..self.mods.toll.max(0) {
+        for _ in 0..self.toll(c) {
             let e = *rest.iter().max_by_key(|&&e| rest.iter().filter(|&&x| x == e).count())?;
             spend(&mut rest, &[e]);
             paid.push(e);
@@ -161,7 +161,12 @@ impl Fighter {
 
     /// True if `paid` covers `c`'s cost and toll exactly, whichever gems pay the toll.
     pub fn fits(&self, c: &Combo, paid: &[Element]) -> bool {
-        paid.len() == self.cost(c).len() + self.mods.toll.max(0) as usize && pays(paid, &self.cost(c))
+        paid.len() == self.cost(c).len() + self.toll(c) && pays(paid, &self.cost(c))
+    }
+
+    /// Extra gems of any kind `c` takes ("Rites cost 1 more gem"): the basics stay one gem.
+    pub fn toll(&self, c: &Combo) -> usize {
+        if is_basic(c) { 0 } else { self.mods.toll.max(0) as usize }
     }
 
     /// The gems `c` takes from this fighter, at its level.
@@ -1492,6 +1497,8 @@ mod tests {
         assert!(!b.cast_with(wildfire, &[Ember, Gale]), "the toll socket must be filled");
         assert!(b.cast_with(wildfire, &[Ember, Gale, Ember]), "any gem pays the toll");
         assert_eq!(b.f[0].stacks, vec![Stone, Stone]);
+        let attack = &COMBOS[basic(0, Stone)];
+        assert!(b.f[0].fits(attack, &[Stone]), "a basic pays no toll");
         b.f[0].stacks = vec![Ember, Gale, Stone, Stone, Ember];
         assert!(b.cast(wildfire));
         assert_eq!(b.f[0].stacks, vec![Stone, Ember], "left alone, it pays in the most plentiful gem");
