@@ -16,6 +16,18 @@ pub const LESSON_PRICE: i32 = 60;
 pub const RITE_SHOP_PRICE: i32 = 55;
 /// the first restock; each one after costs this much more
 pub const RESTOCK_PRICE: i32 = 10;
+/// in-run hero EXP from won fights (elites and bosses grant more)
+pub const XP_NORMAL: u32 = 15;
+pub const XP_ELITE: u32 = 30;
+pub const XP_BOSS: u32 = 45;
+/// rewards when choosing Vitality & Spoils on level-up
+pub const LEVEL_HP: i32 = 12;
+pub const LEVEL_SHARDS: i32 = 25;
+
+/// EXP required to advance from `lvl` to `lvl + 1`.
+pub fn xp_need(lvl: usize) -> u32 {
+    25 + (lvl.saturating_sub(1) as u32) * 15
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NodeKind {
@@ -54,6 +66,8 @@ pub enum Stage {
     Brand(Vec<usize>),
     /// an elite fell (or a hoard teaches): learn one of these rites (by index in `COMBOS`), or none
     Learn(Vec<usize>),
+    /// the hero gained a level: choose +Max HP & Shards or +Trait Power
+    LevelUp,
     Shop(Shop),
     Event(&'static Encounter, Option<String>),
     End(bool),
@@ -142,6 +156,13 @@ pub struct Run {
     pub deeds: u32,
     /// wagers on, one bit per `WAGERS`
     pub wagers: u32,
+    /// one-run Crucible relic forged in the Forge, if any
+    pub crucible: Option<CrucibleRelic>,
+    /// in-run hero level, current EXP toward next level, times Trait Power was chosen, and pending level-up choices
+    pub hero_lvl: usize,
+    pub hero_xp: u32,
+    pub trait_rank: usize,
+    pub pending_lvl: usize,
     /// encounters met this run, by index in `ENCOUNTERS`: none comes twice until all have
     met: Vec<usize>,
 }
@@ -188,6 +209,11 @@ impl Run {
             met: vec![],
             deeds,
             wagers: 0,
+            crucible: None,
+            hero_lvl: 1,
+            hero_xp: 0,
+            trait_rank: 0,
+            pending_lvl: 0,
         };
         run.gen_map();
         run.note = format!("{}, floor 1.", EXPEDITIONS[exp].name);
@@ -207,6 +233,14 @@ impl Run {
     pub fn mods(&self) -> Mods {
         let mut m = Mods::default();
         (HEROES[self.hero].passive)(&mut m);
+        for _ in 0..self.trait_rank {
+            (HEROES[self.hero].trait_up)(&mut m);
+        }
+        if let Some(r) = self.crucible {
+            (CRUCIBLE_BOONS[r.boons[0]].me)(&mut m);
+            (CRUCIBLE_BOONS[r.boons[1]].me)(&mut m);
+            (CRUCIBLE_CURSES[r.curse].me)(&mut m);
+        }
         for &c in &self.charms {
             (CHARMS[c].apply)(&mut m);
         }
@@ -326,6 +360,38 @@ impl Run {
     pub fn arm(&mut self, wagers: u32) {
         self.wagers = wagers;
         self.wild_hands();
+    }
+
+    /// Equips a one-run Crucible relic carried in from the Forge and syncs starting HP to max HP.
+    pub fn equip_crucible(&mut self, relic: Option<CrucibleRelic>) {
+        self.crucible = relic;
+        self.hp = self.max_hp();
+    }
+
+    /// Live description of this run's hero trait, reflecting any Deepen Trait ranks earned.
+    pub fn trait_desc(&self) -> String {
+        trait_desc(self.hero, self.trait_rank)
+    }
+
+    /// EXP needed for the next hero level.
+    pub fn xp_next(&self) -> u32 {
+        xp_need(self.hero_lvl)
+    }
+
+    /// Applies one pending level-up choice: `trait_up = true` strengthens the hero's trait,
+    /// `trait_up = false` grants `+LEVEL_HP` max HP and `+LEVEL_SHARDS` shards.
+    pub fn level_up(&mut self, trait_up: bool) -> Stage {
+        self.pending_lvl = self.pending_lvl.saturating_sub(1);
+        if trait_up {
+            self.trait_rank += 1;
+            self.note = format!("Level {}: deepened trait (Rank {}).", self.hero_lvl, self.trait_rank + 1);
+        } else {
+            self.bonus_hp += LEVEL_HP;
+            self.hp = (self.hp + LEVEL_HP).min(self.max_hp());
+            self.shards += LEVEL_SHARDS;
+            self.note = format!("Level {}: +{LEVEL_HP} max HP, +{LEVEL_SHARDS} shards.", self.hero_lvl);
+        }
+        self.after_node()
     }
 
     fn wagered(&self, k: usize) -> bool {
@@ -540,7 +606,11 @@ impl Run {
         // bosses gain 40% HP per floor up to the last, then grow past the first ending's floor so a later ending's boss keeps up;
         // +1 power since bosses load every turn instead of saving up for one big blow (smaller loads break easier)
         let deeper = self.floor.saturating_sub(FLOORS) as i32;
-        let (hp, power) = if scale { (d.hp * (350 + 320 * floor) / 100 * 125 / 100, d.power + floor + 2) } else { (d.hp * (220 + 40 * floor.min(FLOORS as i32 - 1) + 40 * deeper) / 100, d.power + deeper + 1) };
+        let (hp, power) = if scale {
+            (d.hp * (130 + 160 * floor) / 100 * 125 / 100, d.power + floor + 2 + i32::from(floor >= 2))
+        } else {
+            (d.hp * (220 + 40 * floor.min(FLOORS as i32 - 1) + 40 * deeper) / 100, d.power + deeper + i32::from(floor > 0) + i32::from(floor >= 2))
+        };
         let hp = hp * hp_pct / 100;
         let x = &EXPEDITIONS[self.exp];
         let hp = self.keys.iter().fold(hp * x.hp_pct / 100, |hp, &k| hp * ENDINGS[k].hp_pct / 100);
@@ -552,6 +622,11 @@ impl Run {
         for w in WAGERS.iter().enumerate().filter(|(k, _)| self.wagered(*k)).map(|(_, w)| w) {
             (w.foe)(&mut m);
             hp = (hp * w.hp_pct / 100).max(1);
+        }
+        if let Some(r) = self.crucible {
+            (CRUCIBLE_BOONS[r.boons[0]].foe)(&mut m);
+            (CRUCIBLE_BOONS[r.boons[1]].foe)(&mut m);
+            (CRUCIBLE_CURSES[r.curse].foe)(&mut m);
         }
         // only bosses come unscaled
         if !scale {
@@ -572,7 +647,7 @@ impl Run {
         };
         let pool: Vec<&EnemyDef> = pool.iter().filter(|d| self.floor > 0 || !snatches(d)).collect();
         let d = pool[self.rng.below(pool.len())];
-        self.enemy(d, true, 2, 130)
+        self.enemy(d, true, 1, 130)
     }
 
     /// One line of where the run stands, for the dev log.
@@ -585,6 +660,7 @@ impl Run {
             Stage::Blessing(v) => format!("blessing of {}", v.len()),
             Stage::Brand(v) => format!("brand of {}", v.len()),
             Stage::Learn(v) => format!("learn one of {:?}", v.iter().map(|&i| COMBOS[i].name).collect::<Vec<_>>()),
+            Stage::LevelUp => format!("level up (lv {})", self.hero_lvl),
             Stage::Shop(s) => format!("shop (rite {:?})", s.rite.map(|i| COMBOS[i].name)),
             Stage::Event(e, _) => format!("encounter {}", e.title),
             Stage::End(won) => format!("end, won {won}"),
@@ -623,12 +699,12 @@ impl Run {
                         };
                         // on the first floor the elite fights alone: a hero with only basics meets it fresh
                         if self.floor == 0 {
-                            vec![self.enemy(elite, true, 2, 100)]
+                            vec![self.enemy(elite, true, 1, 100)]
                         } else {
-                            vec![self.random_normal(), self.enemy(elite, true, 2, 100)]
+                            vec![self.random_normal(), self.enemy(elite, true, 1, 100)]
                         }
                     }
-                    _ => vec![self.enemy(self.boss_def(), false, 1, 190)],
+                    _ => vec![self.enemy(self.boss_def(), false, 1, 128)],
                 };
                 let mut foes = foes;
                 if self.wagered(WILD_GIFTS) {
@@ -641,7 +717,8 @@ impl Run {
                     }
                 }
                 let h = &HEROES[self.hero];
-                let mut me = Fighter::new(h.name, h.sprite, h.passive_desc, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
+                let trait_text = self.trait_desc();
+                let mut me = Fighter::new(h.name, h.sprite, &trait_text, self.hp, self.max_hp(), h.power, &h.elements, self.mods(), 3);
                 me.ups = self.ups.clone();
                 me.brands = self.brands.clone();
                 me.rites = self.casts();
@@ -717,9 +794,26 @@ impl Run {
         };
         let shards = base * (100 + m.shard_pct) / 100;
         self.shards += shards;
+        let xp = match kind {
+            NodeKind::Boss => XP_BOSS,
+            NodeKind::Elite => XP_ELITE,
+            _ => XP_NORMAL,
+        };
+        self.hero_xp += xp;
+        let mut gained = 0;
+        while self.hero_xp >= xp_need(self.hero_lvl) {
+            self.hero_xp -= xp_need(self.hero_lvl);
+            self.hero_lvl += 1;
+            self.pending_lvl += 1;
+            gained += 1;
+        }
         // every battle ends at full HP: only the fight in front of you can kill you
         self.hp = self.max_hp();
-        self.note = format!("Won the fight: +{shards} shards, HP restored.");
+        self.note = if gained > 0 {
+            format!("Won the fight: +{shards} shards, +{xp} XP (Level {}!), HP restored.", self.hero_lvl)
+        } else {
+            format!("Won the fight: +{shards} shards, +{xp} XP, HP restored.")
+        };
         match kind {
             NodeKind::Battle => self.after_node(),
             NodeKind::Boss => {
@@ -740,6 +834,9 @@ impl Run {
         // a key's condition was just met: it is offered before the map, and only before the endings
         if let Some(k) = self.omen.take().filter(|k| !self.keys.contains(k) && self.floor < FLOORS) {
             return Stage::Event(&ENDINGS[k].offer, None);
+        }
+        if self.pending_lvl > 0 {
+            return Stage::LevelUp;
         }
         if matches!(self.pos, Some((c, _)) if c == self.cols()) {
             self.floor += 1;
@@ -1083,6 +1180,39 @@ mod tests {
         run.take_blessing(Some(iron));
         assert_eq!((run.blessing, run.max_hp(), run.hp), (Some(iron), max, max), "the old blessing is gone");
         assert_eq!(run.mods().armor, 3 + 3, "Ashwarden's own 3, and Iron's 3");
+        assert_eq!(run.mods().power, 3, "Ashwarden's Ashen might grants +3 power");
+    }
+
+    #[test]
+    fn hero_levels_up_from_battles_and_crucible_relic_applies() {
+        let (mut run, _) = Run::new(7, 0, 0);
+        // equip a Crucible relic: Keen (+2 power), Ironbound (+3 armor), Idol (foes +1 power)
+        let relic = CrucibleRelic { boons: [1, 2], curse: 0 };
+        run.equip_crucible(Some(relic));
+        assert_eq!((run.mods().power, run.mods().armor), (3 + 2, 3 + 3));
+        assert_eq!(run.random_normal().mods.power, 1, "Idol curse grants enemies +1 power");
+
+        // win an elite (+30 XP >= 25 needed for Lv 2): queues LevelUp after elite reward
+        run.map[1][0].kind = NodeKind::Elite;
+        let Stage::Battle(mut b) = run.enter(1, 0) else { panic!("elite battle") };
+        b.debug_win();
+        let Stage::Learn(offers) = run.finish_battle(&b) else { panic!("elite teaches a rite") };
+        assert_eq!((run.hero_lvl, run.pending_lvl, run.hero_xp), (2, 1, 5));
+        let Stage::LevelUp = run.learn(Some((offers[0], None))) else { panic!("level-up choice follows") };
+        // choose Deepen Trait: Ashwarden gains +1 power, +1 armor
+        let next = run.level_up(true);
+        assert!(matches!(next, Stage::Map));
+        assert_eq!((run.trait_rank, run.pending_lvl), (1, 0));
+        assert_eq!((run.mods().power, run.mods().armor), (3 + 2 + 1, 3 + 3 + 1));
+        assert!(run.trait_desc().contains("+4 power") && run.trait_desc().contains("4 less"), "trait_desc reflects rank upgrades: {}", run.trait_desc());
+
+        // another level-up choosing Vitality & Spoils adds max HP and shards
+        run.pending_lvl = 1;
+        run.hero_lvl += 1;
+        let (hp0, sh0) = (run.max_hp(), run.shards);
+        let next = run.level_up(false);
+        assert!(matches!(next, Stage::Map));
+        assert_eq!((run.max_hp(), run.shards), (hp0 + LEVEL_HP, sh0 + LEVEL_SHARDS));
     }
 
     #[test]
@@ -1243,7 +1373,13 @@ mod tests {
                     while !b.over() {
                         b.ai_step();
                         steps += 1;
-                        assert!(steps < 5000, "battle never ends: seed {seed} hero {hero}");
+                        assert!(
+                            steps < 5000,
+                            "battle never ends: seed {seed} hero {hero} turn {} active {} foe {} hp [{}/{}] shd [{}/{}] stacks [{}/{}] rev [{}/{}] evades [{}/{}]",
+                            b.turn, b.active, b.f[1].name, b.f[0].hp, b.f[1].hp, b.f[0].shield, b.f[1].shield,
+                            b.f[0].stacks.len(), b.f[1].stacks.len(), b.f[0].reveals_left, b.f[1].reveals_left,
+                            b.f[0].evades_left, b.f[1].evades_left
+                        );
                     }
                     let kind = run.pos.map_or(0, |(c, r)| run.map[c][r].kind as usize);
                     let count = |f: fn(&crate::battle::Event) -> bool| b.events.iter().filter(|e| f(e)).count();
@@ -1268,6 +1404,7 @@ mod tests {
                     let take = (run.held.len() < MAX_RITES).then(|| (offers[pick.below(offers.len())], None));
                     run.learn(take)
                 }
+                Stage::LevelUp => run.level_up(pick.below(2) == 0),
                 Stage::Shop(mut shop) => {
                     if run.held.len() < MAX_RITES {
                         run.buy_rite(&mut shop, None);
@@ -1327,6 +1464,8 @@ mod tests {
         let Stage::Learn(offers) = run.finish_battle(&b) else { panic!("an elite teaches a rite") };
         let Stage::Event(offer, None) = run.learn(Some((offers[0], None))) else { panic!("the seal is offered") };
         run.choose(&offer.choices[0], None);
+        assert!(matches!(run.after_node(), Stage::LevelUp), "elite XP triggers level-up");
+        assert!(matches!(run.level_up(true), Stage::Map));
         assert_eq!((run.keys.clone(), run.mods().rite_pct, run.mods().self_burn), (vec![0, 1], 25, 4));
         // the Clockwork Eye: two shops in a row left without buying; buying in between starts the count again
         let shop = run.stock(0, &[]);
@@ -1362,6 +1501,7 @@ mod tests {
                 Stage::Upgrade(ids) => run.upgrade(ids[0]),
                 Stage::Learn(offers) => run.learn(Some((offers[0], None))),
                 Stage::Pick(_) => run.after_node(),
+                Stage::LevelUp => run.level_up(true),
                 _ => panic!("only rewards before the next floor"),
             };
         }
@@ -1379,6 +1519,7 @@ mod tests {
                 Stage::Upgrade(ids) => run.upgrade(ids[0]),
                 Stage::Learn(offers) => run.learn(Some((offers[0], None))),
                 Stage::Pick(_) => run.after_node(),
+                Stage::LevelUp => run.level_up(true),
                 _ => panic!("only rewards before the next floor"),
             };
         }

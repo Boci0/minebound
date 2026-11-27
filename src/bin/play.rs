@@ -160,6 +160,14 @@ fn step(run: &mut Run, stage: &mut Stage, cmd: &str, said: &mut Vec<String>) -> 
             *stage = run.learn(Some((id, drop)));
         }
         ("none", Stage::Learn(_)) => *stage = run.learn(None),
+        ("level", Stage::LevelUp) => {
+            let trait_up = match w.get(1).copied() {
+                Some("trait") => true,
+                Some("hp" | "shards") => false,
+                _ => return Err("say `level hp` or `level trait`".into()),
+            };
+            *stage = run.level_up(trait_up);
+        }
         (_, Stage::Shop(shop)) => {
             let ok = match w[0] {
                 "buy" => run.buy(shop, arg(1)?),
@@ -223,7 +231,11 @@ fn tell(b: &mut Battle, said: &mut Vec<String>) {
             Event::Brittle { side } => format!("{}'s brittle shield shattered back", who(side)),
             Event::Pierced { side } => format!("{}'s shield was shattered", who(side)),
             Event::Pass { hp, .. } => format!("-- turn passes (you {} HP, foe {} HP) --", hp[0], hp[1]),
-            Event::Flip => continue,
+            Event::Burn { side, dmg } => format!("{} burned for -{dmg}", who(side)),
+            Event::Thorns { side, dmg } => format!("{}'s thorns hit back for {dmg}", who(side)),
+            Event::Graze { side } => format!("grazed {} for half damage", who(side)),
+            Event::Smite { side, dmg } => format!("smote {} for {dmg}", who(side)),
+            Event::Vent { .. } => continue,
         };
         said.push(line);
     }
@@ -284,6 +296,12 @@ fn show(run: &Run, stage: &Stage) -> String {
             for (k, &i) in o.iter().enumerate() {
                 s += &format!("  {k}: {} needs {:?}: {}\n", COMBOS[i].name, COMBOS[i].needs, describe(&COMBOS[i]));
             }
+        }
+        Stage::LevelUp => {
+            s += &format!(
+                "LEVEL UP (Lv {}): `level hp` (+{} max HP, +{} shards) or `level trait` ({})\n",
+                run.hero_lvl, run::LEVEL_HP, run::LEVEL_SHARDS, HEROES[run.hero].trait_up_desc
+            );
         }
         Stage::Shop(shop) => {
             s += "SHOP:\n";

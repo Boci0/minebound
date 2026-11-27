@@ -37,8 +37,8 @@ full view.
 
 - **Five heroes**, each with their own elements, rites and play style; the fifth is earned with a deed.
 - **Deeds** to do across runs, each opening a new pact, brand or hero for every run after.
-- **The Forge**: every run banks ore, won or lost. Spend it on wagers that make enemies tougher for
-  more ore.
+- **The Forge**: every run banks ore, won or lost. Spend it on permanent **wagers** that make enemies tougher for more ore, or smelt a bespoke one-run **Crucible relic** (2 boons + 1 drawback) carried into your next descent.
+- **In-run levelling**: winning battles grants EXP (more from elites and bosses). Each level lets you choose between **+12 max HP & +25 shards** or **deepening your bearer's trait**.
 - **A board of cracking ground**: mine crystals in plain view, but every one you take cracks the
   tiles around it, and a tile cracked three times caves in on you.
 - **Start with the basics**: every run begins with Attack, Shield and Heal alone. Find up to four
@@ -122,7 +122,7 @@ same rules, and you can watch its board the whole time.
   crack from going. From Ember Depths down, your own boards hold more.
 - **Mining** a crystal costs a pick, pays a gem and cracks every tile touching it (up, down, left
   and right). Hover a crystal to see what mining it would bring down.
-- A tile with 3 cracks **caves in**: 6 damage to you, and a crystal there is lost. It takes nothing
+- A tile with 3 cracks **caves in**: 10 damage straight through shield to you, and a crystal there is lost. It takes nothing
   else down with it.
 - A **vent** costs a pick: click any tile without a crystal, and it and every tile touching it lose
   a crack. A tile can be vented again as long as there is a crack to ease.
@@ -168,14 +168,14 @@ element not in the mark reacts, once per new element:
 
 Hover **Marked** in a fighter's stats to see which elements would react.
 
-**Basics.** Every hero starts a run with three, each paid with one gem of an element set by the
-hero (see [Heroes](#heroes)):
+**Basics.** Every hero starts a run with three flat fallback actions, each paid with one gem of an element set by the
+hero (see [Heroes](#heroes)). Basics ignore rite buffs, surge, reactions and marking:
 
 | Basic | Does |
 | --- | --- |
-| Attack | Your power + 4 damage |
-| Shield | Gain 10 shield |
-| Heal | Heal 5 |
+| Attack | Your power (flat) |
+| Shield | Gain 6 shield (flat) |
+| Heal | Heal 4 (flat) |
 
 **Rites** are found during a run: an elite or a treasure lets you choose one of three (or take a
 pact instead), and each shop sells one for 55 shards. A hero only finds rites made from its own
@@ -232,10 +232,10 @@ Galvanist joins once you do the deed Full Company (see [Deeds](#deeds)).
 
 | Hero | HP | Power | Elements | Attack, Shield, Heal paid in | Trait |
 | --- | --- | --- | --- | --- | --- |
-| Ashwarden | 100 | 7 | Ember, Gale, Stone | Ember, Stone, Gale | Cave-ins deal 1 less damage, and every hit on you 3 less |
+| Ashwarden | 100 | 7 | Ember, Gale, Stone | Ember, Stone, Gale | +3 power, and every hit on you deals 3 less |
 | Stormreader | 94 | 7 | Tide, Gale, Spark | Spark, Tide, Gale | +1 pick each turn; each pick left unused becomes 3 shield |
-| Deepforger | 96 | 6 | Tide, Stone, Spark | Spark, Stone, Tide | Shield never wears off, and each point stops 2 damage |
-| Scaldwright | 96 | 6 | Ember, Tide, Spark | Ember, Spark, Tide | Every rite adds 1 burn on the foe and heals you for 15% of its damage |
+| Deepforger | 96 | 7 | Tide, Stone, Spark | Spark, Stone, Tide | Shield never wears off, and each point stops 2 damage |
+| Scaldwright | 100 | 7 | Ember, Tide, Spark | Ember, Spark, Tide | Rites add 2 burn, burns deal +2, and rites heal 25% of their damage |
 | Galvanist | 92 | 7 | Ember, Stone, Spark | Spark, Stone, Ember | Each surge step is worth +15%, and every cave-in on your boards gives 2 surge |
 
 Ashwarden is a berserker who hits harder as he gets hurt. Stormreader turns picks into damage or
@@ -449,7 +449,7 @@ Six descents, each harder than the last. Clearing one opens the next.
 | Ember Depths | Enemies have 10% more HP; bosses gain +1 power every 2 turns; your boards start with about 9 faults |
 | Crystal Hollows | Enemies have 15% more HP; bosses gain +1 power every 2 turns; 1 fewer pick each turn; your boards start with about 10 faults |
 | The Rift | Every law of Crystal Hollows; every floor's twist is a curse; every rite costs 1 more gem, of any element (Attack, Shield and Heal still take one); your boards start with about 11 faults |
-| The Null | Every law of The Rift; enemies have 25% more HP and +1 power; your boards start with about 12 faults |
+| The Null | Every law of The Rift; enemies have 30% more HP and +1 power; your boards start with about 12 faults |
 
 On The Rift and The Null, the extra gem shows as its own socket on each rite, marked with a ring
 cut by a bar. Any element fills it.
@@ -508,6 +508,8 @@ enemies and pays more ore.
 | Glass Foes | Enemies have half HP but 3 more power | +15% | 50 |
 | Wild Gifts | Every enemy holds a random pact | +20% | 60 |
 | Wild Hands | A random pact for you on every floor | none | 80 |
+
+**The Crucible** is a repeatable ore sink beside Wagers: spend 25 ore to smelt a one-run relic with two random boons and one random drawback, carried into your next non-daily descent and consumed on entry. Reforge all three traits for 20 ore, or **Temper** only the drawback for 15 ore while keeping both boons.
 
 ### Tips
 

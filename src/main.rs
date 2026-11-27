@@ -272,6 +272,10 @@ async fn main() {
                     let seed = fixed_seed.unwrap_or((miniquad::date::now() * 1000.0) as u64);
                     let (mut run, mut stage) = Run::with_deeds(seed, pick.1, pick.0, save.deeds);
                     run.arm(save.wagers_on);
+                    if let Some(relic) = save.take_crucible() {
+                        run.equip_crucible(Some(relic));
+                        save.store();
+                    }
                     // Wild Hands' pact is held already, so the opening pick cannot offer it again
                     if let Stage::Pick(options) = &mut stage {
                         options.retain(|i| !run.charms.contains(i));
@@ -314,7 +318,7 @@ async fn main() {
                         Stage::Battle(b) if b.over() => {}
                         Stage::Battle(b) if win => b.debug_win(),
                         Stage::Battle(b) if lose => b.f[0].hp = 0,
-                        Stage::Battle(b) if smite => b.f[1].hp -= 130,
+                        Stage::Battle(b) if smite => b.debug_smite(130),
                         _ => {}
                     }
                     if (jump || endings) && !matches!(stage, Stage::Battle(b) if b.over()) {
@@ -332,7 +336,7 @@ async fn main() {
                             if let Some(k) = ui::debug_bar() {
                                 run.debug = true;
                                 match k {
-                                    0 => b.f[1].hp -= 130,
+                                    0 => b.debug_smite(130),
                                     1 => b.debug_break(),
                                     _ => b.debug_win(),
                                 }
@@ -381,6 +385,10 @@ async fn main() {
                         ui::status(run);
                         ui::learn(run, offers).map(|choice| run.learn(choice))
                     }
+                    Stage::LevelUp => {
+                        ui::status(run);
+                        ui::level_up(run).map(|trait_up| run.level_up(trait_up))
+                    }
                     Stage::Shop(shop) => {
                         ui::status(run);
                         ui::shop(run, shop).then(|| run.leave_shop(shop))
@@ -395,7 +403,7 @@ async fn main() {
                     }
                 };
                 // you may walk away from an expedition anywhere but mid-fight; how far you got still counts
-                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Learn(_) | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
+                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Learn(_) | Stage::LevelUp | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
                     // past the last boss a retreat still counts as a win: show what it opened
                     if let Some(x) = save.finish(run, false) {
                         pick.0 = x;

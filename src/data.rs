@@ -212,7 +212,20 @@ impl Combo {
 /// What a rite does at `lvl`, with the brand burnt onto it, if any. A brand stays at level 1.
 pub fn rite_text(c: &Combo, lvl: usize, brands: &[&Brand]) -> String {
     let master = c.master.filter(|_| lvl >= MAX_LEVEL);
-    let parts: Vec<String> = c.effects.iter().map(|&e| e.text(lvl)).chain(master.map(|e| e.text(lvl))).chain(brands.iter().map(|b| b.effect.text(1))).collect();
+    let mut parts: Vec<String> = c.effects.iter().map(|&e| e.text(lvl)).chain(master.map(|e| e.text(lvl))).collect();
+    // collapse duplicate brands on the same rite (e.g. "+2 burn on foe x2")
+    let mut seen: Vec<(String, usize)> = vec![];
+    for b in brands {
+        let t = b.effect.text(1);
+        if let Some(entry) = seen.iter_mut().find(|(s, _)| *s == t) {
+            entry.1 += 1;
+        } else {
+            seen.push((t, 1));
+        }
+    }
+    for (t, n) in seen {
+        parts.push(if n > 1 { format!("{t} x{n}") } else { t });
+    }
     let s = parts.join(", ");
     s[..1].to_uppercase() + &s[1..]
 }
@@ -361,7 +374,7 @@ pub static COMBOS: &[Combo] = &[
     combo("Raze", ["Bloodrush", "Rampage"], &[Ember, Gale], &[Damage(2), PerQuarterLost(2)], Some(Lifesteal(50))),
     combo("Magma", ["Lava Lance", "Molten Core"], &[Ember, Stone], &[Pierce, Damage(3)], Some(Sure)),
     combo("Plasma", ["Plasma Lance", "Plasma Nova"], &[Ember, Spark], &[Damage(3), PerSurge(1)], Some(KeepSurge)),
-    combo("Mistveil", ["Mist Shroud", "Veil of Mists"], &[Tide, Gale], &[Heal(8), Reveal(2)], Some(Scout(3))),
+    combo("Mistveil", ["Mist Shroud", "Veil of Mists"], &[Tide, Gale], &[Heal(4), Reveal(1)], Some(Scout(3))),
     combo("Bulwark", ["Rampart", "Citadel"], &[Tide, Stone], &[Shield(12)], Some(Hold)),
     combo("Conduction", ["Overload", "Siphon Storm"], &[Tide, Spark], &[Damage(3), Surge(4)], Some(Steal(2))),
     combo("Sandstorm", ["Dust Devil", "Desert Wrath"], &[Gale, Stone], &[Weaken(2), Bury(2)], Some(Blind(2))),
@@ -371,7 +384,7 @@ pub static COMBOS: &[Combo] = &[
     combo("Tempest", ["Hurricane", "Eye of the Storm"], &[Tide, Gale, Spark], &[PerReveal(1)], Some(Unused)),
     combo("Geode Surge", ["Crystal Tide", "Geode Titan"], &[Tide, Stone, Spark], &[Damage(6), ShieldBlast(150)], Some(KeepHalf)),
     combo("Forgefire", ["Starforge", "Sunforge"], &[Ember, Stone, Spark], &[Damage(8)], Some(Stoke(2))),
-    combo("Maelstrom", ["Abyssal Gyre", "Leviathan"], &[Tide, Gale, Stone], &[Shield(6), Heal(4)], Some(Cleanse)),
+    combo("Maelstrom", ["Abyssal Gyre", "Leviathan"], &[Tide, Gale, Stone], &[Shield(4), Heal(3)], Some(Cleanse)),
     combo("Short Circuit", ["Arc Flash", "Blackout"], &[Ember, Gale, Spark], &[Damage(6), Drain(1)], Some(DrainAll)),
     combo("Boilover", ["Scalding Flood", "Hellbroth"], &[Ember, Tide, Spark], &[Burn(3), PerBurn(1)], Some(Simmer)),
     // found in a run, never cast by enemies
@@ -394,23 +407,23 @@ pub static COMBOS: &[Combo] = &[
     combo("Steam Engine", ["Boiler Heart", "Iron Lung"], &[Ember, Tide, Spark], &[Stoke(1), Surge(3)], Some(Reveal(2))),
     combo("Thunder Anvil", ["Storm Anvil", "Skyforge"], &[Ember, Stone, Spark], &[Damage(5), Armor(1)], Some(Stoke(2))),
     combo("Arc Furnace", ["Arc Kiln", "Star Furnace"], &[Ember, Stone, Spark], &[PerSurge(2), Gems(1)], Some(KeepSurge)),
-    // the basics every hero starts a run with, one gem each: Attack, Shield and Heal paid in each
-    // element, in `Element` order (see `basic`)
-    combo("Attack", ["Attack", "Attack"], &[Ember], &[Damage(4)], None),
-    combo("Shield", ["Shield", "Shield"], &[Ember], &[Shield(10)], None),
-    combo("Heal", ["Heal", "Heal"], &[Ember], &[Heal(5)], None),
-    combo("Attack", ["Attack", "Attack"], &[Tide], &[Damage(4)], None),
-    combo("Shield", ["Shield", "Shield"], &[Tide], &[Shield(10)], None),
-    combo("Heal", ["Heal", "Heal"], &[Tide], &[Heal(5)], None),
-    combo("Attack", ["Attack", "Attack"], &[Gale], &[Damage(4)], None),
-    combo("Shield", ["Shield", "Shield"], &[Gale], &[Shield(10)], None),
-    combo("Heal", ["Heal", "Heal"], &[Gale], &[Heal(5)], None),
-    combo("Attack", ["Attack", "Attack"], &[Stone], &[Damage(4)], None),
-    combo("Shield", ["Shield", "Shield"], &[Stone], &[Shield(10)], None),
-    combo("Heal", ["Heal", "Heal"], &[Stone], &[Heal(5)], None),
-    combo("Attack", ["Attack", "Attack"], &[Spark], &[Damage(4)], None),
-    combo("Shield", ["Shield", "Shield"], &[Spark], &[Shield(10)], None),
-    combo("Heal", ["Heal", "Heal"], &[Spark], &[Heal(5)], None),
+    // the basics every hero starts a run with, one gem each: flat fallback actions (no rite buffs),
+    // paid in each element, in `Element` order (see `basic`)
+    combo("Attack", ["Attack", "Attack"], &[Ember], &[Damage(0)], None),
+    combo("Shield", ["Shield", "Shield"], &[Ember], &[Shield(6)], None),
+    combo("Heal", ["Heal", "Heal"], &[Ember], &[Heal(4)], None),
+    combo("Attack", ["Attack", "Attack"], &[Tide], &[Damage(0)], None),
+    combo("Shield", ["Shield", "Shield"], &[Tide], &[Shield(6)], None),
+    combo("Heal", ["Heal", "Heal"], &[Tide], &[Heal(4)], None),
+    combo("Attack", ["Attack", "Attack"], &[Gale], &[Damage(0)], None),
+    combo("Shield", ["Shield", "Shield"], &[Gale], &[Shield(6)], None),
+    combo("Heal", ["Heal", "Heal"], &[Gale], &[Heal(4)], None),
+    combo("Attack", ["Attack", "Attack"], &[Stone], &[Damage(0)], None),
+    combo("Shield", ["Shield", "Shield"], &[Stone], &[Shield(6)], None),
+    combo("Heal", ["Heal", "Heal"], &[Stone], &[Heal(4)], None),
+    combo("Attack", ["Attack", "Attack"], &[Spark], &[Damage(0)], None),
+    combo("Shield", ["Shield", "Shield"], &[Spark], &[Shield(6)], None),
+    combo("Heal", ["Heal", "Heal"], &[Spark], &[Heal(4)], None),
 ];
 
 /// The rites enemies make from their elements; the run's rites and the basics follow them in `COMBOS`.
@@ -452,6 +465,65 @@ pub static WAGERS: &[Wager] = &[
     Wager { name: "Wild Hands", desc: "A random pact for you on every floor.", price: 80, ore_pct: 0, hp_pct: 100, foe: |_| {}, icon: HD + 45 },
 ];
 
+/// Ore prices for The Crucible: craft or reforge a one-run bespoke relic consumed on descent.
+pub const CRUCIBLE_SMELT_COST: u32 = 25;
+pub const CRUCIBLE_REFORGE_COST: u32 = 20;
+pub const CRUCIBLE_TEMPER_COST: u32 = 15;
+
+/// One boon or drawback of a Crucible relic.
+pub struct CruciblePart {
+    pub tag: &'static str,
+    pub desc: &'static str,
+    pub me: Tweak,
+    pub foe: Tweak,
+}
+
+const fn cpart(tag: &'static str, desc: &'static str, me: Tweak, foe: Tweak) -> CruciblePart {
+    CruciblePart { tag, desc, me, foe }
+}
+
+pub static CRUCIBLE_BOONS: &[CruciblePart] = &[
+    cpart("Gilded", "+40% shards from battles.", |m| m.shard_pct += 40, NOTHING),
+    cpart("Keen", "+2 power.", |m| m.power += 2, NOTHING),
+    cpart("Ironbound", "Every hit on you deals 3 less.", |m| m.armor += 3, NOTHING),
+    cpart("Swift", "+1 pick each turn.", |m| m.reveals += 1, NOTHING),
+    cpart("Charged", "Begin each turn with 4 surge.", |m| m.surge_start += 4, NOTHING),
+    cpart("Vampiric", "Heal for 20% of the damage your rites deal.", |m| m.lifesteal_pct += 20, NOTHING),
+    cpart("Cinder", "Your rites add 2 burn; burns deal +2.", |m| {
+        m.rite_burn += 2;
+        m.burn_bonus += 2
+    }, NOTHING),
+    cpart("Warded", "Gain 10 shield at the start of each wave.", |m| m.start_shield += 10, NOTHING),
+    cpart("Barbed", "Enemy rites that hit you cost them 4 HP.", |m| m.thorns += 4, NOTHING),
+    cpart("Steady", "Cave-ins deal 3 less damage to you.", |m| m.mine_guard += 3, NOTHING),
+    cpart("Resonant", "Your rites deal +4 damage.", |m| m.rite_bonus += 4, NOTHING),
+    cpart("Loaded", "Begin each battle with 3 random gems.", |m| m.start_stacks += 3, NOTHING),
+];
+
+pub static CRUCIBLE_CURSES: &[CruciblePart] = &[
+    cpart("Idol", "Enemies have +1 power.", NOTHING, |m| m.power += 1),
+    cpart("Chalice", "You start every wave with 3 burn.", |m| m.self_burn += 3, NOTHING),
+    cpart("Bell", "1 more fault on each of your boards.", |m| m.fewer_mines -= 1, NOTHING),
+    cpart("Crown", "Enemies start each wave with 8 shield.", NOTHING, |m| m.start_shield += 8),
+    cpart("Fang", "-12 max HP.", |m| m.max_hp -= 12, NOTHING),
+    cpart("Lantern", "Cave-ins deal 2 more damage to you.", |m| m.mine_guard -= 2, NOTHING),
+    cpart("Coil", "Enemies have 2 thorns.", NOTHING, |m| m.thorns += 2),
+    cpart("Anvil", "Enemies gain 1 power every second turn.", NOTHING, |m| m.slow_enrage += 1),
+];
+
+/// A one-run bespoke relic forged from ore: two distinct boons and one drawback, consumed on descent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CrucibleRelic {
+    pub boons: [usize; 2],
+    pub curse: usize,
+}
+
+impl CrucibleRelic {
+    pub fn name(self) -> String {
+        format!("{} {} {}", CRUCIBLE_BOONS[self.boons[0]].tag, CRUCIBLE_BOONS[self.boons[1]].tag, CRUCIBLE_CURSES[self.curse].tag)
+    }
+}
+
 /// Position of `c` in `COMBOS`.
 pub fn combo_id(c: &Combo) -> usize {
     COMBOS.iter().position(|x| std::ptr::eq(x, c)).expect("combos come from COMBOS")
@@ -485,6 +557,9 @@ pub struct Hero {
     pub elements: [Element; 3],
     pub passive: Tweak,
     pub passive_desc: &'static str,
+    /// what each rank of Deepen Trait adds when levelling up in a run
+    pub trait_up: Tweak,
+    pub trait_up_desc: &'static str,
     /// the elements its Attack, Shield and Heal take, one gem each
     pub basics: [Element; 3],
 }
@@ -497,10 +572,15 @@ pub static HEROES: &[Hero] = &[
         power: 7,
         elements: [Ember, Gale, Stone],
         passive: |m| {
-            m.mine_guard += 1;
+            m.power += 3;
             m.armor += 3;
         },
-        passive_desc: "Ashen hide: cave-ins deal 1 less, every hit on you 3 less.",
+        passive_desc: "Ashen might: +3 power, and every hit on you deals 3 less.",
+        trait_up: |m| {
+            m.power += 1;
+            m.armor += 1;
+        },
+        trait_up_desc: "+1 power, and every hit on you deals 1 less.",
         basics: [Ember, Stone, Gale],
     },
     Hero {
@@ -514,32 +594,49 @@ pub static HEROES: &[Hero] = &[
             m.reveal_shield += 3;
         },
         passive_desc: "Quick read: +1 pick a turn; each unused pick becomes 3 shield.",
+        trait_up: |m| {
+            m.reveal_shield += 2;
+            m.surge_start += 2;
+        },
+        trait_up_desc: "+2 shield per unused pick, and begin each turn with +2 surge.",
         basics: [Spark, Tide, Gale],
     },
     Hero {
         name: "Deepforger",
         sprite: HD + 2,
         hp: 96,
-        power: 6,
+        power: 7,
         elements: [Tide, Stone, Spark],
         passive: |m| {
             m.shield_block += 1;
             m.keep_shield += 1;
         },
         passive_desc: "Plated: shield never wears off and stops 2 damage a point.",
+        trait_up: |m| {
+            m.start_shield += 4;
+            m.shield_turn += 2;
+        },
+        trait_up_desc: "+4 shield at wave start and +2 shield each turn.",
         basics: [Spark, Stone, Tide],
     },
     Hero {
         name: "Scaldwright",
         sprite: HD + 66,
-        hp: 96,
-        power: 6,
+        hp: 100,
+        power: 7,
         elements: [Ember, Tide, Spark],
         passive: |m| {
-            m.rite_burn += 1;
-            m.lifesteal_pct += 15;
+            m.rite_burn += 2;
+            m.burn_bonus += 2;
+            m.lifesteal_pct += 25;
         },
-        passive_desc: "Searing touch: rites add 1 burn and heal 15% of their damage.",
+        passive_desc: "Searing touch: rites add 2 burn, burns deal +2, and rites heal 25% of their damage.",
+        trait_up: |m| {
+            m.rite_burn += 1;
+            m.burn_bonus += 1;
+            m.lifesteal_pct += 5;
+        },
+        trait_up_desc: "+1 burn on rites, +1 burn damage, and +5% rite lifesteal.",
         basics: [Ember, Spark, Tide],
     },
     // opened by a deed (see `save::DEEDS`)
@@ -554,12 +651,33 @@ pub static HEROES: &[Hero] = &[
             m.mine_surge += 2;
         },
         passive_desc: "Live wire: each surge step is worth +15%, and every cave-in on your boards gives 2 surge.",
+        trait_up: |m| {
+            m.surge_pct += 3;
+            m.surge_start += 2;
+        },
+        trait_up_desc: "+3% per surge step, and begin each turn with +2 surge.",
         basics: [Spark, Stone, Ember],
     },
 ];
 
 /// The heroes every save starts with; the rest are opened by deeds.
 pub const FIRST_HEROES: usize = 4;
+
+/// Live description of `hero`'s trait after `rank` Deepen Trait upgrades (0 = Rank 1 base).
+pub fn trait_desc(hero: usize, rank: usize) -> String {
+    if rank == 0 {
+        return HEROES[hero].passive_desc.into();
+    }
+    let r = rank as i32;
+    match hero {
+        0 => format!("Ashen might: +{} power, and every hit on you deals {} less.", 3 + r, 3 + r),
+        1 => format!("Quick read: +1 pick a turn; unused picks become {} shield, and begin turns with +{} surge.", 3 + 2 * r, 2 * r),
+        2 => format!("Plated: shield never wears off and stops 2 damage a point; +{} shield at wave start, +{} each turn.", 4 * r, 2 * r),
+        3 => format!("Searing touch: rites add {} burn, burns deal +{}, and rites heal {}% of their damage.", 2 + r, 2 + r, 25 + 5 * r),
+        4 => format!("Live wire: each surge step is worth +{}%, cave-ins give 2 surge, and begin turns with +{} surge.", 15 + 3 * r, 2 * r),
+        _ => HEROES[hero].passive_desc.into(),
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Rarity {
@@ -726,7 +844,7 @@ pub static NORMALS: &[EnemyDef] = &[
         m.evade = 1;
         m.graze = 1
     }),
-    foe("Pebble Golem", HD + 6, "Stone hide: every hit deals 2 less.", 20, 1, &[Stone, Ember], |m| m.armor = 2),
+    foe("Pebble Golem", HD + 6, "Stone hide: every hit deals 2 less.", 17, 1, &[Stone, Ember], |m| m.armor = 2),
     foe("Brine Leech", HD + 7, "Heals for half the damage it deals.", 16, 1, &[Tide, Gale], |m| m.lifesteal_pct = 50),
     foe("Static Moth", HD + 8, "Jams your surge at 4.", 12, 2, &[Spark, Tide], |m| m.foe_surge_cap = 4),
     foe("Thorn Creeper", HD + 9, "Every rite that hits it deals 2 back.", 18, 1, &[Stone, Gale], |m| m.thorns = 2),
@@ -740,7 +858,7 @@ pub static ELITES: &[&[EnemyDef]] = &[
             m.start_shield = 8;
             m.armor = 1
         }),
-        foe("Crystal Warden", HD + 85, "Each crystal it mines gives it 4 shield.", 42, 2, &[Stone, Tide, Spark], |m| m.claim_shield = 4),
+        foe("Crystal Warden", HD + 85, "Each crystal it mines gives it 2 shield.", 42, 2, &[Stone, Tide, Spark], |m| m.claim_shield = 2),
         foe("The Burrower", HD + 86, "2 more faults in your boards.", 44, 2, &[Stone, Gale, Ember], |m| m.foe_mines = 2),
     ],
     &[
@@ -750,8 +868,8 @@ pub static ELITES: &[&[EnemyDef]] = &[
             m.graze = 1
         }),
         foe("Flail Sergeant", HD + 87, "Each of its rites after the first in a turn hits 5 harder.", 40, 3, &[Ember, Stone, Spark], |m| m.chain = 5),
-        foe("Iron Tortoise", HD + 88, "Gains 4 shield each turn, and its shield never wears off.", 40, 2, &[Stone, Tide, Gale], |m| {
-            m.shield_turn = 4;
+        foe("Iron Tortoise", HD + 88, "Gains 3 shield each turn, and its shield never wears off.", 40, 2, &[Stone, Tide, Gale], |m| {
+            m.shield_turn = 3;
             m.keep_shield = 1
         }),
     ],
@@ -774,7 +892,7 @@ pub static BOSSES: &[&[EnemyDef]] = &[
             m.foe_mine_gift = 1
         }),
         // stack snatchers wait past the first floor: they made it a chore
-        foe("The Undertow", HD + 16, "Each turn: heals 2 and gains 2 shield.", 46, 2, &[Tide, Gale, Stone], |m| {
+        foe("The Undertow", HD + 16, "Each turn: heals 2 and gains 2 shield.", 42, 2, &[Tide, Gale, Stone], |m| {
             m.regen = 2;
             m.shield_turn = 2
         }),
@@ -782,17 +900,17 @@ pub static BOSSES: &[&[EnemyDef]] = &[
             m.start_shield = 6;
             m.desperate = 2
         }),
-        foe("The Fen Crone", HD + 92, "Each crystal it mines heals it 2.", 44, 2, &[Tide, Gale, Stone], |m| m.claim_heal = 2),
+        foe("The Fen Crone", HD + 92, "Each crystal it mines heals it 1.", 44, 2, &[Tide, Gale, Stone], |m| m.claim_heal = 1),
     ],
     &[
         foe("The Sapper King", HD + 15, "Starts with 12 shield. Snatches one of your gems each turn.", 105, 3, &[Ember, Gale, Spark], |m| {
             m.start_shield = 12;
             m.pilfer = 1
         }),
-        foe("The Tidecaller", HD + 17, "The first rite each turn only grazes her, for half damage. Heals for 30% of damage dealt.", 96, 3, &[Tide, Spark, Gale], |m| {
+        foe("The Tidecaller", HD + 17, "The first rite each turn only grazes her, for half damage. Heals for 20% of damage dealt.", 96, 3, &[Tide, Spark, Gale], |m| {
             m.evade = 1;
             m.graze = 1;
-            m.lifesteal_pct = 30
+            m.lifesteal_pct = 20
         }),
         foe("The Broodmother", HD + 93, "Hits you for 10 as she steps in. 1 more fault in your boards.", 100, 3, &[Spark, Stone, Ember], |m| {
             m.opening = 10;
@@ -809,8 +927,8 @@ pub static BOSSES: &[&[EnemyDef]] = &[
             m.scouts = 3;
             m.foe_surge_cap = 6
         }),
-        foe("The Deep Engine", HD + 19, "Iron plating: every hit deals 2 less. +1 power every turn.", 125, 3, &[Stone, Ember, Tide], |m| {
-            m.armor = 2;
+        foe("The Deep Engine", HD + 19, "Iron plating: every hit deals 1 less. +1 power every turn.", 115, 3, &[Stone, Ember, Tide], |m| {
+            m.armor = 1;
             m.enrage = 1
         }),
         foe("The Wyrm Below", HD + 95, "Its rites set you burning. Below half HP, +3 power.", 130, 3, &[Ember, Gale, Stone], |m| {
@@ -1049,8 +1167,8 @@ pub static EXPEDITIONS: &[Expedition] = &[
     Expedition {
         name: "The Null",
         text: "Where the maps stop.",
-        rules: &["Every law of The\u{a0}Rift.", "Enemies +25% HP, +1 power.", "About 12 faults on your boards."],
-        hp_pct: 125,
+        rules: &["Every law of The\u{a0}Rift.", "Enemies +30% HP, +1 power.", "About 12 faults on your boards."],
+        hp_pct: 130,
         me: |m| {
             m.reveals -= 1;
             m.toll += 1;
@@ -1287,5 +1405,13 @@ mod tests {
             let echo = if c.needs.len() == 3 { 2 } else { 1 };
             assert!(echo * gives < c.needs.len(), "{} could be cast forever", c.name);
         }
+    }
+
+    #[test]
+    fn duplicate_brands_collapse_in_rite_text() {
+        let c = &COMBOS[0];
+        let b = &BRANDS[0];
+        let base = rite_text(c, 2, &[]);
+        assert_eq!(rite_text(c, 2, &[b, b]), format!("{base}, {} x2", b.effect.text(1)));
     }
 }

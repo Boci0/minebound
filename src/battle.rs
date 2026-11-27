@@ -4,8 +4,8 @@ use crate::{
     rng::Rng,
 };
 
-/// What a cave-in costs whoever's board it was.
-pub const CAVE_DMG: i32 = 6;
+/// What a cave-in costs whoever's board it was (pierces shield, straight to HP).
+pub const CAVE_DMG: i32 = 10;
 /// Gems a mined crystal pays, before charms.
 pub const CLAIM_GEMS: usize = 1;
 /// Tiles on a fresh board dealt one crack from caving in, give or take one.
@@ -198,7 +198,8 @@ fn spend(stacks: &mut Vec<Element>, cost: &[Element]) {
 /// Things that just happened, for the screen to animate and voice.
 #[derive(Debug)]
 pub enum Event {
-    Flip,
+    /// `side` dug a vent at `tile`, easing cracks on `eased`
+    Vent { side: usize, tile: usize, eased: Vec<usize> },
     /// `side` claimed the crystals on these tiles of its `element` board. Carried here because the
     /// board may already be dealt anew when the last crystal on it goes
     Claim { side: usize, element: Element, tiles: Vec<usize> },
@@ -206,7 +207,10 @@ pub enum Event {
     Cave { side: usize },
     /// `skill`: (index in `COMBOS`, level)
     /// `master`: a mastered rite whose mastery takes effect (Worldbreaker's only on a foe at half HP)
-    Cast { from: usize, name: &'static str, element: Element, miss: bool, skill: (usize, usize), master: bool },
+    /// `dmg`: raw HP damage dealt (unclamped on overkill, so huge lethal blows still trigger impact frames)
+    Cast { from: usize, name: &'static str, element: Element, miss: bool, skill: (usize, usize), master: bool, dmg: i32 },
+    /// debug shortcut: direct hit of `dmg` on `side`
+    Smite { side: usize, dmg: i32 },
     /// a passive of `side` just took effect; `hook` names the `Mods` field
     Proc { side: usize, hook: &'static str },
     /// the enemy loaded rites, to fire as its next turn starts
@@ -219,9 +223,15 @@ pub enum Event {
     Brittle { side: usize },
     /// a rite shattered `side`'s shield before its hit (Pierce); a brittle one is gone without shattering back
     Pierced { side: usize },
-    /// the turn passes: both sides' HP (and the wave) as it does, before the next turn's first blow, so
-    /// a heal and the hit that follows it in the same moment show as two numbers, not their sum
-    Pass { hp: [i32; 2], wave: usize },
+    /// `side` took `dmg` burn damage as its turn started
+    Burn { side: usize, dmg: i32 },
+    /// `side`'s thorns struck back for `dmg`
+    Thorns { side: usize, dmg: i32 },
+    /// a rite only grazed `side` for half damage
+    Graze { side: usize },
+    /// the turn passes: both sides' HP, shield and wave as it does, before the next turn's first blow, so
+    /// a heal/shield and the hit that follows it in the same moment play in order instead of cancelling out
+    Pass { hp: [i32; 2], shield: [i32; 2], wave: usize },
 }
 
 /// `f[0]` is the player, `f[1]` the current enemy. Both sides obey exactly the same rules.
@@ -284,6 +294,16 @@ impl Battle {
     pub fn debug_win(&mut self) {
         self.queue.clear();
         self.f[1].hp = 0;
+    }
+
+    /// Developer shortcut: deals `dmg` directly to the enemy and settles wave or victory cleanly.
+    pub fn debug_smite(&mut self, dmg: i32) {
+        if self.over() {
+            return;
+        }
+        self.f[1].hp -= dmg;
+        self.events.push(Event::Smite { side: 1, dmg });
+        self.settle();
     }
 
     /// Developer shortcut: the enemy loads (if it has nothing loaded) and the load breaks at once.
@@ -361,10 +381,10 @@ impl Battle {
     }
 
     /// The elements `c` would react with on `s`'s target: those it brings that the target's mark lacks.
-    /// Nothing on an unmarked target, and nothing from a rite that does not hit.
+    /// Nothing on an unmarked target, nothing from a basic, and nothing from a rite that does not hit.
     pub fn reactions(&self, s: usize, c: &Combo) -> Vec<Element> {
         let mark = &self.f[1 - s].mark;
-        if mark.is_empty() || !self.hits(s, c) {
+        if mark.is_empty() || is_basic(c) || !self.hits(s, c) {
             return vec![];
         }
         c.needs.iter().copied().filter(|e| !mark.contains(e)).collect()
@@ -408,69 +428,73 @@ impl Battle {
         }
         let f = &self.f[s];
         let foe = &self.f[1 - s];
-        let power = f.power + if self.desperate(s) { f.mods.desperate } else { 0 };
+        let basic = is_basic(c);
+        // basics stay flat (power only): rite buffs, surge, chain and reactions belong to found rites
+        let power = f.power + if !basic && self.desperate(s) { f.mods.desperate } else { 0 };
         let gems = f.cost(c).len() as i32;
         let mut d = gems * power;
-        steps.push((format!("{gems} gems x {power} power"), d.to_string()));
-        plus(steps, &mut d, format!("rite {} this turn", nth + 1), nth * f.mods.chain);
-        plus(steps, &mut d, "rite bonus".into(), f.mods.rite_bonus);
-        // a rite the hero found (not a basic; enemies carry no found rites) outdoes Attack gem for gem
-        if !f.rites.is_empty() && !is_basic(c) {
-            plus(steps, &mut d, "found rite".into(), gems * FOUND_PER_GEM);
-        }
-        let lvl = f.level(c);
-        let mut blast = 0;
-        for (e, l) in f.effects(c) {
-            let (what, add) = match e {
-                Effect::Damage(v) => (c.title(lvl).to_string(), at_level(v, l)),
-                Effect::PerSurge(v) => (format!("{surge} surge"), at_level(v, l) * surge),
-                Effect::Detonate => (format!("detonate {} burn", foe.burn), foe.burn.max(0) * (3 + f.mods.burn_bonus)),
-                Effect::PerReveal(v) => {
-                    let n = f.used + if f.has(c, Effect::Unused) { f.reveals_left.max(0) } else { 0 };
-                    (format!("{n} picks"), at_level(v, l) * n)
-                }
-                Effect::PerShatter(v) => {
-                    let breaks = f.effects(c).find_map(|(e, l)| if let Effect::Shatter(n) = e { Some(at_level(n as i32, l) as usize) } else { None }).unwrap_or(0);
-                    let board = foe.board();
-                    let n = (0..N).filter(|&i| board.live(i)).count().min(breaks) as i32;
-                    (format!("{n} crystals broken"), v * n)
-                }
-                Effect::PerBurn(v) => (format!("{} burn on foe", foe.burn), at_level(v, l) * foe.burn.max(0)),
-                Effect::PerQuarterLost(v) => {
-                    let q = ((f.max_hp - f.hp) * 4 / f.max_hp.max(1)).clamp(0, 3);
-                    (format!("{q} quarters of HP lost"), at_level(v, l) * q)
-                }
-                Effect::Opener(v) if nth == 0 => ("first rite this turn".into(), at_level(v, l)),
-                Effect::PerTurn(v) => (format!("turn {}", self.turn), at_level(v, l) * self.turn as i32),
-                Effect::ShieldBlast(p) => {
-                    blast = shield.max(0) * at_level(p, l) / 100;
-                    continue;
-                }
-                _ => continue,
-            };
-            plus(steps, &mut d, what, add * (100 + f.mods.combo_pct) / 100);
-        }
-        if self.reactions(s, c).contains(&Element::Stone) {
-            plus(steps, &mut d, "Stone reacts: crush".into(), CRUSH_DMG);
-        }
-        let step = self.surge_step(s) * surge;
-        if step > 0 {
-            d = (d * (100 + step) + 50) / 100;
-            steps.push((format!("surge +{step}%"), format!("= {d}")));
-        }
-        if nth == 0 && f.mods.first_pct != 0 {
-            d = (d * (100 + f.mods.first_pct) + 50) / 100;
-            steps.push((format!("first rite +{}%", f.mods.first_pct), format!("= {d}")));
-        }
-        if f.mods.rite_pct != 0 {
-            d = (d * (100 + f.mods.rite_pct) + 50) / 100;
-            steps.push((format!("rites +{}%", f.mods.rite_pct), format!("= {d}")));
-        }
-        // thrown shield is not boosted by surge
-        plus(steps, &mut d, "your shield, thrown".into(), blast);
-        if f.has(c, Effect::Execute) && foe.hp * 2 <= foe.max_hp {
-            d *= 2;
-            steps.push(("foe at half HP: x2".into(), format!("= {d}")));
+        steps.push((if basic { format!("basic: {power} power") } else { format!("{gems} gems x {power} power") }, d.to_string()));
+        if !basic {
+            plus(steps, &mut d, format!("rite {} this turn", nth + 1), nth * f.mods.chain);
+            plus(steps, &mut d, "rite bonus".into(), f.mods.rite_bonus);
+            // a rite the hero found (not a basic; enemies carry no found rites) outdoes Attack gem for gem
+            if !f.rites.is_empty() {
+                plus(steps, &mut d, "found rite".into(), gems * FOUND_PER_GEM);
+            }
+            let lvl = f.level(c);
+            let mut blast = 0;
+            for (e, l) in f.effects(c) {
+                let (what, add) = match e {
+                    Effect::Damage(v) => (c.title(lvl).to_string(), at_level(v, l)),
+                    Effect::PerSurge(v) => (format!("{surge} surge"), at_level(v, l) * surge),
+                    Effect::Detonate => (format!("detonate {} burn", foe.burn), foe.burn.max(0) * (3 + f.mods.burn_bonus)),
+                    Effect::PerReveal(v) => {
+                        let n = f.used + if f.has(c, Effect::Unused) { f.reveals_left.max(0) } else { 0 };
+                        (format!("{n} picks"), at_level(v, l) * n)
+                    }
+                    Effect::PerShatter(v) => {
+                        let breaks = f.effects(c).find_map(|(e, l)| if let Effect::Shatter(n) = e { Some(at_level(n as i32, l) as usize) } else { None }).unwrap_or(0);
+                        let board = foe.board();
+                        let n = (0..N).filter(|&i| board.live(i)).count().min(breaks) as i32;
+                        (format!("{n} crystals broken"), v * n)
+                    }
+                    Effect::PerBurn(v) => (format!("{} burn on foe", foe.burn), at_level(v, l) * foe.burn.max(0)),
+                    Effect::PerQuarterLost(v) => {
+                        let q = ((f.max_hp - f.hp) * 4 / f.max_hp.max(1)).clamp(0, 3);
+                        (format!("{q} quarters of HP lost"), at_level(v, l) * q)
+                    }
+                    Effect::Opener(v) if nth == 0 => ("first rite this turn".into(), at_level(v, l)),
+                    Effect::PerTurn(v) => (format!("turn {}", self.turn), at_level(v, l) * self.turn as i32),
+                    Effect::ShieldBlast(p) => {
+                        blast = shield.max(0) * at_level(p, l) / 100;
+                        continue;
+                    }
+                    _ => continue,
+                };
+                plus(steps, &mut d, what, add * (100 + f.mods.combo_pct) / 100);
+            }
+            if self.reactions(s, c).contains(&Element::Stone) {
+                plus(steps, &mut d, "Stone reacts: crush".into(), CRUSH_DMG);
+            }
+            let step = self.surge_step(s) * surge;
+            if step > 0 {
+                d = (d * (100 + step) + 50) / 100;
+                steps.push((format!("surge +{step}%"), format!("= {d}")));
+            }
+            if nth == 0 && f.mods.first_pct != 0 {
+                d = (d * (100 + f.mods.first_pct) + 50) / 100;
+                steps.push((format!("first rite +{}%", f.mods.first_pct), format!("= {d}")));
+            }
+            if f.mods.rite_pct != 0 {
+                d = (d * (100 + f.mods.rite_pct) + 50) / 100;
+                steps.push((format!("rites +{}%", f.mods.rite_pct), format!("= {d}")));
+            }
+            // thrown shield is not boosted by surge
+            plus(steps, &mut d, "your shield, thrown".into(), blast);
+            if f.has(c, Effect::Execute) && foe.hp * 2 <= foe.max_hp {
+                d *= 2;
+                steps.push(("foe at half HP: x2".into(), format!("= {d}")));
+            }
         }
         plus(steps, &mut d, "overpressure".into(), self.pressure());
         if f.weak > 0 {
@@ -515,7 +539,9 @@ impl Battle {
                 } else {
                     total += full;
                 }
-                (nth, surge) = (nth + 1, (surge - 1).max(0));
+                if !is_basic(c) {
+                    (nth, surge) = (nth + 1, (surge - 1).max(0));
+                }
             }
         }
         total
@@ -557,7 +583,7 @@ impl Battle {
             // debug builds only: MINEBOUND_GEMS=N starts the hero's every wave with N gems of each element
             if let Some(n) = std::env::var("MINEBOUND_GEMS").ok().filter(|_| cfg!(debug_assertions) && s == 0).and_then(|v| v.parse().ok()) {
                 let els = self.f[0].elements.clone();
-                self.f[0].stacks.extend(els.iter().flat_map(|&e| std::iter::repeat(e).take(n)));
+                self.f[0].stacks.extend(els.iter().flat_map(|&e| std::iter::repeat_n(e, n)));
             }
             // a brittle shield stays brittle into the next wave, as long as the shield lasts
             (self.f[s].hold, self.f[s].blind, self.f[s].simmer) = (false, 0, false);
@@ -657,6 +683,7 @@ impl Battle {
             }
             let msg = format!("{} burns: -{d}", f.name);
             self.log.push(msg);
+            self.events.push(Event::Burn { side: a, dmg: d });
             if self.settle() {
                 return;
             }
@@ -715,7 +742,7 @@ impl Battle {
         let hoard = if f.stacks.len() >= 3 { f.mods.hoard_shield } else { 0 };
         f.shield += banked + hoard;
         self.procs(a, &[("reveal_shield", banked > 0), ("hoard_shield", hoard > 0)]);
-        self.events.push(Event::Pass { hp: [self.f[0].hp, self.f[1].hp], wave: self.wave });
+        self.events.push(Event::Pass { hp: [self.f[0].hp, self.f[1].hp], shield: [self.f[0].shield, self.f[1].shield], wave: self.wave });
         self.active = 1 - a;
         if self.active == 0 {
             self.turn += 1;
@@ -755,7 +782,7 @@ impl Battle {
         f.surge = (f.surge + 1).min(jam);
         let element = f.boards[cur].element;
         let gain = CLAIM_GEMS + f.mods.claim_bonus.max(0) as usize;
-        f.stacks.extend(std::iter::repeat(element).take(gain));
+        f.stacks.extend(std::iter::repeat_n(element, gain));
         f.hp = (f.hp + f.mods.claim_heal).min(f.max_hp);
         f.shield += f.mods.claim_shield;
         let m = f.mods.clone();
@@ -780,12 +807,16 @@ impl Battle {
     pub fn vent(&mut self, i: usize) -> bool {
         let a = self.active;
         let cur = self.f[a].cur;
-        if self.over() || self.f[a].reveals_left <= 0 || i >= N || !self.f[a].boards[cur].vent(i) {
+        if self.over() || self.f[a].reveals_left <= 0 || i >= N {
+            return false;
+        }
+        let eased = self.f[a].boards[cur].vent_eases(i);
+        if eased.is_empty() || !self.f[a].boards[cur].vent(i) {
             return false;
         }
         self.f[a].reveals_left -= 1;
         self.f[a].used += 1;
-        self.events.push(Event::Flip);
+        self.events.push(Event::Vent { side: a, tile: i, eased });
         self.tidy(a);
         true
     }
@@ -811,11 +842,12 @@ impl Battle {
                 f.duds -= 1;
             }
             let d = if sensed || dud { 0 } else { (CAVE_DMG - f.mods.mine_guard).max(0) };
-            f.stacks.extend(std::iter::repeat(element).take(f.mods.salvage.max(0) as usize));
+            f.stacks.extend(std::iter::repeat_n(element, f.mods.salvage.max(0) as usize));
             f.surge = (f.surge + f.mods.mine_surge.max(0)).min(jam);
             let (m, name) = (f.mods.clone(), f.name.clone());
             self.procs(s, &[("sense", sensed), ("duds", dud), ("salvage", m.salvage > 0), ("mine_surge", m.mine_surge > 0)]);
-            self.hurt(s, d);
+            // cave-ins pierce shield, straight to HP (like burn), so risky mining always carries a real HP price
+            self.f[s].hp -= d;
             self.log.push(format!("A tunnel caves in on {name}: -{d}"));
             self.procs(s, &[("mine_guard", d > 0 && m.mine_guard > 0)]);
             // some opponents feed on your mistakes
@@ -888,26 +920,29 @@ impl Battle {
         let (lvl, element) = (self.f[a].level(c), c.needs[0]);
         let (name, skill) = (c.title(lvl), (combo_id(c), lvl));
         let (nth, surged) = (self.f[a].cast_n, self.f[a].surge > 0);
+        let basic = is_basic(c);
         // every rite that hits spends a surge step, so firing early costs the later ones damage;
-        // a setup rite that deals none (Bulwark, Mistveil) spends nothing
-        if hits {
+        // basics and setup rites that deal no damage spend no surge and do not advance chain/opener
+        if hits && !basic {
             self.f[a].cast_n += 1;
             if !self.f[a].has(c, Effect::KeepSurge) {
                 self.f[a].surge = (self.f[a].surge - 1).max(0);
             }
         }
+        let mut grazed = false;
         // a rite that does not hit is not aimed at the foe's body, so it cannot be evaded
         if !hits || self.f[a].has(c, Effect::Sure) {
         } else if self.f[t].evades_left > 0 && self.f[t].mods.graze > 0 {
             // a graze: half damage (already in `dmg`), every effect still lands
             self.f[t].evades_left -= 1;
+            grazed = true;
             self.proc(t, "evade");
             self.log.push(format!("{}: {name} only grazes", self.f[a].name));
         } else if self.f[t].evades_left > 0 {
             // the whole skill whiffs: no damage, no effects, stacks still spent
             self.f[t].evades_left -= 1;
             self.proc(t, "evade");
-            self.events.push(Event::Cast { from: a, name, element, miss: true, skill, master: false });
+            self.events.push(Event::Cast { from: a, name, element, miss: true, skill, master: false, dmg: 0 });
             self.log.push(format!("{}: {name} misses", self.f[a].name));
             self.tidy(a);
             return;
@@ -918,31 +953,36 @@ impl Battle {
             // its damage is in hit_damage; cleared first, so this cast's own burn stays on
             self.f[t].burn = 0;
         }
-        self.f[t].burn += m.rite_burn.max(0);
-        let desperate = self.desperate(a);
-        self.procs(a, &[
-            ("power", hits && m.power > 0),
-            ("rite_bonus", hits && m.rite_bonus > 0),
-            ("rite_burn", m.rite_burn > 0),
-            ("combo_pct", m.combo_pct > 0),
-            ("first_pct", hits && nth == 0 && m.first_pct > 0),
-            ("chain", hits && nth > 0 && m.chain > 0),
-            ("surge_pct", hits && surged && m.surge_pct > 0),
-            ("desperate", hits && desperate),
-        ]);
+        if !basic {
+            self.f[t].burn += m.rite_burn.max(0);
+            let desperate = self.desperate(a);
+            self.procs(a, &[
+                ("power", hits && m.power > 0),
+                ("rite_bonus", hits && m.rite_bonus > 0),
+                ("rite_burn", m.rite_burn > 0),
+                ("combo_pct", m.combo_pct > 0),
+                ("first_pct", hits && nth == 0 && m.first_pct > 0),
+                ("chain", hits && nth > 0 && m.chain > 0),
+                ("surge_pct", hits && surged && m.surge_pct > 0),
+                ("desperate", hits && desperate),
+            ]);
+        } else {
+            self.procs(a, &[("power", hits && m.power > 0)]);
+        }
         let armored = hits && self.f[t].mods.armor > 0;
         self.procs(t, &[("armor", armored)]);
-        let pct = 100 + self.f[a].mods.combo_pct;
+        let pct = if basic { 100 } else { 100 + self.f[a].mods.combo_pct };
         let master = lvl >= MAX_LEVEL && !(self.f[a].has(c, Effect::Execute) && self.f[t].hp * 2 > self.f[t].max_hp);
-        let (shield, mut leech) = (self.f[a].shield, self.f[a].mods.lifesteal_pct);
+        let (shield, mut leech) = (self.f[a].shield, if basic { 0 } else { self.f[a].mods.lifesteal_pct });
         let (mut fell, mut pierced) = (0, false);
+        let broken_cut = if a == 1 && self.f[1].broken { 2 } else { 1 };
         for (e, lvl) in effects {
             let up = |v: i32| at_level(v, lvl);
             match e {
                 Effect::Damage(_) => {} // already in hit_damage
                 Effect::Burn(n) => self.f[t].burn += up(n),
-                Effect::Shield(v) => self.f[a].shield += up(v) * pct / 100,
-                Effect::Heal(v) => self.f[a].hp = (self.f[a].hp + up(v) * pct / 100).min(self.f[a].max_hp),
+                Effect::Shield(v) => self.f[a].shield += (up(v) * pct / 100) / broken_cut,
+                Effect::Heal(v) => self.f[a].hp = (self.f[a].hp + (up(v) * pct / 100) / broken_cut).min(self.f[a].max_hp),
                 Effect::Weaken(n) => self.f[t].weak = self.f[t].weak.max(up(n)),
                 Effect::Drain(n) => {
                     let keep = self.f[t].stacks.len().saturating_sub(up(n as i32) as usize);
@@ -1003,7 +1043,7 @@ impl Battle {
                 }
             }
         }
-        if hits {
+        if hits && !basic {
             for &e in &react {
                 match e {
                     Element::Ember => self.f[t].burn += IGNITE_BURN,
@@ -1032,7 +1072,13 @@ impl Battle {
             self.hurt(a, thorns);
             self.proc(t, "thorns");
         }
-        self.events.push(Event::Cast { from: a, name, element, miss: false, skill, master });
+        self.events.push(Event::Cast { from: a, name, element, miss: false, skill, master, dmg: dealt });
+        if grazed {
+            self.events.push(Event::Graze { side: t });
+        }
+        if thorns > 0 && hits {
+            self.events.push(Event::Thorns { side: t, dmg: thorns });
+        }
         if pierced {
             self.events.push(Event::Pierced { side: t });
         }
@@ -1080,7 +1126,7 @@ impl Battle {
     fn ai_pick(f: &Fighter, k: usize, bold: bool) -> Option<(usize, bool, f32)> {
         let b = &f.boards[k];
         let hurt = (CAVE_DMG - f.mods.mine_guard).max(0) as f32;
-        let cave = if bold { 0.2 + 3.0 * hurt / f.hp.max(1) as f32 } else { 0.5 + hurt / 8.0 };
+        let cave = if bold { 0.45 + 3.5 * hurt / f.hp.max(1) as f32 } else { 0.5 + hurt / 14.0 };
         let mine = (0..N).filter(|&i| b.live(i)).map(|i| {
             let fell = b.would_cave(i);
             let lost = fell.iter().filter(|&&j| b.live(j)).count() as f32;
@@ -1837,6 +1883,13 @@ mod tests {
         b.f[1].loaded = vec![combo("Conduction")];
         b.end_turn();
         assert_eq!(b.f[1].took, 0);
+        // a broken load also halves shield and healing on defensive enemy rites
+        let mut b = duel();
+        b.f[1].hp = 50;
+        b.f[1].loaded = vec![combo("Maelstrom")];
+        b.f[1].broken = true;
+        b.end_turn();
+        assert_eq!((b.f[1].shield, b.f[1].hp), (2, 51), "broken Maelstrom halves its 4 shield and 3 heal");
     }
 
     #[test]
@@ -1889,5 +1942,65 @@ mod tests {
         assert!(!b.over());
         unleash(&mut b);
         assert!(b.won());
+    }
+
+    #[test]
+    fn debug_smite_advances_wave_and_reports_full_damage() {
+        let me = Fighter::new("Me", 0, "", 50, 50, 5, &[Ember, Gale], Mods::default(), 1);
+        let foes = vec![
+            Fighter::new("A", 0, "", 40, 40, 1, &[Tide], Mods::default(), 1),
+            Fighter::new("B", 0, "", 40, 40, 1, &[Tide], Mods::default(), 1),
+        ];
+        let mut b = Battle::new(me, foes, Rng::new(3));
+        b.events.clear();
+        b.debug_smite(130);
+        assert_eq!(b.wave, 2, "smite killing wave 1 advances to wave 2");
+        assert!(b.events.iter().any(|e| matches!(e, Event::Smite { side: 1, dmg: 130 })));
+        b.debug_smite(130);
+        assert!(b.won(), "smite killing final wave wins the battle");
+    }
+
+    #[test]
+    fn basics_stay_flat_and_ignore_rite_buffs() {
+        let mut b = duel();
+        let (atk, shd, heal) = (&COMBOS[basic(0, Ember)], &COMBOS[basic(1, Stone)], &COMBOS[basic(2, Gale)]);
+        b.f[0].rites = vec![basic(0, Ember), basic(1, Stone), basic(2, Gale)];
+        b.f[0].mods.rite_bonus = 5;
+        b.f[0].mods.chain = 4;
+        b.f[0].mods.rite_burn = 2;
+        b.f[0].mods.combo_pct = 100;
+        b.f[0].mods.first_pct = 100;
+        b.f[0].mods.rite_pct = 50;
+        b.f[0].mods.lifesteal_pct = 50;
+        b.f[0].mods.desperate = 4;
+        b.f[0].surge = 5;
+        b.f[0].hp = 20;
+        b.f[1].mark = vec![Stone];
+        b.f[0].stacks = vec![Ember, Stone, Gale];
+
+        assert_eq!(b.hit_damage(0, atk), b.f[0].power, "basic Attack deals flat power only");
+        assert!(b.reactions(0, atk).is_empty(), "basics do not trigger reactions");
+        assert!(b.cast(atk));
+        assert_eq!(b.f[1].hp, 100 - b.f[0].power);
+        assert_eq!(b.f[1].burn, 0, "basic Attack does not apply rite_burn");
+        assert_eq!(b.f[1].mark, vec![Stone], "basic Attack does not overwrite mark");
+        assert_eq!((b.f[0].surge, b.f[0].cast_n, b.f[0].hp), (5, 0, 20), "basic Attack spends no surge, cast_n, or lifesteal");
+
+        assert!(b.cast(shd));
+        assert_eq!(b.f[0].shield, 6, "basic Shield is flat 6");
+        assert!(b.cast(heal));
+        assert_eq!(b.f[0].hp, 24, "basic Heal is flat 4");
+    }
+
+    #[test]
+    fn cave_ins_deal_ten_damage_through_shield() {
+        let mut b = duel();
+        assert_eq!(CAVE_DMG, 10);
+        b.f[0].shield = 25;
+        let hp = b.f[0].hp;
+        lay_out(&mut b, &[8]);
+        assert!(b.dig(7));
+        assert_eq!(b.f[0].hp, hp - CAVE_DMG, "cave-in deals full CAVE_DMG to HP");
+        assert_eq!(b.f[0].shield, 25, "cave-in pierces shield without touching it");
     }
 }

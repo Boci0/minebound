@@ -1,7 +1,11 @@
 //! Progress kept between launches, as a few lines of text in %APPDATA%\Minebound\save.txt.
 //! No mid-run save: only what the overworld and the settings need.
 
-use crate::data::{ENDINGS, EXPEDITIONS, FIRST_HEROES, HEROES, SETS, SET_AT, WAGERS};
+use crate::data::{
+    CrucibleRelic, CRUCIBLE_BOONS, CRUCIBLE_CURSES, CRUCIBLE_REFORGE_COST, CRUCIBLE_SMELT_COST, CRUCIBLE_TEMPER_COST,
+    ENDINGS, EXPEDITIONS, FIRST_HEROES, HEROES, SETS, SET_AT, WAGERS,
+};
+use crate::rng::Rng;
 use crate::run::{Run, FLOORS};
 
 /// What a deed opens: a pact, a brand or a hero, by name.
@@ -58,11 +62,13 @@ pub struct Save {
     /// wagers bought and wagers on, one bit per `WAGERS`
     pub wagers: u32,
     pub wagers_on: u32,
+    /// one-run bespoke relic forged in the Crucible, carried into the next descent and consumed on entry
+    pub crucible: Option<CrucibleRelic>,
 }
 
 impl Default for Save {
     fn default() -> Save {
-        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8), rules_seen: false, daily: (0, 0), endings: 0, deeds: 0, deeds_seen: 0, ore: 0, wagers: 0, wagers_on: 0 }
+        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8), rules_seen: false, daily: (0, 0), endings: 0, deeds: 0, deeds_seen: 0, ore: 0, wagers: 0, wagers_on: 0, crucible: None }
     }
 }
 
@@ -111,6 +117,9 @@ impl Save {
                 (Some("deeds"), &[done, seen]) => (save.deeds, save.deeds_seen) = (done as u32 & ALL_DEEDS, seen as u32 & ALL_DEEDS),
                 (Some("ore"), &[n]) => save.ore = n as u32,
                 (Some("wagers"), &[have, on]) => (save.wagers, save.wagers_on) = (have as u32 & ALL_WAGERS, on as u32 & have as u32 & ALL_WAGERS),
+                (Some("crucible"), &[b0, b1, c]) if b0 < CRUCIBLE_BOONS.len() && b1 < CRUCIBLE_BOONS.len() && b0 != b1 && c < CRUCIBLE_CURSES.len() => {
+                    save.crucible = Some(CrucibleRelic { boons: [b0, b1], curse: c });
+                }
                 // forge rites are gone: the ore spent on them comes back (60 each), once, as this line is not written again
                 (Some("alts"), &[have]) => save.ore += 60 * (have as u32 & ((1 << 10) - 1)).count_ones(),
                 (Some("best"), &[x, ref heroes @ ..]) if x < EXPEDITIONS.len() => {
@@ -128,9 +137,10 @@ impl Save {
 
     fn text(&self) -> String {
         let mut s = format!("unlocked {}\nvolume {} {}\nrules {}\ndaily {} {}\nendings {}\ndeeds {} {}\n", self.unlocked, self.volume.0, self.volume.1, if self.rules_seen { RULES } else { 0 }, self.daily.0, self.daily.1, self.endings, self.deeds, self.deeds_seen);
-        s += &format!("ore {}
-wagers {} {}
-", self.ore, self.wagers, self.wagers_on);
+        s += &format!("ore {}\nwagers {} {}\n", self.ore, self.wagers, self.wagers_on);
+        if let Some(r) = self.crucible {
+            s += &format!("crucible {} {} {}\n", r.boons[0], r.boons[1], r.curse);
+        }
         for (x, heroes) in self.best.iter().enumerate() {
             let list: Vec<String> = heroes.iter().map(|b| b.to_string()).collect();
             s += &format!("best {x} {}\n", list.join(" "));
@@ -211,6 +221,65 @@ wagers {} {}
             self.wagers |= 1 << k;
         }
         ok
+    }
+
+    /// Cost to forge a fresh Crucible relic (25) or reforge the current one (20).
+    pub fn crucible_cost(&self) -> u32 {
+        if self.crucible.is_some() { CRUCIBLE_REFORGE_COST } else { CRUCIBLE_SMELT_COST }
+    }
+
+    /// Spends ore to forge or reforge a one-run Crucible relic (2 distinct boons + 1 drawback).
+    pub fn smelt_crucible(&mut self, rng: &mut Rng) -> bool {
+        let cost = self.crucible_cost();
+        if self.ore < cost {
+            return false;
+        }
+        self.ore -= cost;
+        let prev = self.crucible;
+        let nb = CRUCIBLE_BOONS.len();
+        let nc = CRUCIBLE_CURSES.len();
+        let mut next = CrucibleRelic { boons: [0, 1], curse: 0 };
+        for _ in 0..8 {
+            let b0 = rng.below(nb);
+            let mut b1 = rng.below(nb - 1);
+            if b1 >= b0 {
+                b1 += 1;
+            }
+            let curse = rng.below(nc);
+            next = CrucibleRelic { boons: [b0, b1], curse };
+            if Some(next) != prev {
+                break;
+            }
+        }
+        self.crucible = Some(next);
+        true
+    }
+
+    /// Spends ore to reroll only the Crucible relic's drawback while keeping both boons.
+    pub fn temper_crucible(&mut self, rng: &mut Rng) -> bool {
+        let Some(mut relic) = self.crucible else { return false };
+        if self.ore < CRUCIBLE_TEMPER_COST {
+            return false;
+        }
+        self.ore -= CRUCIBLE_TEMPER_COST;
+        let nc = CRUCIBLE_CURSES.len();
+        let mut c = rng.below(nc - 1);
+        if c >= relic.curse {
+            c += 1;
+        }
+        relic.curse = c;
+        self.crucible = Some(relic);
+        true
+    }
+
+    /// Discards the currently forged Crucible relic without spending ore.
+    pub fn discard_crucible(&mut self) {
+        self.crucible = None;
+    }
+
+    /// Takes the forged Crucible relic when descending, consuming it from the Forge.
+    pub fn take_crucible(&mut self) -> Option<CrucibleRelic> {
+        self.crucible.take()
     }
 
     /// Deeds done but not yet shown on the deeds sheet.
@@ -337,5 +406,32 @@ loadout 1 0");
         s.deeds_seen = s.deeds;
         assert_eq!(Save::parse(&s.text()), s);
         assert_eq!(Save::parse(&s.text()).new_deeds(), 0);
+    }
+
+    #[test]
+    fn crucible_smelts_tempers_persists_and_consumes_on_descent() {
+        let mut s = Save::default();
+        let mut rng = Rng::new(42);
+        s.ore = 20;
+        assert!(!s.smelt_crucible(&mut rng), "needs 25 ore to smelt fresh");
+        s.ore = 80;
+        assert!(s.smelt_crucible(&mut rng));
+        assert_eq!(s.ore, 55);
+        let first = s.crucible.expect("relic forged");
+        assert_ne!(first.boons[0], first.boons[1]);
+        // round-trips through save file text
+        assert_eq!(Save::parse(&s.text()), s);
+        // temper rerolls only the drawback for 15 ore while keeping both boons
+        assert!(s.temper_crucible(&mut rng));
+        assert_eq!(s.ore, 40);
+        let tempered = s.crucible.unwrap();
+        assert_eq!(tempered.boons, first.boons);
+        assert_ne!(tempered.curse, first.curse);
+        // reforge rerolls all for 20 ore
+        assert!(s.smelt_crucible(&mut rng));
+        assert_eq!(s.ore, 20);
+        // consumed when descending
+        let taken = s.take_crucible();
+        assert!(taken.is_some() && s.crucible.is_none());
     }
 }
