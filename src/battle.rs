@@ -930,7 +930,7 @@ impl Battle {
         spend(&mut self.f[a].stacks, paid);
         let (wave, burn) = (self.wave, self.f[1 - a].burn);
         self.land(a, c);
-        if c.needs.len() == 3 && self.f[a].mods.echo > 0 && self.wave == wave && !self.over() {
+        if c.needs.len() == 3 && self.f[a].mods.echo > 0 && self.wave == wave && !self.over() && self.active == a {
             // Echo Chamber: the same combo again, free. An echoed Detonate sets off the same burn again.
             if self.f[a].effects(c).any(|(e, _)| e == Effect::Detonate) {
                 self.f[1 - a].burn = burn;
@@ -938,6 +938,7 @@ impl Battle {
             self.proc(a, "echo");
             self.land(a, c);
         }
+        self.tidy(a);
         true
     }
 
@@ -977,7 +978,6 @@ impl Battle {
             self.proc(t, "evade");
             self.events.push(Event::Cast { from: a, name, element, miss: true, skill, master: false, dmg: 0 });
             self.log.push(format!("{}: {name} misses", self.f[a].name));
-            self.tidy(a);
             return;
         }
         let m = self.f[a].mods.clone();
@@ -1140,7 +1140,6 @@ impl Battle {
             return;
         }
         self.refresh(t);
-        self.tidy(a);
     }
 
     /// Breaks up to `n` of `s`'s claimable crystals on the board it has up; a board left with none is dealt anew.
@@ -2051,5 +2050,24 @@ mod tests {
         assert_eq!(me.payment_with_slotted(c, &stacks, &[Ember, Tide]), Some(vec![Ember, Gale, Tide]));
         // Missing required cost fails even if toll is slotted.
         assert_eq!(me.payment_with_slotted(c, &[Ember, Tide], &[Tide]), None);
+    }
+
+    #[test]
+    fn echo_chamber_fires_second_cast_before_tidy_ends_turn() {
+        let mut b = duel();
+        b.f[0].mods.echo = 1;
+        b.f[0].reveals_left = 0;
+        b.f[0].stacks = vec![Ember, Gale, Stone];
+        b.f[1].hp = 200;
+        b.f[1].max_hp = 200;
+        let hp0 = b.f[1].hp;
+        assert!(b.cast(combo("Upheaval")));
+        let casts = b.events.iter().filter(|e| matches!(e, Event::Cast { from: 0, .. })).count();
+        let pass_idx = b.events.iter().position(|e| matches!(e, Event::Pass { .. })).expect("turn ends after echo");
+        let last_cast = b.events.iter().rposition(|e| matches!(e, Event::Cast { from: 0, .. })).unwrap();
+        assert_eq!(casts, 2, "Echo Chamber casts twice");
+        assert!(last_cast < pass_idx, "both echoed casts land before tidy ends the turn");
+        assert!(b.f[1].hp < hp0 - 20);
+        assert_eq!(b.active, 1);
     }
 }

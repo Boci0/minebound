@@ -341,9 +341,12 @@ async fn main() {
                                 match k {
                                     0 => b.debug_smite(130),
                                     1 => b.debug_break(),
-                                    _ => b.debug_win(),
+                                    2 => b.debug_win(),
+                                    _ => ui::open_debug_kit(),
                                 }
                             }
+                        } else if cfg!(debug_assertions) {
+                            ui::close_debug_kit();
                         }
                         // the very first fight waits under a sheet of rules until it is read
                         ui::hold_for_rules(!save.rules_seen);
@@ -351,6 +354,9 @@ async fn main() {
                         // past the last floor's boss the run counts as won, whatever an ending's floor does
                         let opens = save.would_open(run.exp, b.won() || run.floor >= FLOORS).filter(|_| !run.debug && run.daily.is_none());
                         let done = ui::battle_screen(b, run, ending.then_some(opens), &mut ai_timer);
+                        if cfg!(debug_assertions) && !b.over() {
+                            ui::debug_kit(run, b);
+                        }
                         if !save.rules_seen && ui::rules() {
                             save.rules_seen = true;
                             save.store();

@@ -623,7 +623,7 @@ pub static HEROES: &[Hero] = &[
         name: "Scaldwright",
         sprite: HD + 66,
         hp: 100,
-        power: 7,
+        power: 8,
         elements: [Ember, Tide, Spark],
         passive: |m| {
             m.rite_burn += 2;

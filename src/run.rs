@@ -338,6 +338,20 @@ impl Run {
         HEROES[self.hero].basics.iter().enumerate().map(|(k, &e)| basic(k, e)).chain(self.held.iter().copied()).collect()
     }
 
+    /// Re-syncs the live battle hero's rites, levels, brands, and pact mods from the run (debug kit).
+    pub fn sync_hero(&self, b: &mut Battle) {
+        let old_mod_power = b.f[0].mods.power;
+        let old_max = b.f[0].max_hp;
+        let mods = self.mods();
+        b.f[0].power += mods.power - old_mod_power;
+        b.f[0].mods = mods;
+        b.f[0].max_hp = self.max_hp();
+        b.f[0].hp = (b.f[0].hp + (b.f[0].max_hp - old_max).max(0)).clamp(1, b.f[0].max_hp);
+        b.f[0].ups = self.ups.clone();
+        b.f[0].brands = self.brands.clone();
+        b.f[0].rites = self.casts();
+    }
+
     /// Up to `n` rites the hero's elements make and it does not hold yet, at random.
     fn rite_offer(&mut self, n: usize) -> Vec<usize> {
         let mut pool: Vec<usize> = pool(&HEROES[self.hero].elements).into_iter().filter(|i| !self.held.contains(i)).collect();
@@ -643,7 +657,7 @@ impl Run {
         } else {
             (d.hp * (220 + 40 * floor.min(FLOORS as i32 - 1) + 40 * deeper) / 100, d.power + deeper + i32::from(floor > 0) + i32::from(floor >= 2))
         };
-        let hp = hp * hp_pct / 100;
+        let hp = hp * hp_pct / 100 * 130 / 100;
         let x = &EXPEDITIONS[self.exp];
         let hp = self.keys.iter().fold(hp * x.hp_pct / 100, |hp, &k| hp * ENDINGS[k].hp_pct / 100);
         let mut m = Mods::default();

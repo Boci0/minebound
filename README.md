@@ -236,7 +236,7 @@ Galvanist joins once you do the deed Full Company (see [Deeds](#deeds)).
 | Ashwarden | 100 | 7 | Ember, Gale, Stone | Ember, Stone, Gale | +3 power, and every hit on you deals 3 less |
 | Stormreader | 94 | 7 | Tide, Gale, Spark | Spark, Tide, Gale | +1 pick each turn; each pick left unused becomes 3 shield |
 | Deepforger | 96 | 7 | Tide, Stone, Spark | Spark, Stone, Tide | Shield never wears off, and each point stops 2 damage |
-| Scaldwright | 100 | 7 | Ember, Tide, Spark | Ember, Spark, Tide | Rites add 2 burn, burns deal +2, and rites heal 25% of their damage |
+| Scaldwright | 100 | 8 | Ember, Tide, Spark | Ember, Spark, Tide | Rites add 2 burn, burns deal +2, and rites heal 25% of their damage |
 | Galvanist | 92 | 7 | Ember, Stone, Spark | Spark, Stone, Ember | Each surge step is worth +15%, and every cave-in on your boards gives 2 surge |
 
 Ashwarden is a berserker who hits harder as he gets hurt. Stormreader turns picks into damage or
