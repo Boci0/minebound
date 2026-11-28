@@ -34,7 +34,7 @@ map:     go K
 pacts:   pick K            upgrade: up K            blessing: bless K | keep
 brand:   brand K RITE      learn: learn K | learn K drop RITE | none
 shop:    buy K | buyrite | buyrite drop RITE | buybrand RITE | lesson RITE | restock | leave
-event:   choose K | choose K give PACT
+event:   choose K | choose K give PACT              notice/wild hands: ok
 any:     look (just show the state again), info NAME (what a rite does)";
 
 fn main() {
@@ -137,6 +137,9 @@ fn step(run: &mut Run, stage: &mut Stage, cmd: &str, said: &mut Vec<String>) -> 
             run.add_charm(id);
             *stage = run.after_node();
         }
+        ("ok" | "continue", Stage::WildHands(_, then_pick)) => {
+            *stage = run.after_wild_hands(*then_pick);
+        }
         ("up", Stage::Upgrade(ids)) => {
             let id = *ids.get(arg(1)?).ok_or("no such rite")?;
             *stage = run.upgrade(id);
@@ -195,7 +198,10 @@ fn step(run: &mut Run, stage: &mut Stage, cmd: &str, said: &mut Vec<String>) -> 
                 return Err("the shop refused it (not enough shards, sold out, or no room)".into());
             }
         }
-        ("choose", Stage::Event(e, _)) => {
+        ("ok" | "continue", Stage::Event(_, Some(_))) => {
+            *stage = run.after_node();
+        }
+        ("choose", Stage::Event(e, None)) => {
             let shown: Vec<&Choice> = e.choices.iter().filter(|c| run.shows(c)).collect();
             let c = *shown.get(arg(1)?).ok_or("no such choice")?;
             if !run.can_afford(c) {
@@ -207,7 +213,7 @@ fn step(run: &mut Run, stage: &mut Stage, cmd: &str, said: &mut Vec<String>) -> 
             } else {
                 None
             };
-            said.push(run.choose(c, give));
+            said.push(run.choose(c, give).text);
             *stage = run.after_node();
         }
         (_, Stage::End(_)) => return Err("the run is over".into()),
@@ -272,6 +278,12 @@ fn show(run: &Run, stage: &Stage) -> String {
                 s += &format!("  {k}: {} ({:?}, {:?} set): {}\n", CHARMS[i].name, CHARMS[i].rarity, CHARMS[i].set, CHARMS[i].desc);
             }
         }
+        Stage::WildHands(id, _) => {
+            s += &format!(
+                "WILD HANDS (`ok` to continue): {} ({:?}, {:?} set): {}\n",
+                CHARMS[*id].name, CHARMS[*id].rarity, CHARMS[*id].set, CHARMS[*id].desc
+            );
+        }
         Stage::Upgrade(ids) => {
             s += "UPGRADE A RITE (`up K`):\n";
             for (k, &i) in ids.iter().enumerate() {
@@ -321,7 +333,10 @@ fn show(run: &Run, stage: &Stage) -> String {
             }
             s += &format!("  restock for {}{} | leave\n", Run::restock_price(shop), if run.can_restock(shop) { "" } else { " (can't)" });
         }
-        Stage::Event(e, _) => {
+        Stage::Event(e, Some(res)) => {
+            s += &format!("EVENT {} (`ok` to continue): {} {}\n", e.title, e.text, res.text);
+        }
+        Stage::Event(e, None) => {
             s += &format!("EVENT {}: {}\n", e.title, e.text);
             for (k, c) in e.choices.iter().filter(|c| run.shows(c)).enumerate() {
                 s += &format!("  choose {k}: {}{}\n", c.label, if run.can_afford(c) { "" } else { " (can't afford)" });

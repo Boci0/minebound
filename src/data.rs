@@ -681,21 +681,23 @@ pub fn trait_desc(hero: usize, rank: usize) -> String {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Rarity {
+    Mediocre,
     Common,
     Rare,
     Legendary,
+    Cursed,
 }
 
 impl Rarity {
     pub fn name(self) -> &'static str {
-        ["Common", "Rare", "Legendary"][self as usize]
+        ["Mediocre", "Common", "Rare", "Legendary", "Cursed"][self as usize]
     }
     pub fn price(self) -> i32 {
-        [30, 45, 65][self as usize]
+        [18, 30, 45, 65, 22][self as usize]
     }
     /// how often it is offered, relative to the others
     pub fn weight(self) -> usize {
-        [6, 3, 1][self as usize]
+        [4, 6, 3, 1, 2][self as usize]
     }
 }
 use Rarity::*;
@@ -752,10 +754,16 @@ pub struct Charm {
     pub hook: &'static str,
     pub desc: &'static str,
     pub apply: Tweak,
+    /// pure-downside cursed burden: rolled only by random grants (Wild Hands, encounters, Wild Gifts), never in picks or shops
+    pub burden: bool,
 }
 
 const fn charm(name: &'static str, rarity: Rarity, set: Set, icon: (usize, u32), hook: &'static str, desc: &'static str, apply: Tweak) -> Charm {
-    Charm { name, rarity, set, icon, hook, desc, apply }
+    Charm { name, rarity, set, icon, hook, desc, apply, burden: false }
+}
+
+const fn burden(name: &'static str, set: Set, icon: (usize, u32), hook: &'static str, desc: &'static str, apply: Tweak) -> Charm {
+    Charm { name, rarity: Cursed, set, icon, hook, desc, apply, burden: true }
 }
 
 const PLAIN: u32 = 0xffffff;
@@ -815,6 +823,46 @@ pub static CHARMS: &[Charm] = &[
         m.enrage += 1;
         m.max_hp -= 20
     }),
+    // mediocre: modest perks, cheap in shops and useful for waking a set
+    charm("Dull Buckler", Mediocre, Set::Guard, (HD + 102, PLAIN), "start_shield", "Gain 4 shield at the start of each wave.", |m| m.start_shield += 4),
+    charm("Rusty Shiv", Mediocre, Set::Blade, (HD + 103, PLAIN), "rite_bonus", "Your rites deal +2 damage.", |m| m.rite_bonus += 2),
+    charm("Chipped Compass", Mediocre, Set::Delver, (HD + 104, PLAIN), "scouts", "Every board you are dealt has 1 crack propped up.", |m| m.scouts += 1),
+    charm("Bent Copper", Mediocre, Set::Surge, (HD + 105, PLAIN), "surge_start", "Begin each turn with 2 surge.", |m| m.surge_start += 2),
+    charm("Stale Crust", Mediocre, Set::Blood, (HD + 106, PLAIN), "heal_after", "Heal 4 whenever a new wave steps in.", |m| m.heal_after += 4),
+    charm("Damp Tinder", Mediocre, Set::Cinder, (HD + 107, PLAIN), "burn_bonus", "Your burns deal +1 more damage each turn.", |m| m.burn_bonus += 1),
+    // cursed bargains: strong power paired with a real drawback
+    charm("Cracked Aegis", Cursed, Set::Guard, (HD + 108, PLAIN), "armor", "Every hit on you deals 4 less, but 15 less max HP.", |m| {
+        m.armor += 4;
+        m.max_hp -= 15
+    }),
+    charm("Serrated Toll", Cursed, Set::Blade, (HD + 109, PLAIN), "power", "+3 power, but start every wave with 3 burn.", |m| {
+        m.power += 3;
+        m.self_burn += 3
+    }),
+    charm("Greed's Hook", Cursed, Set::Delver, (HD + 110, PLAIN), "reveals", "+1 pick each turn, but 1 more fault on each of your boards.", |m| {
+        m.reveals += 1;
+        m.fewer_mines -= 1
+    }),
+    charm("Frayed Coil", Cursed, Set::Surge, (HD + 111, PLAIN), "surge_start", "Begin each turn with 7 surge, but cave-ins deal 2 more damage to you.", |m| {
+        m.surge_start += 7;
+        m.mine_guard -= 2
+    }),
+    charm("Blood Ledger", Cursed, Set::Blood, (HD + 112, PLAIN), "lifesteal_pct", "Heal for 40% of the damage your rites deal, but start every wave with 3 burn.", |m| {
+        m.lifesteal_pct += 40;
+        m.self_burn += 3
+    }),
+    charm("Cinder Shackle", Cursed, Set::Cinder, (HD + 113, PLAIN), "rite_burn", "Your rites add 2 burn and burns deal +2, but cave-ins deal 3 more damage to you.", |m| {
+        m.rite_burn += 2;
+        m.burn_bonus += 2;
+        m.mine_guard -= 3
+    }),
+    // pure cursed burdens: only from random grants (Wild Hands, risky encounters, Wild Gifts); still count toward sets
+    burden("Lead Weight", Set::Guard, (HD + 114, PLAIN), "mine_guard", "-12 max HP, and cave-ins deal 1 more damage to you.", |m| {
+        m.max_hp -= 12;
+        m.mine_guard -= 1
+    }),
+    burden("Rotting Wick", Set::Cinder, (HD + 115, PLAIN), "self_burn", "Start every wave with 2 burn.", |m| m.self_burn += 2),
+    burden("Faulty Lantern", Set::Delver, (HD + 116, PLAIN), "fewer_mines", "1 more fault on each of your boards.", |m| m.fewer_mines -= 1),
 ];
 
 /// Sprites from here up are the 128px sigils of assets/sigils/sigils-mono.png (game-icons.net, CC BY 3.0),

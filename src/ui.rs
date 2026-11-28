@@ -341,6 +341,8 @@ thread_local! {
     static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// (music, sound effects) volume, each 0..=10
     static VOLUME: std::cell::Cell<(i32, i32)> = const { std::cell::Cell::new((6, 8)) };
+    /// semi-transparent performance overlays: bit 0 = FPS tracker, bit 1 = resource usage graph
+    static PERF_HUD: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static SETTINGS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// the rules sheet is up over the first battle
     static RULES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -368,6 +370,14 @@ pub fn volume() -> (i32, i32) {
 
 pub fn set_volume(v: (i32, i32)) {
     VOLUME.with(|x| x.set(v));
+}
+
+pub fn perf_hud() -> u8 {
+    PERF_HUD.with(|p| p.get())
+}
+
+pub fn set_perf_hud(bits: u8) {
+    PERF_HUD.with(|p| p.set(bits & 0b11));
 }
 
 /// The game clock. Every animation runs on it, so slow motion slows everything at once.
@@ -781,6 +791,379 @@ pub fn end_frame() {
             draw_line(-2000.0, VIEW.y - h, 3280.0, VIEW.y - h, 1.5, fade(FAINT, 1.0 - p));
         }
     }
+    draw_perf_hud();
+}
+
+/// Zero-dependency process CPU%, GPU% (PDH), and RAM MB (Private Working Set) sampler (2 Hz when enabled).
+#[cfg(windows)]
+mod perf_os {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+    impl FileTime {
+        fn u64(self) -> u64 {
+            ((self.high as u64) << 32) | self.low as u64
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct ProcessMemoryCountersEx2 {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+        private_usage: usize,
+        private_working_set_size: usize,
+        shared_commit_usage: u64,
+    }
+
+    #[repr(C)]
+    struct PdhFmtCounterValueItemW {
+        _name: *const u16,
+        c_status: u32,
+        double_value: f64,
+    }
+
+    const PDH_FMT_DOUBLE: u32 = 0x0000_0200;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcess() -> *mut core::ffi::c_void;
+        fn GetProcessTimes(
+            process: *mut core::ffi::c_void,
+            creation: *mut FileTime,
+            exit: *mut FileTime,
+            kernel: *mut FileTime,
+            user: *mut FileTime,
+        ) -> i32;
+        fn GetSystemTimes(idle: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
+        fn K32GetProcessMemoryInfo(
+            process: *mut core::ffi::c_void,
+            counters: *mut ProcessMemoryCountersEx2,
+            cb: u32,
+        ) -> i32;
+    }
+
+    #[link(name = "pdh")]
+    extern "system" {
+        fn PdhOpenQueryW(data_source: *const u16, user_data: usize, query: *mut *mut core::ffi::c_void) -> u32;
+        fn PdhAddEnglishCounterW(
+            query: *mut core::ffi::c_void,
+            full_counter_path: *const u16,
+            user_data: usize,
+            counter: *mut *mut core::ffi::c_void,
+        ) -> u32;
+        fn PdhCollectQueryData(query: *mut core::ffi::c_void) -> u32;
+        fn PdhGetFormattedCounterArrayW(
+            counter: *mut core::ffi::c_void,
+            format: u32,
+            buffer_size: *mut u32,
+            item_count: *mut u32,
+            item_buffer: *mut core::ffi::c_void,
+        ) -> u32;
+        fn PdhCloseQuery(query: *mut core::ffi::c_void) -> u32;
+    }
+
+    pub struct Sampler {
+        prev_proc: u64,
+        prev_sys: u64,
+        pdh_init: bool,
+        pdh_query: *mut core::ffi::c_void,
+        pdh_counter: *mut core::ffi::c_void,
+        pdh_buf: Vec<u8>,
+    }
+
+    impl Drop for Sampler {
+        fn drop(&mut self) {
+            if !self.pdh_query.is_null() {
+                unsafe { PdhCloseQuery(self.pdh_query); }
+            }
+        }
+    }
+
+    impl Sampler {
+        pub const fn new() -> Self {
+            Self {
+                prev_proc: 0,
+                prev_sys: 0,
+                pdh_init: false,
+                pdh_query: core::ptr::null_mut(),
+                pdh_counter: core::ptr::null_mut(),
+                pdh_buf: Vec::new(),
+            }
+        }
+
+        fn sample_gpu(&mut self) -> f32 {
+            unsafe {
+                if !self.pdh_init {
+                    self.pdh_init = true;
+                    let mut q = core::ptr::null_mut();
+                    let mut c = core::ptr::null_mut();
+                    let path: Vec<u16> = format!("\\GPU Engine(pid_{}_*)\\Utilization Percentage\0", std::process::id()).encode_utf16().collect();
+                    if PdhOpenQueryW(core::ptr::null(), 0, &mut q) == 0 {
+                        if PdhAddEnglishCounterW(q, path.as_ptr(), 0, &mut c) == 0 && PdhCollectQueryData(q) == 0 {
+                            self.pdh_query = q;
+                            self.pdh_counter = c;
+                        } else {
+                            PdhCloseQuery(q);
+                        }
+                    }
+                    return 0.0;
+                }
+                if self.pdh_query.is_null() || PdhCollectQueryData(self.pdh_query) != 0 {
+                    return 0.0;
+                }
+                let (mut buf_sz, mut count) = (0u32, 0u32);
+                PdhGetFormattedCounterArrayW(self.pdh_counter, PDH_FMT_DOUBLE, &mut buf_sz, &mut count, core::ptr::null_mut());
+                if buf_sz == 0 {
+                    return 0.0;
+                }
+                if self.pdh_buf.len() < buf_sz as usize {
+                    self.pdh_buf.resize(buf_sz as usize, 0);
+                }
+                let mut sz = self.pdh_buf.len() as u32;
+                if PdhGetFormattedCounterArrayW(self.pdh_counter, PDH_FMT_DOUBLE, &mut sz, &mut count, self.pdh_buf.as_mut_ptr().cast()) != 0 {
+                    return 0.0;
+                }
+                let items = core::slice::from_raw_parts(self.pdh_buf.as_ptr() as *const PdhFmtCounterValueItemW, count as usize);
+                // Task Manager reports the highest active GPU engine utilization for the process
+                items.iter().filter(|it| it.c_status == 0).map(|it| it.double_value as f32).fold(0.0f32, f32::max).clamp(0.0, 100.0)
+            }
+        }
+
+        pub fn sample(&mut self) -> (f32, f32, f32) {
+            unsafe {
+                let proc = GetCurrentProcess();
+                // Try EX2 (96B on x64) for Task Manager's exact Private Working Set; fall back to EX (80B) PrivateUsage.
+                let mut pmc = ProcessMemoryCountersEx2::default();
+                let ex2_cb = core::mem::size_of::<ProcessMemoryCountersEx2>() as u32;
+                let ex1_cb = ex2_cb - (core::mem::size_of::<usize>() + core::mem::size_of::<u64>()) as u32;
+                pmc.cb = ex2_cb;
+                let ram_mb = if K32GetProcessMemoryInfo(proc, &mut pmc, ex2_cb) != 0 && pmc.private_working_set_size > 0 {
+                    pmc.private_working_set_size as f32 / (1024.0 * 1024.0)
+                } else {
+                    pmc.cb = ex1_cb;
+                    if K32GetProcessMemoryInfo(proc, &mut pmc, ex1_cb) != 0 {
+                        let bytes = if pmc.private_usage > 0 { pmc.private_usage } else { pmc.working_set_size };
+                        bytes as f32 / (1024.0 * 1024.0)
+                    } else {
+                        0.0
+                    }
+                };
+                let (mut c, mut e, mut pk, mut pu) = (FileTime::default(), FileTime::default(), FileTime::default(), FileTime::default());
+                let (mut si, mut sk, mut su) = (FileTime::default(), FileTime::default(), FileTime::default());
+                let cpu_pct = if GetProcessTimes(proc, &mut c, &mut e, &mut pk, &mut pu) != 0 && GetSystemTimes(&mut si, &mut sk, &mut su) != 0 {
+                    let proc_t = pk.u64().wrapping_add(pu.u64());
+                    let sys_t = sk.u64().wrapping_add(su.u64());
+                    let pct = if self.prev_sys > 0 {
+                        let dp = proc_t.saturating_sub(self.prev_proc);
+                        let ds = sys_t.saturating_sub(self.prev_sys);
+                        if ds > 0 { (dp as f64 / ds as f64 * 100.0).clamp(0.0, 100.0) as f32 } else { 0.0 }
+                    } else {
+                        0.0
+                    };
+                    self.prev_proc = proc_t;
+                    self.prev_sys = sys_t;
+                    pct
+                } else {
+                    0.0
+                };
+                let gpu_pct = self.sample_gpu();
+                (cpu_pct, gpu_pct, ram_mb)
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod perf_os {
+    pub struct Sampler;
+    impl Sampler {
+        pub const fn new() -> Self {
+            Self
+        }
+        pub fn sample(&mut self) -> (f32, f32, f32) {
+            (0.0, 0.0, 0.0)
+        }
+    }
+}
+
+const PERF_SAMPLES: usize = 48;
+
+struct PerfState {
+    ema_dt: f32,
+    fps_hist: [f32; PERF_SAMPLES],
+    cpu_hist: [f32; PERF_SAMPLES],
+    gpu_hist: [f32; PERF_SAMPLES],
+    ram_hist: [f32; PERF_SAMPLES],
+    fps_head: usize,
+    res_head: usize,
+    fps_len: usize,
+    res_len: usize,
+    last_fps_t: f64,
+    last_res_t: f64,
+    cpu_pct: f32,
+    gpu_pct: f32,
+    ram_mb: f32,
+    proc_label: Option<String>,
+    sampler: perf_os::Sampler,
+}
+
+impl PerfState {
+    const fn new() -> Self {
+        Self {
+            ema_dt: 1.0 / 60.0,
+            fps_hist: [0.0; PERF_SAMPLES],
+            cpu_hist: [0.0; PERF_SAMPLES],
+            gpu_hist: [0.0; PERF_SAMPLES],
+            ram_hist: [0.0; PERF_SAMPLES],
+            fps_head: 0,
+            res_head: 0,
+            fps_len: 0,
+            res_len: 0,
+            last_fps_t: -1.0,
+            last_res_t: -1.0,
+            cpu_pct: 0.0,
+            gpu_pct: 0.0,
+            ram_mb: 0.0,
+            proc_label: None,
+            sampler: perf_os::Sampler::new(),
+        }
+    }
+}
+
+thread_local!(static PERF_STATE: std::cell::RefCell<PerfState> = const { std::cell::RefCell::new(PerfState::new()) });
+
+fn sparkline(r: Rect, buf: &[f32; PERF_SAMPLES], head: usize, len: usize, max_v: f32, col: Color) {
+    if len < 2 {
+        return;
+    }
+    let scale = max_v.max(1.0);
+    let step = r.w / (PERF_SAMPLES - 1) as f32;
+    let start = PERF_SAMPLES - len;
+    let mut prev: Option<Vec2> = None;
+    for i in 0..len {
+        let idx = (head + PERF_SAMPLES - len + i) % PERF_SAMPLES;
+        let v = (buf[idx] / scale).clamp(0.0, 1.0);
+        let p = vec2(r.x + (start + i) as f32 * step, r.bottom() - v * r.h);
+        if let Some(q) = prev {
+            draw_line(q.x, q.y, p.x, p.y, 1.5, col);
+        }
+        prev = Some(p);
+    }
+}
+
+/// Semi-transparent, click-through FPS tracker and resource usage graph (zero work when disabled).
+fn draw_perf_hud() {
+    let bits = PERF_HUD.with(|p| p.get());
+    if bits == 0 {
+        return;
+    }
+    let show_fps = bits & 1 != 0;
+    let show_res = bits & 2 != 0;
+    let t = get_time();
+    let frame_dt = get_frame_time().clamp(0.0001, 0.5);
+
+    PERF_STATE.with(|cell| {
+        let mut p = cell.borrow_mut();
+        p.ema_dt = p.ema_dt * 0.9 + frame_dt * 0.1;
+        let fps = (1.0 / p.ema_dt).min(999.0);
+        let ms = p.ema_dt * 1000.0;
+
+        if show_res && (p.last_fps_t < 0.0 || t - p.last_fps_t >= 0.25) {
+            let h = p.fps_head;
+            p.fps_hist[h] = fps;
+            p.fps_head = (h + 1) % PERF_SAMPLES;
+            p.fps_len = (p.fps_len + 1).min(PERF_SAMPLES);
+            p.last_fps_t = t;
+        }
+        if show_res && (p.last_res_t < 0.0 || t - p.last_res_t >= 0.5) {
+            let (cpu, gpu, ram) = p.sampler.sample();
+            p.cpu_pct = cpu;
+            p.gpu_pct = gpu;
+            p.ram_mb = ram;
+            let h = p.res_head;
+            p.cpu_hist[h] = cpu;
+            p.gpu_hist[h] = gpu;
+            p.ram_hist[h] = ram;
+            p.res_head = (h + 1) % PERF_SAMPLES;
+            p.res_len = (p.res_len + 1).min(PERF_SAMPLES);
+            p.last_res_t = t;
+        }
+
+        overlay();
+        let (x, y, w) = (14.0, 100.0, 224.0);
+        let h = match (show_fps, show_res) {
+            (true, true) => 132.0,
+            (true, false) => 26.0,
+            (false, true) => 104.0,
+            (false, false) => return,
+        };
+        let r = Rect::new(x, y, w, h);
+        draw_rectangle(r.x, r.y, r.w, r.h, fade(OUT, 0.52));
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 1.0, fade(FAINT, 0.5));
+
+        let mut cy = r.y;
+        if show_fps {
+            let fcol = if fps < 30.0 { fade(BLOOD, 0.9) } else if fps < 55.0 { fade(GOLD, 0.88) } else { fade(INK, 0.86) };
+            text(&format!("{:.0} FPS", fps), r.x + 8.0, cy + 18.0, 14.0, fcol);
+            right(&format!("{:.1} ms", ms), r.right() - 8.0, cy + 18.0, 13.0, fade(MUTED, 0.85));
+            cy += 26.0;
+            if show_res {
+                draw_line(r.x + 6.0, cy, r.right() - 6.0, cy, 1.0, fade(FAINT, 0.4));
+                cy += 2.0;
+            }
+        }
+
+        if show_res {
+            let proc_name = p.proc_label.get_or_insert_with(|| {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|ex| ex.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    .unwrap_or_else(|| "minebound.exe".into())
+            });
+            text(proc_name, r.x + 8.0, cy + 13.0, 11.0, fade(MUTED, 0.85));
+            right(&format!("PID {}", std::process::id()), r.right() - 8.0, cy + 13.0, 11.0, fade(MUTED, 0.7));
+            cy += 14.0;
+            let gpu_col = rgb(0xff8a4c);
+            let ram_col = rgb(0x6fb6ff);
+            text(&format!("CPU {:3.1}%", p.cpu_pct), r.x + 8.0, cy + 15.0, 12.0, fade(GOLD, 0.88));
+            centered(&format!("GPU {:2.0}%", p.gpu_pct), r.center().x + 4.0, cy + 15.0, 12.0, fade(gpu_col, 0.88));
+            right(&format!("RAM {:.0}M", p.ram_mb), r.right() - 8.0, cy + 15.0, 12.0, fade(ram_col, 0.88));
+
+            // top sparkline: CPU % (gold), GPU % (orange), RAM MB (blue)
+            let g1 = Rect::new(r.x + 8.0, cy + 21.0, r.w - 16.0, 32.0);
+            draw_line(g1.x, g1.bottom(), g1.right(), g1.bottom(), 1.0, fade(FAINT, 0.35));
+            let ram_peak = p.ram_hist[..p.res_len].iter().copied().fold(p.ram_mb, f32::max).max(64.0) * 1.25;
+            let load_peak = p.cpu_hist[..p.res_len]
+                .iter()
+                .chain(&p.gpu_hist[..p.res_len])
+                .copied()
+                .fold(p.cpu_pct.max(p.gpu_pct), f32::max)
+                .max(25.0)
+                .min(100.0);
+            sparkline(g1, &p.ram_hist, p.res_head, p.res_len, ram_peak, fade(ram_col, 0.72));
+            sparkline(g1, &p.gpu_hist, p.res_head, p.res_len, load_peak, fade(gpu_col, 0.82));
+            sparkline(g1, &p.cpu_hist, p.res_head, p.res_len, load_peak, fade(GOLD, 0.86));
+
+            // bottom sparkline: FPS timeline (white)
+            let g2 = Rect::new(r.x + 8.0, cy + 58.0, r.w - 16.0, 24.0);
+            draw_line(g2.x, g2.bottom(), g2.right(), g2.bottom(), 1.0, fade(FAINT, 0.35));
+            let fps_peak = p.fps_hist[..p.fps_len].iter().copied().fold(fps, f32::max).max(60.0);
+            sparkline(g2, &p.fps_hist, p.fps_head, p.fps_len, fps_peak, fade(INK, 0.78));
+            text("FPS", g2.x + 2.0, g2.y + 11.0, 11.0, fade(MUTED, 0.72));
+        }
+    });
 }
 
 /// Bounce curve for something that appeared at `t0`: starts small, overshoots, settles at 1.
@@ -981,145 +1364,6 @@ fn wrapped(s: &str, x: f32, mut y: f32, w: f32, size: f32, c: Color) -> f32 {
     y
 }
 
-/// One block of a `Column`: an optional label over one or more paragraphs.
-struct Block {
-    /// how long it holds its room when the column runs short: the lowest gives way first
-    keep: u8,
-    head: Option<String>,
-    paras: Vec<String>,
-    /// said instead of `paras` when room runs short; the full text then shows on hover
-    short: Option<String>,
-    color: Color,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Fit {
-    Full,
-    Short,
-    Folded,
-}
-
-/// Text laid out from what it says rather than at fixed rows. Blocks stack from `y` (a baseline);
-/// when they would run past `bottom` (the lowest baseline allowed), the block with the lowest `keep`
-/// first falls back to its `short` form, then folds into one "More" line at the end that shows it
-/// on hover. So a longer text never lands on whatever sits below the column.
-struct Column {
-    x: f32,
-    y: f32,
-    w: f32,
-    bottom: f32,
-    size: f32,
-    blocks: Vec<Block>,
-}
-
-const HEAD_GAP: f32 = 20.0;
-const PARA_GAP: f32 = 7.0;
-const BLOCK_GAP: f32 = 16.0;
-
-impl Column {
-    fn new(x: f32, y: f32, w: f32, bottom: f32, size: f32) -> Column {
-        Column { x, y, w, bottom, size, blocks: vec![] }
-    }
-
-    /// Adds a block; `.short()` right after gives it a short form.
-    fn block<S: Into<String>>(&mut self, keep: u8, head: Option<&str>, paras: impl IntoIterator<Item = S>, color: Color) -> &mut Self {
-        let paras: Vec<String> = paras.into_iter().map(Into::into).collect();
-        if head.is_some() || !paras.is_empty() {
-            self.blocks.push(Block { keep, head: head.map(str::to_string), paras, short: None, color });
-        }
-        self
-    }
-
-    fn short(&mut self, s: impl Into<String>) -> &mut Self {
-        if let Some(b) = self.blocks.last_mut() {
-            b.short = Some(s.into());
-        }
-        self
-    }
-
-    fn pitch(&self) -> f32 {
-        self.size * 1.25
-    }
-
-    /// The paragraphs a block shows at `fit`.
-    fn said<'a>(b: &'a Block, fit: Fit) -> Vec<&'a str> {
-        match (fit, &b.short) {
-            (Fit::Short, Some(s)) => vec![s.as_str()],
-            _ => b.paras.iter().map(String::as_str).collect(),
-        }
-    }
-
-    /// From one block's first baseline to the next block's.
-    fn height(&self, b: &Block, fit: Fit) -> f32 {
-        let paras = Column::said(b, fit);
-        let lines: usize = paras.iter().map(|p| wrap(p, self.w, self.size).len()).sum();
-        let head = if b.head.is_some() { if paras.is_empty() { self.pitch() } else { HEAD_GAP } } else { 0.0 };
-        head + lines as f32 * self.pitch() + paras.len().saturating_sub(1) as f32 * PARA_GAP + BLOCK_GAP
-    }
-
-    /// The room every block takes in full, from the first baseline to below the last line.
-    fn needed(&self) -> f32 {
-        self.blocks.iter().map(|b| self.height(b, Fit::Full)).sum::<f32>() - BLOCK_GAP
-    }
-
-    /// How each block is shown so that the column ends by `bottom`.
-    fn fits(&self) -> Vec<Fit> {
-        let mut fit = vec![Fit::Full; self.blocks.len()];
-        loop {
-            let folded = fit.contains(&Fit::Folded);
-            let used: f32 = self.blocks.iter().zip(&fit).filter(|(_, f)| **f != Fit::Folded).map(|(b, &f)| self.height(b, f)).sum();
-            let last = self.y + used - BLOCK_GAP - self.pitch() + if folded { self.pitch() } else { 0.0 };
-            if last <= self.bottom {
-                return fit;
-            }
-            // the least kept block still shown gives way; on a tie the lower one goes first
-            let Some(k) = (0..self.blocks.len()).filter(|&k| fit[k] != Fit::Folded).min_by_key(|&k| (self.blocks[k].keep, std::cmp::Reverse(k))) else {
-                return fit;
-            };
-            fit[k] = if fit[k] == Fit::Full && self.blocks[k].short.is_some() { Fit::Short } else { Fit::Folded };
-        }
-    }
-
-    /// Draws the column; returns the baseline after it.
-    fn draw(&self) -> f32 {
-        let fit = self.fits();
-        let mut y = self.y;
-        let mut folded = vec![];
-        for (b, &f) in self.blocks.iter().zip(&fit) {
-            if f == Fit::Folded {
-                folded.push(b);
-                continue;
-            }
-            let top = y;
-            if let Some(h) = &b.head {
-                label(h, self.x, y);
-                y += if b.paras.is_empty() { self.pitch() } else { HEAD_GAP };
-            }
-            for p in Column::said(b, f) {
-                y = wrapped(p, self.x, y, self.w, self.size, b.color) + PARA_GAP;
-            }
-            if f == Fit::Short && Rect::new(self.x, top - self.size, self.w, y - top).contains(mouse()) {
-                tip_text(b.head.as_deref().unwrap_or("In full"), b.paras.join("\n"));
-            }
-            y += BLOCK_GAP - PARA_GAP;
-        }
-        if !folded.is_empty() {
-            let more = "More...";
-            let hot = Rect::new(self.x, y - self.size, measure(more, self.size).width + 8.0, self.size * 1.3).contains(mouse());
-            text(more, self.x, y, self.size, if hot { INK } else { MUTED });
-            if hot {
-                let body = folded.iter().map(|b| match &b.head {
-                    Some(h) => format!("{}: {}", h, b.paras.join(" ")),
-                    None => b.paras.join(" "),
-                });
-                tip_text("More", body.collect::<Vec<_>>().join("\n"));
-            }
-            y += self.pitch();
-        }
-        y
-    }
-}
-
 /// Debug builds driven by `ctl` only: where text, signs and sprites landed this frame, so a
 /// screenshot comes with a list of the ones that overlap.
 struct Drawn {
@@ -1216,6 +1460,7 @@ fn keyword(word: &str) -> Option<(Color, Option<Motion>)> {
         "weaken" | "halved" => Some((rgb(0xd2b48c), Some(Motion::Tremble))),
         "legendary" => Some((GOLD, Some(Motion::Rainbow))),
         "rare" => Some((rgb(0x7fc0ff), Some(Motion::Wave))),
+        "cursed" => Some((BLOOD, Some(Motion::Tremble))),
         "ember" => still(rgb(0xff8a4c)),
         "shield" | "armor" | "tide" => still(rgb(0x6fb6ff)),
         "heal" | "heals" | "healing" | "hp" => still(rgb(0x7bd88f)),
@@ -1451,12 +1696,13 @@ fn lively_centered(s: &str, cx: f32, y: f32, size: f32, c: Color, m: Motion) {
     lively(s, cx - measure(s, size).width / 2.0, y, size, c, m);
 }
 
-/// A pact's name: Legendary ones shimmer through the rainbow.
+/// A pact's name: Legendary shimmers, Cursed trembles in blood red, Mediocre sits understated.
 fn pact_name(id: usize, x: f32, y: f32, size: f32, c: Color) {
-    if CHARMS[id].rarity == Rarity::Legendary {
-        lively(CHARMS[id].name, x, y, size, c, Motion::Rainbow);
-    } else {
-        text(CHARMS[id].name, x, y, size, c);
+    match CHARMS[id].rarity {
+        Rarity::Legendary => lively(CHARMS[id].name, x, y, size, c, Motion::Rainbow),
+        Rarity::Cursed => lively(CHARMS[id].name, x, y, size, BLOOD, Motion::Tremble),
+        Rarity::Mediocre => text(CHARMS[id].name, x, y, size, MUTED),
+        _ => text(CHARMS[id].name, x, y, size, c),
     }
 }
 
@@ -1673,16 +1919,17 @@ pub fn status(run: &Run) {
         tip_text(&format!("{} · Level {}", HEROES[run.hero].name, run.hero_lvl), tip);
     }
     let mut x = 312.0;
+    let low_hp = run.hp * 100 <= run.max_hp().max(1) * 35;
     for (label, value, c) in [
-        ("HP", format!("{}/{}", run.hp, run.max_hp()), GOOD),
-        ("Shards", run.shards.to_string(), GOLD_C),
+        ("HP", format!("{}/{}", run.hp, run.max_hp()), if low_hp { BLOOD } else { GOOD }),
+        ("Shards", run.shards.to_string(), GOLD),
         ("Floor", format!("{}/{}", run.floor + 1, run.floors()), INK),
         ("Pacts", run.charms.len().to_string(), ACCENT),
     ] {
-        text(label, x, 43.0, 17.0, MUTED);
-        let w = measure(label, 17.0).width;
-        text(&value, x + w + 7.0, 43.0, 19.0, c);
-        x += 148.0;
+        text(label, x, 43.0, 16.0, MUTED);
+        let w = measure(label, 16.0).width;
+        text(&value, x + w + 7.0, 44.0, 21.0, c);
+        x += 150.0;
     }
     // sets two or more pacts deep, and active Crucible relic if carried, before the Retreat button
     let mut right = 1066.0;
@@ -1731,9 +1978,11 @@ fn fit_text(line: &str, x: f32, y: f32, room: f32, size: f32, c: Color) {
 
 fn rarity_color(r: Rarity) -> Color {
     match r {
+        Rarity::Mediocre => rgb(0x6e6e6e),
         Rarity::Common => MUTED,
         Rarity::Rare => rgb(0x7fc0ff),
         Rarity::Legendary => GOLD,
+        Rarity::Cursed => BLOOD,
     }
 }
 
@@ -1741,7 +1990,14 @@ fn rarity_color(r: Rarity) -> Color {
 fn charm_icon(id: usize, r: Rect, lit: f32) {
     let c = &CHARMS[id];
     block(r, mix(BG, INK, lit * 0.3));
-    outline(r, if lit > 0.0 { INK } else { FAINT });
+    let edge = if lit > 0.0 {
+        INK
+    } else if c.rarity == Rarity::Cursed {
+        fade(BLOOD, 0.7)
+    } else {
+        FAINT
+    };
+    outline(r, edge);
     let pad = r.w * 0.12;
     sprite(c.icon.0, r.x + pad, r.y + pad, r.w - 2.0 * pad, rgb(c.icon.1));
 }
@@ -1991,6 +2247,31 @@ pub fn title(deeds: u32) -> Option<Go> {
     }
     if cfg!(debug_assertions) && button(Rect::new(540.0, 400.0 + slide(3), 200.0, 44.0), "Gallery", true, false) {
         go = Some(Go::Gallery);
+    }
+    // version tag (bottom-right) and inline update trigger when a newer release is available
+    let ver = format!("v{}", crate::update::VERSION);
+    right(&ver, 1256.0, 702.0, 14.0, MUTED);
+    let vw = measure(&ver, 14.0).width;
+    match crate::update::status() {
+        crate::update::Status::Available { version, .. } => {
+            let label = format!("Update v{version}");
+            let bw = measure(&label, 16.0).width + 26.0;
+            if button(Rect::new(1256.0 - vw - bw - 14.0, 682.0, bw, 28.0), &label, true, true) {
+                crate::update::download();
+            }
+        }
+        crate::update::Status::Downloading { done, total, .. } => {
+            let pct = if total > 0 { (done * 100 / total).min(100) } else { 0 };
+            right(&format!("Downloading update {pct}%"), 1256.0 - vw - 14.0, 702.0, 14.0, GOLD);
+        }
+        crate::update::Status::Ready { version, .. } => {
+            let label = format!("Install v{version}");
+            let bw = measure(&label, 16.0).width + 26.0;
+            if button(Rect::new(1256.0 - vw - bw - 14.0, 682.0, bw, 28.0), &label, true, true) && crate::update::launch_installer() {
+                go = Some(Go::Back);
+            }
+        }
+        _ => {}
     }
     go
 }
@@ -2250,33 +2531,45 @@ pub fn world(save: &mut Save, pick: &mut (usize, usize), today: u64) -> Option<G
     let title = if show_daily { daily_name(today) } else if open { x.name.to_string() } else { "Unknown".to_string() };
     let size = 36.0f32.min(36.0 * w / measure(&title, 36.0).width);
     text(&title, lx, 112.0, size, if open { INK } else { MUTED });
+    // concise descent card: short flavour + framed law box (no 12-boss text wall)
     let blurb = if show_daily {
-        format!("Down through {}. The same run for everyone today.", x.name.replace(' ', "\u{a0}"))
+        format!("Through {}. Same seed for all today.", x.name.replace(' ', "\u{a0}"))
     } else {
         x.text.to_string()
     };
-    // flavour gives way first, then who waits below; the law and how to open the way always stay
-    let mut col = Column::new(lx, 140.0, w, 440.0, 15.0);
-    col.block(0, None, [blurb], MUTED);
+    let y = wrapped(&blurb, lx, 140.0, w, 15.0, MUTED) + 12.0;
     let daily_law = ["Every floor is cursed."];
     let rules = x.rules.iter().filter(|r| !(show_daily && r.starts_with("No extra")));
     let laws: Vec<&str> = daily_law.iter().filter(|_| show_daily).chain(rules).copied().collect();
-    let n = laws.len();
-    col.block(3, Some("ITS LAW"), laws, INK).short(format!("{n} laws. Point here to read them."));
+    let cursed_place = show_daily || x.curses;
+    draw_line(lx, y, lx + w, y, 1.0, if cursed_place && open { fade(BLOOD, 0.6) } else { FAINT });
     if !open {
-        // no-break spaces keep a place name whole, so "Ember" or "Mines" in it is not read as a rules word
         let prev = EXPEDITIONS[shown - 1].name.replace(' ', "\u{a0}");
-        col.block(2, None, [format!("Win {prev} to open the way here.")], INK);
+        text("LOCKED", lx, y + 24.0, 13.0, MUTED);
+        wrapped(&format!("Win {prev} to unlock."), lx, y + 48.0, w, 16.0, INK);
     } else {
-        let lords = BOSSES.iter().map(|pair| pair.iter().map(|d| d.name.replace(' ', "\u{a0}")).collect::<Vec<_>>().join(", "));
-        col.block(1, Some("LORDS BELOW"), lords, INK);
+        text(if cursed_place { "CURSED LAW" } else { "ITS LAW" }, lx, y + 24.0, 13.0, if cursed_place { BLOOD } else { GOLD });
+        let mut ly = y + 48.0;
+        for law in &laws {
+            let col = if law.contains("cursed") || law.contains("cost 1 more") {
+                BLOOD
+            } else if law.starts_with("No extra") {
+                MUTED
+            } else {
+                INK
+            };
+            ly = wrapped(law, lx, ly, w, 16.0, col) + 7.0;
+            if ly > 436.0 {
+                break;
+            }
+        }
     }
-    col.draw();
+    draw_line(lx, 444.0, lx + w, 444.0, 1.0, FAINT);
 
     // the bearer: one sigil per hero; the chosen one is outlined, with its numbers below. The daily's
     // bearer is set for the day.
     let by = 466.0;
-    label(if show_daily { "BEARER · SET FOR TODAY" } else { "BEARER" }, lx, by);
+    text(if show_daily { "BEARER · TODAY" } else { "BEARER" }, lx, by, 14.0, GOLD);
     let bearer = if show_daily { dhero } else { pick.1 };
     for (i, h) in HEROES.iter().enumerate() {
         let r = Rect::new(lx + i as f32 * 52.0, by + 12.0, 46.0, 46.0);
@@ -2318,8 +2611,11 @@ pub fn world(save: &mut Save, pick: &mut (usize, usize), today: u64) -> Option<G
         b if b >= CLEARED => "cleared".to_string(),
         b => format!("best: floor {b}"),
     };
-    text(&format!("{} HP · {} power · {best}", h.hp, h.power), lx + bslide, by + 114.0, 14.0, MUTED);
-    wrapped(h.passive_desc, lx, by + 138.0, w, 14.0, INK);
+    let stats = format!("{} HP · {} pow", h.hp, h.power);
+    text(&stats, lx + bslide, by + 116.0, 16.0, INK);
+    let sw = measure(&stats, 16.0).width;
+    text(&format!("  ·  {best}"), lx + bslide + sw, by + 116.0, 14.0, MUTED);
+    wrapped_fit(h.passive_desc, lx, by + 140.0, w, 15.0, 52.0, INK);
     for (k, &e) in h.elements.iter().enumerate() {
         gem(e, vec2(lx + 200.0 + k as f32 * 20.0, by + 87.0), 7.0);
     }
@@ -2456,7 +2752,7 @@ fn forge_sheet(save: &mut Save) -> bool {
         fx(|fx| fx.forge_t = now());
         changed = true;
     }
-    wrapped("Reforge rolls 2 new boons and a new drawback. Temper keeps both boons and rerolls only the drawback.", rx, tb.bottom() + 18.0, rw, 13.0, MUTED);
+    wrapped("Reforge rerolls all traits. Temper rerolls only the drawback.", rx, tb.bottom() + 18.0, rw, 14.0, MUTED);
 
     if changed {
         save.store();
@@ -2484,7 +2780,7 @@ fn deeds_sheet(save: &Save) -> bool {
         }
         // a filled box for done, an empty one for still to do
         let mark = Rect::new(panel.x + 40.0, y + 10.0, 14.0, 14.0);
-        if done { block(mark, INK) } else { outline(mark, MUTED) }
+        if done { block(mark, GOLD) } else { outline(mark, MUTED) }
         text(d.name, panel.x + 70.0, y + 22.0, 18.0, if done { INK } else { MUTED });
         if fresh & 1 << k != 0 {
             lively("new", panel.x + 78.0 + measure(d.name, 18.0).width, y + 22.0, 14.0, GOLD, Motion::Wave);
@@ -3982,7 +4278,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         }
         rich_centered(&foe.desc, 640.0 + shake[1], 210.0, 15.0, MUTED);
         label("HP", ex, 236.0);
-        right(&format!("{} / {}", bar[1], foe.max_hp), ex + FOE.w, 236.0, 16.0, INK);
+        right(&format!("{} / {}", bar[1], foe.max_hp), ex + FOE.w, 236.0, 22.0, INK);
         let foe_hit_fl = (1.0 - (now - bar_flash[1]) as f32 / 0.14).clamp(0.0, 1.0);
         let foe_heal_fl = (1.0 - (now - heal_flash[1]) as f32 / 0.25).clamp(0.0, 1.0);
         // HP loss preview accounts for shield soak (unless empty)
@@ -3994,7 +4290,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             0.0
         };
         life(
-            Rect::new(ex, 244.0, FOE.w, 8.0),
+            Rect::new(ex, 244.0, FOE.w, 12.0),
             bar[1] as f32 / foe.max_hp.max(1) as f32,
             ghost[1] / foe.max_hp.max(1) as f32,
             vis_shield[1] as f32 / foe.max_hp.max(1) as f32,
@@ -4013,16 +4309,21 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         let mut x = ex + FOE.w;
         if !loaded.is_empty() {
             let s = format!("{} dmg", b.loaded_damage());
-            right(&s, x, 294.0, 16.0, BLOOD);
-            x -= measure(&s, 16.0).width + 12.0;
+            let sz = if foe.broken { 17.0 } else { 21.0 };
+            let sw = measure(&s, sz).width;
+            let pill = Rect::new(x - sw - 14.0, 274.0, sw + 14.0, 26.0);
+            block(pill, WELL);
+            outline(pill, if foe.broken { FAINT } else { BLOOD });
+            centered(&s, pill.center().x, pill.y + if foe.broken { 18.0 } else { 20.0 }, sz, if foe.broken { MUTED } else { BLOOD });
+            x = pill.x - 10.0;
             for &e in foe.cost(loaded[0]).iter().rev() {
                 gem(e, vec2(x - 8.0, 289.0), 8.0);
-                x -= 20.0;
+                x -= 19.0;
             }
             // the break: how much of it your rites have dealt this turn (once broken, it hits for half)
             let (took, need) = (foe.took.min(foe.break_at), foe.break_at);
             if foe.broken {
-                rich("broken: half", ex, 294.0, 15.0, INK);
+                rich("broken: half", ex, 294.0, 16.0, GOLD);
             } else {
                 let target_f = took as f32 / need.max(1) as f32;
                 let (vis, bflash) = fx(|fx| {
@@ -4038,33 +4339,35 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
                 let will_break = hover_dmg > 0 && took + hover_dmg >= need;
                 let brk_txt = if will_break { "BREAK!".to_string() } else { format!("break {took}/{need}") };
                 if will_break {
-                    lively(&brk_txt, ex, 294.0, 15.0, BLOOD, Motion::Tremble);
+                    lively(&brk_txt, ex, 294.0, 16.0, GOLD, Motion::Tremble);
                 } else {
-                    rich(&brk_txt, ex, 294.0, 15.0, INK);
+                    rich(&brk_txt, ex, 294.0, 16.0, INK);
                 }
-                let w = 90.0;
-                let bx = ex + measure(&format!("break {took}/{need}"), 15.0).width + 10.0;
-                draw_rectangle(bx, 288.0, w, 4.0, FAINT);
+                let w = 82.0;
+                let bx = ex + measure(&format!("break {took}/{need}"), 16.0).width + 8.0;
+                draw_rectangle(bx, 286.0, w, 7.0, FAINT);
                 if hover_dmg > 0 {
                     let prev_f = ((took + hover_dmg).min(need) as f32) / need.max(1) as f32;
                     let pulse = 0.4 + 0.45 * ((now as f32 * 8.0).sin() * 0.5 + 0.5);
-                    draw_rectangle(bx, 288.0, w * prev_f, 4.0, fade(if will_break { GOLD } else { BLOOD }, pulse));
+                    draw_rectangle(bx, 286.0, w * prev_f, 7.0, fade(if will_break { GOLD } else { BLOOD }, pulse));
                 }
-                draw_rectangle(bx, 288.0, w * vis, 4.0, mix(BLOOD, INK, bflash));
+                draw_rectangle(bx, 286.0, w * vis, 7.0, mix(BLOOD, INK, bflash));
             }
-        }
-        let next_left = x - 16.0 - measure(&what, 16.0).width - measure("NEXT", 15.0).width;
-        right(&what, x - 4.0, 294.0, 16.0, if loaded.is_empty() { MUTED } else { INK });
-        right("NEXT", x - 16.0 - measure(&what, 16.0).width, 294.0, 15.0, MUTED);
-        // hover NEXT to inspect all loaded enemy rites and their effects
-        if !loaded.is_empty() && !modal() && Rect::new(next_left - 4.0, 276.0, ex + FOE.w - next_left + 8.0, 24.0).contains(mouse()) {
-            let mut lines: Vec<String> = loaded.iter().map(|c| format!("{}: {}", foe_title(foe, c), foe.describe(c))).collect();
-            if foe.broken {
-                lines.push("Broken: fires at half damage.".into());
-            } else {
-                lines.push(format!("Deal {} rite damage this turn to halve it.", (foe.break_at - foe.took).max(0)));
+            let what_w = measure(&what, 16.0).width;
+            let next_left = x - 4.0 - what_w;
+            right(&what, x - 2.0, 294.0, 16.0, INK);
+            // hover loaded area to inspect all loaded enemy rites and their effects
+            if !modal() && Rect::new(next_left - 4.0, 274.0, ex + FOE.w - next_left + 8.0, 28.0).contains(mouse()) {
+                let mut lines: Vec<String> = loaded.iter().map(|c| format!("{}: {}", foe_title(foe, c), foe.describe(c))).collect();
+                if foe.broken {
+                    lines.push("Broken: fires at half damage.".into());
+                } else {
+                    lines.push(format!("Deal {} rite damage this turn to halve it.", (foe.break_at - foe.took).max(0)));
+                }
+                tip_text(&format!("Loaded ({} dmg)", b.loaded_damage()), lines.join("\n"));
             }
-            tip_text(&format!("Loaded ({} dmg)", b.loaded_damage()), lines.join("\n"));
+        } else {
+            right(&what, x, 294.0, 15.0, MUTED);
         }
 
         // its board, shrunk to a preview, and its stacks
@@ -4151,12 +4454,13 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         let head = if run.trait_rank > 0 { format!("Passive · Rank {}", run.trait_rank + 1) } else { "Passive".into() };
         tip_text(&head, me.desc.clone());
     }
+    let low_hp = bar[0] * 100 <= me.max_hp.max(1) * 35;
     label("HP", hx, 506.0);
-    right(&format!("{} / {}", bar[0], me.max_hp), hx + 330.0, 506.0, 16.0, INK);
+    right(&format!("{} / {}", bar[0], me.max_hp), hx + 330.0, 506.0, 22.0, if low_hp { BLOOD } else { INK });
     let me_hit_fl = (1.0 - (now - bar_flash[0]) as f32 / 0.14).clamp(0.0, 1.0);
     let me_heal_fl = (1.0 - (now - heal_flash[0]) as f32 / 0.25).clamp(0.0, 1.0);
     life(
-        Rect::new(hx, 514.0, 330.0, 8.0),
+        Rect::new(hx, 514.0, 330.0, 12.0),
         bar[0] as f32 / me.max_hp.max(1) as f32,
         ghost[0] / me.max_hp.max(1) as f32,
         vis_shield[0] as f32 / me.max_hp.max(1) as f32,
@@ -4197,21 +4501,21 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     // your board, in the middle, with whose turn it is and the surge above it
     let board = me.board();
     let turn_label = if over { "" } else if b.active == 0 { "YOUR TURN" } else { "ITS TURN" };
-    text(turn_label, BOARD.x, 316.0, 15.0, if b.active == 0 { INK } else { MUTED });
+    text(turn_label, BOARD.x, 317.0, 18.0, if b.active == 0 { GOLD } else { BLOOD });
     let (surge, cap) = (b.f[b.active].surge, b.surge_cap(b.active));
     let spop = (1.0 - (now - surge_pop[b.active]) as f32 / 0.22).clamp(0.0, 1.0);
     let times = format!("x{:.1}", 1.0 + (surge * b.surge_step(b.active)) as f32 / 100.0);
     let mut x = BOARD.x + 6.0 * STEP - 2.0;
-    let t_col = if surge > 0 { mix(INK, rgb(0xffe066), spop * 0.7) } else { MUTED };
-    right(&times, x, 316.0 - spop * 2.0, 15.0, t_col);
-    x -= measure(&times, 15.0).width + 14.0;
+    let t_col = if surge > 0 { mix(GOLD, rgb(0xffffff), spop * 0.6) } else { MUTED };
+    right(&times, x, 317.0 - spop * 2.0, if surge > 0 { 19.0 } else { 15.0 }, t_col);
+    x -= measure(&times, if surge > 0 { 19.0 } else { 15.0 }).width + 12.0;
     for k in (0..cap).rev() {
         let lit = k < surge;
         let pb = if lit { bounce(surge_t[b.active][(k as usize).min(15)]) } else { 1.0 };
         pip(vec2(x - 5.0, 311.0), 5.0 * pb, lit);
         x -= 13.0;
     }
-    right("SURGE", x - 2.0, 316.0, 15.0, MUTED);
+    right("SURGE", x - 2.0, 316.0, 14.0, MUTED);
     // a board dealt anew (fewer tiles mined or fallen than a moment ago) or another one put up drops in, tile by tile
     let shown = board.tiles.iter().filter(|t| t.used || t.caved).count();
     let (came, redealt) = fx(|fx| {
@@ -4364,7 +4668,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     }
     draw_line(cur_tab_x + 4.0, 702.0, cur_tab_x + 40.0, 702.0, 2.0, INK);
     let ppop = (1.0 - (now - picks_pop[0]) as f32 / 0.25).clamp(0.0, 1.0);
-    right(&format!("{} picks left", me.reveals_left), BOARD.x + 6.0 * STEP - 2.0, 694.0 - ppop * 2.5, 15.0, mix(MUTED, INK, ppop));
+    let pcol = if me.reveals_left > 0 { mix(GOLD, rgb(0xffffff), ppop * 0.7) } else { MUTED };
+    right(&format!("{} picks left", me.reveals_left), BOARD.x + 6.0 * STEP - 2.0, 696.0 - ppop * 2.5, if me.reveals_left > 0 { 19.0 } else { 15.0 }, pcol);
 
     // your stacks: drag a chip onto a rite's sockets; pops crisply when a flying gem arrives
     for (j, &(e, n)) in held.iter().enumerate() {
@@ -4378,7 +4683,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         // the newest gem of this element bounces in
         let t = free.iter().filter(|&&k| me.stacks[k] == e).map(|&k| stack_t[0][k.min(15)]).fold(0.0, f64::max).max(chip_pop[e as usize]);
         sign(e, vec2(r.x + 20.0, r.center().y), 10.0 * if n > 0 { bounce(t) } else { 1.0 }, if n > 0 { el_color(e) } else { FAINT });
-        text(&n.to_string(), r.x + 38.0, r.center().y + 7.0, 20.0, if cpop > 0.2 { rgb(0xffffff) } else if n > 0 { INK } else { MUTED });
+        text(&n.to_string(), r.x + 38.0, r.center().y + 8.0, 22.0, if cpop > 0.2 { rgb(0xffffff) } else if n > 0 { INK } else { MUTED });
         if drag.is_none() && base_r.contains(mouse()) {
             tip(element_tip(e));
         }
@@ -4525,7 +4830,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             Some((d, _)) => format!("{d} dmg"),
             None => me.describe(c),
         };
-        fit_text(&line, dr.x + 10.0, dr.y + 36.0, dr.w - 20.0, 13.0, if lit { MUTED } else { FAINT });
+        let basic_col = if !lit { FAINT } else if hit_info.is_some() { GOLD } else { INK };
+        fit_text(&line, dr.x + 10.0, dr.y + 37.0, dr.w - 20.0, 15.0, basic_col);
         if r.contains(mouse()) && drag.is_none() {
             if let Some((d, steps)) = hit_info {
                 steps_tip(steps, d);
@@ -4552,7 +4858,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     let mut y = 326.0;
     if list.is_empty() {
         text("No rites yet", rx, y + 30.0, 20.0, MUTED);
-        wrapped("Elites, treasure and shops teach them. Until then, click a basic above: each gem is an Attack, a Shield or a Heal.", rx, y + 56.0, 350.0, 14.0, MUTED);
+        wrapped("Find rites at elites, treasure, and shops.", rx, y + 56.0, 350.0, 15.0, MUTED);
     }
     // where a dragged gem may land: (row, rite, its cost)
     let mut targets: Vec<(Rect, &'static Combo, Vec<Element>)> = vec![];
@@ -4620,7 +4926,7 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
         // a brand can make the line long: shrink it to fit beside the damage number, not under it
         let hit = (lit && b.hits(0, c)).then(|| b.hit_steps(0, c));
         let num = hit.as_ref().map(|(d, _)| format!("{d} dmg"));
-        let room = 350.0 - num.as_ref().map_or(0.0, |n| measure(n, 15.0).width + 12.0);
+        let room = 350.0 - num.as_ref().map_or(0.0, |n| measure(n, 19.0).width + 12.0);
         let line = me.describe(c);
         let fit = 14.0 * (room / measure(&line, 14.0).width).min(1.0);
         if fit >= 12.5 {
@@ -4631,12 +4937,13 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             }
         }
         if let (Some((d, steps)), Some(num)) = (hit, num) {
-            // hover the number to see how it adds up
-            let (nx, ny) = (rx + 350.0, y + rh - 12.0);
-            let w = measure(&num, 15.0).width;
-            right(&num, nx, ny, 15.0, INK);
+            // hover the number to see how it adds up; highlight in BLOOD when this cast breaks the foe
+            let breaks = !b.f[1].loaded.is_empty() && !b.f[1].broken && b.f[1].took + d >= b.f[1].break_at;
+            let (nx, ny) = (rx + 350.0, y + rh - 11.0);
+            let w = measure(&num, 19.0).width;
+            right(&num, nx, ny, 19.0, if breaks { BLOOD } else { GOLD });
             draw_line(nx - w, ny + 4.0, nx, ny + 4.0, 1.0, FAINT);
-            if Rect::new(nx - w, ny - 16.0, w, 22.0).contains(mouse()) {
+            if Rect::new(nx - w, ny - 18.0, w, 24.0).contains(mouse()) {
                 steps_tip(steps, d);
             }
         }
@@ -4991,7 +5298,7 @@ fn strip_label(s: &str, x: f32, y: f32, size: f32, c: Color) {
 /// been and where you may go next, the rooms as diamonds on a dotted route.
 pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     status(run);
-    text(&run.note, 48.0, 92.0, 18.0, GOLD_C);
+    text(&run.note, 48.0, 92.0, 19.0, GOLD_C);
     let open = run.choices();
     let mut chosen = None;
     // each room's diamond and the label under it (a boss's name runs wider)
@@ -5079,22 +5386,29 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
     let side = Rect::new(930.0, 108.0, 326.0, 588.0);
     plate(side, CARD);
     let x = side.x + 22.0;
-    // this floor's twist, your skills with their levels, then your charms
+    // this floor's twist, separated by a crisp hairline (no nested box inside the sidebar panel)
     let twist = &TWISTS[run.twist];
-    let tone = match twist.tone {
-        1 => GOOD,
-        -1 => BAD,
-        _ => GOLD_C,
-    };
-    text(["FLOOR CURSE", "FLOOR TWIST", "FLOOR BOON"][(twist.tone + 1) as usize], x, 140.0, 15.0, ACCENT);
+    text(
+        ["FLOOR CURSE", "FLOOR TWIST", "FLOOR BOON"][(twist.tone + 1) as usize],
+        x,
+        138.0,
+        13.0,
+        match twist.tone {
+            -1 => BLOOD,
+            1 => GOLD,
+            _ => ACCENT,
+        },
+    );
     match twist.tone {
-        -1 => lively(twist.name, x, 164.0, 20.0, BLOOD, Motion::Tremble),
-        1 => lively(twist.name, x, 164.0, 20.0, GOLD, Motion::Wave),
-        _ => text(twist.name, x, 164.0, 20.0, tone),
+        -1 => lively(twist.name, x, 164.0, 22.0, BLOOD, Motion::Tremble),
+        1 => lively(twist.name, x, 164.0, 22.0, GOLD, Motion::Wave),
+        _ => text(twist.name, x, 164.0, 22.0, GOLD_C),
     }
-    let mut y = wrapped(twist.desc, x, 186.0, 282.0, 16.0, INK) + 6.0;
-    text("RITES", x, y + 8.0, 15.0, ACCENT);
-    y += 16.0;
+    let mut y = wrapped(twist.desc, x, 188.0, 282.0, 16.0, INK) + 8.0;
+    draw_line(x, y, side.right() - 22.0, y, 1.0, match twist.tone { -1 => fade(BLOOD, 0.55), 1 => fade(GOLD, 0.55), _ => FAINT });
+    y += 14.0;
+    text("RITES", x, y + 8.0, 14.0, GOLD);
+    y += 18.0;
     if run.rites().is_empty() {
         text("None yet", x, y + 15.0, 15.0, MUTED);
         y += 22.0;
@@ -5142,8 +5456,9 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
         text(e.key, x + 114.0, y + 18.0, 16.0, GOLD_C);
         y += 24.0;
     }
-    text("PACTS", x, y + 18.0, 15.0, ACCENT);
-    let top = y + 28.0;
+    draw_line(x, y + 4.0, side.right() - 22.0, y + 4.0, 1.0, FAINT);
+    text("PACTS", x, y + 22.0, 14.0, GOLD);
+    let top = y + 32.0;
     let passive_desc = run.trait_desc();
     let passive_label = if run.trait_rank > 0 { format!("PASSIVE · RANK {}", run.trait_rank + 1) } else { "PASSIVE".into() };
     let (mut tip, mut tip_label): (&str, &str) = held.map_or((passive_desc.as_str(), passive_label.as_str()), |b| (b.desc, "BLESSING"));
@@ -5170,35 +5485,53 @@ pub fn map_screen(run: &Run) -> Option<(usize, usize)> {
             more_slot(slot(shown), n - shown, &run.charms);
         }
     }
-    text(tip_label, x, 596.0, 15.0, ACCENT);
-    wrapped(tip, x, 618.0, 282.0, 16.0, INK);
+    draw_line(x, 578.0, side.right() - 22.0, 578.0, 1.0, FAINT);
+    text(tip_label, x, 598.0, 14.0, GOLD);
+    wrapped(tip, x, 620.0, 282.0, 16.0, INK);
     // kept inside the panel's 282 px column, however long the seed
     let line = format!("Seed {}  M: mute  N: next song", run.seed);
     text(&line, x, 686.0, 14.0 * (282.0 / measure(&line, 14.0).width).min(1.0), MUTED);
     chosen
 }
 
-fn charm_card(r: Rect, id: usize, on: bool, held: &[usize]) -> bool {
+fn charm_card_contents(r: Rect, id: usize, held: &[usize]) {
     let c = &CHARMS[id];
     let edge = rarity_color(c.rarity);
-    let hit = card(r, on);
-    // the frame weighs more the rarer the pact
-    if !(on && r.contains(mouse())) {
-        outline(r, match c.rarity {
-            Rarity::Common => FAINT,
-            Rarity::Rare => MUTED,
-            Rarity::Legendary => INK,
-        });
-    }
     let bob = (now() as f32 * 2.5 + id as f32).sin() * 2.0;
     charm_icon(id, Rect::new(r.x + 20.0, r.y + 22.0 + bob, 64.0, 64.0), 0.0);
     pact_name(id, r.x + 100.0, r.y + 52.0, 24.0, INK);
     rich(c.rarity.name(), r.x + 100.0, r.y + 78.0, 16.0, edge);
-    wrapped(c.desc, r.x + 24.0, r.y + 124.0, r.w - 48.0, 16.0, INK);
+    wrapped_fit(c.desc, r.x + 24.0, r.y + 120.0, r.w - 48.0, 16.0, r.h - 190.0, INK);
     let (line, awake) = set_line(held, id);
     let set = c.set.def();
     text(&format!("{} SET", set.name.to_uppercase()), r.x + 24.0, r.bottom() - 56.0, 13.0, if awake { GOLD_C } else { ACCENT });
     wrapped_fit(&line[set.name.len() + 1..], r.x + 24.0, r.bottom() - 34.0, r.w - 48.0, 14.0, 34.0, MUTED);
+}
+
+fn charm_card_outline(r: Rarity) -> Color {
+    match r {
+        Rarity::Mediocre | Rarity::Common => FAINT,
+        Rarity::Rare => MUTED,
+        Rarity::Legendary => INK,
+        Rarity::Cursed => BLOOD,
+    }
+}
+
+fn charm_card_static(r: Rect, id: usize, held: &[usize], fill: Color) {
+    let c = &CHARMS[id];
+    plate(r, fill);
+    outline(r, charm_card_outline(c.rarity));
+    charm_card_contents(r, id, held);
+}
+
+fn charm_card(r: Rect, id: usize, on: bool, held: &[usize]) -> bool {
+    let c = &CHARMS[id];
+    let hit = card(r, on);
+    // the frame weighs more the rarer the pact
+    if !(on && r.contains(mouse())) {
+        outline(r, charm_card_outline(c.rarity));
+    }
+    charm_card_contents(r, id, held);
     hit
 }
 
@@ -5218,12 +5551,29 @@ pub fn pick(run: &Run, options: &[usize]) -> Option<usize> {
     chosen
 }
 
+/// Wild Hands wager handed over a bonus pact for this floor. Returns true once dismissed.
+pub fn wild_hands(run: &Run, id: usize) -> bool {
+    let t0 = fx(|fx| fx.screen_t);
+    let sp = stagger(t0, 0, 0.04, 0.26);
+    ambient_motes(12, 37.0, 0.18);
+    lively_centered("Wild Hands", 640.0, 174.0, 44.0, GOLD, Motion::Wave);
+    let sub = match run.ending() {
+        Some(e) => format!("Floor {} ({}) bonus pact from your wager.", run.floor + 1, ENDINGS[e].name),
+        None => format!("Floor {} bonus pact from your wager.", run.floor + 1),
+    };
+    centered(&sub, 640.0, 210.0, 18.0, MUTED);
+    let r = Rect::new(450.0, 248.0 + (1.0 - sp) * 24.0, 380.0, 252.0);
+    charm_card_static(r, id, &run.charms, CARD);
+    let cont = button(Rect::new(540.0, 536.0, 200.0, 44.0), "Continue", sp > 0.5, true);
+    sp > 0.5 && (cont || (!modal() && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space))))
+}
+
 /// A boss fell: the player picks one skill to upgrade. Returns its index in `COMBOS`.
 pub fn upgrade(run: &Run, ids: &[usize]) -> Option<usize> {
     let t0 = fx(|fx| fx.screen_t);
     let boss = run.here() == NodeKind::Boss;
     lively_centered(if boss { "The boss falls" } else { "Old lore in the hoard" }, 640.0, 128.0, 44.0, GOLD, Motion::Wave);
-    centered("Claim its strength. One rite grows fiercer, and hungrier.", 640.0, 164.0, 18.0, MUTED);
+    centered("Upgrade one rite (+1 gem cost, +1 brand socket).", 640.0, 164.0, 18.0, MUTED);
     let n = ids.len() as f32;
     let (w, gap) = (280.0, 20.0);
     let x0 = 640.0 - (n * w + (n - 1.0) * gap) / 2.0;
@@ -5302,7 +5652,7 @@ pub fn brand(run: &Run, offers: &[usize]) -> Option<(usize, usize)> {
     let sub_t = fx(|fx| fx.sub_t);
     let b = &BRANDS[chosen];
     lively_centered(&format!("Burn {} onto a rite", b.name), 640.0, 128.0, 40.0, GOLD, Motion::Wave);
-    centered("A rite bears one brand per level. Once it is full, a new burn sears the oldest away.", 640.0, 164.0, 18.0, MUTED);
+    centered("One brand per rite level; extra burns replace the oldest.", 640.0, 164.0, 18.0, MUTED);
     let ids = run.rites();
     let n = ids.len() as f32;
     let (w, gap) = (280.0, 20.0);
@@ -5546,7 +5896,7 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
     text("PURSE", 70.0, 518.0, 15.0, ACCENT);
     let shard_pulse = if shown_shards != run.shards { 1.18 } else { 1.0 };
     shard(vec2(82.0, 556.0), 11.0 * shard_pulse);
-    text(&shown_shards.to_string(), 102.0, 568.0, 32.0, GOLD_C);
+    text(&shown_shards.to_string(), 102.0, 568.0, 32.0, GOLD);
 
     // the wares
     // spots past the pacts: the brand on the shelf, then the lesson, then the rite
@@ -5591,9 +5941,9 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
         let afford = run.shards >= price;
         block(tag, WELL);
         shard(vec2(tag.x + 22.0, tag.center().y), 8.0);
-        text(&price.to_string(), tag.x + 40.0, tag.y + 25.0, 22.0, if afford { GOLD_C } else { MUTED });
+        text(&price.to_string(), tag.x + 40.0, tag.y + 25.0, 22.0, if afford { GOLD } else { MUTED });
         if k == shop.sale {
-            block(Rect::new(r.right() - 66.0, r.y - 10.0, 74.0, 26.0), INK);
+            block(Rect::new(r.right() - 66.0, r.y - 10.0, 74.0, 26.0), GOLD);
             centered("-25%", r.right() - 29.0, r.y + 9.0, 16.0, OUT);
         }
         if hot && clicked() {
@@ -5629,7 +5979,7 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
             let tag = Rect::new(r.center().x - 52.0, r.y + 168.0, 104.0, 34.0);
             block(tag, WELL);
             shard(vec2(tag.x + 22.0, tag.center().y), 8.0);
-            text(&price.to_string(), tag.x + 40.0, tag.y + 25.0, 22.0, if run.shards >= price { GOLD_C } else { MUTED });
+            text(&price.to_string(), tag.x + 40.0, tag.y + 25.0, 22.0, if run.shards >= price { GOLD } else { MUTED });
             if hot && clicked() {
                 sel = Some(brand_k);
                 play(Sfx::Click);
@@ -5793,18 +6143,39 @@ pub fn shop(run: &mut Run, shop: &mut Shop) -> bool {
 }
 
 /// Returns true when the encounter is finished.
-pub fn event(run: &mut Run, e: &Encounter, result: &mut Option<String>) -> bool {
+pub fn event(run: &mut Run, e: &Encounter, result: &mut Option<EventResult>) -> bool {
     let t0 = fx(|fx| fx.screen_t);
     let ep = ease_out3(((now() - t0) as f32 / 0.2).clamp(0.0, 1.0));
-    let panel = Rect::new(190.0, 100.0 + (1.0 - ep) * 14.0, 900.0, 540.0);
+    let has_cards = result.as_ref().is_some_and(|r| !r.gained.is_empty());
+    let panel = if has_cards {
+        Rect::new(190.0, 76.0 + (1.0 - ep) * 14.0, 900.0, 608.0)
+    } else {
+        Rect::new(190.0, 100.0 + (1.0 - ep) * 14.0, 900.0, 540.0)
+    };
     plate(panel, CARD);
-    stamped(e.title, 640.0, panel.y + 70.0, 40.0, INK);
-    let y = wrapped(e.text, 240.0, panel.y + 130.0, 800.0, 22.0, MUTED) + 30.0;
+    stamped(e.title, 640.0, panel.y + if has_cards { 56.0 } else { 70.0 }, 40.0, INK);
+    let y = wrapped(e.text, 240.0, panel.y + if has_cards { 104.0 } else { 130.0 }, 800.0, 22.0, MUTED) + if has_cards { 20.0 } else { 30.0 };
     if let Some(r) = result {
-        let rp = ease_out3(((now() - fx(|fx| fx.sub_t)) as f32 / 0.22).clamp(0.0, 1.0));
-        wrapped(r, 240.0, y + (1.0 - rp) * 12.0, 800.0, 22.0, fade(GOLD_C, rp));
+        let rt0 = fx(|fx| fx.sub_t.max(fx.screen_t));
+        let rp = ease_out3(((now() - rt0) as f32 / 0.22).clamp(0.0, 1.0));
+        if r.gained.is_empty() {
+            let end_y = wrapped(&r.text, 240.0, y + (1.0 - rp) * 12.0, 800.0, 22.0, fade(GOLD_C, rp));
+            particles();
+            let btn_y = (end_y + 36.0).min(panel.bottom() - 68.0);
+            let cont = button(Rect::new(540.0, btn_y, 200.0, 44.0), "Continue", rp > 0.4, true);
+            return rp > 0.4 && (cont || (!modal() && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space))));
+        }
+        let end_y = wrapped(&r.text, 240.0, y + (1.0 - rp) * 10.0, 800.0, 20.0, fade(GOLD_C, rp));
+        let (w, h, gap) = (376.0, 236.0, 24.0);
+        let n = r.gained.len();
+        let x0 = 640.0 - (n as f32 * w + (n.saturating_sub(1)) as f32 * gap) / 2.0;
+        let card_y = (end_y + 14.0).min(panel.bottom() - h - 78.0);
+        for (k, &id) in r.gained.iter().enumerate() {
+            let sp = stagger(rt0, k, 0.06, 0.24);
+            charm_card_static(Rect::new(x0 + k as f32 * (w + gap), card_y + (1.0 - sp) * 18.0, w, h), id, &run.charms, WELL);
+        }
         particles();
-        let cont = button(Rect::new(540.0, y + 80.0, 200.0, 44.0), "Continue", true, true);
+        let cont = button(Rect::new(540.0, panel.bottom() - 60.0, 200.0, 44.0), "Continue", rp > 0.4, true);
         return rp > 0.4 && (cont || (!modal() && (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space))));
     }
     // a choice that costs a pact first asks which one; remembered per encounter
@@ -6025,34 +6396,43 @@ pub fn rules() -> bool {
     let mp = modal_open_p();
     overlay();
     draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.7 * mp));
-    // the sheet is as tall as what it says, centred on the screen
-    let mut col = Column::new(320.0, 0.0, 640.0, VIEW.y, 17.0);
-    for line in [
-        "Mine a crystal for a gem of its element. You get 4 picks a turn.",
-        "Mining cracks the tiles touching it. A tile with 3 cracks caves in: 10 damage to you, through shield.",
-        "Click a tile without a crystal to vent: it and the tiles touching it lose a crack.",
-        "Each gem pays for one flat basic: Attack, Shield or Heal (no rite buffs). Rites you find take more gems, carry buffs and do much more.",
-        "Each crystal mined adds surge: +10% damage.",
-        "NEXT shows the enemy's loaded rite. Deal its break damage first and it hits for half.",
-        "Tabs or keys 1 to 3 swap boards. Hover a tile or a floating word to learn more.",
-    ] {
-        col.block(1, None, [line], INK);
+    let rows = [
+        ("MINE", "Click crystals for gems (4 picks/turn). Neighbors crack; 3 cracks cave in for 10 damage."),
+        ("VENT", "Click an empty tile to remove 1 crack from it and its neighbors."),
+        ("CAST", "Click a lit basic (flat) or found rite (buffed by pacts and surge)."),
+        ("SURGE", "Each crystal mined adds +10% rite damage this turn."),
+        ("BREAK", "Deal the foe's break threshold to halve its loaded attack."),
+        ("BOARDS", "Keys 1-3 swap element boards. Hover underlined words for details."),
+    ];
+    let text_w = 520.0;
+    let mut total_h = 0.0;
+    for (_, desc) in rows {
+        total_h += (wrap(desc, text_w, 16.0).len() as f32 * 21.0).max(26.0) + 18.0;
     }
-    let h = 96.0 + col.needed() + 84.0;
+    let h = 96.0 + total_h + 76.0;
     let panel = Rect::new(280.0, ((VIEW.y - h) / 2.0).max(20.0) + (1.0 - mp) * 16.0, 720.0, h);
     plate(panel, CARD);
     stamped("How to play", 640.0, panel.y + 54.0, 38.0, INK);
-    col.y = panel.y + 96.0;
-    col.draw();
-    let ok = panel_button(Rect::new(540.0, panel.bottom() - 64.0, 200.0, 40.0), "Got it", true, press);
+    let mut y = panel.y + 98.0;
+    for (k, (head, desc)) in rows.iter().enumerate() {
+        if k > 0 {
+            draw_line(panel.x + 36.0, y - 14.0, panel.right() - 36.0, y - 14.0, 1.0, FAINT);
+        }
+        text(head, panel.x + 36.0, y + 2.0, 16.0, GOLD);
+        let end = wrapped(desc, panel.x + 150.0, y + 2.0, text_w, 16.0, INK);
+        y = end.max(y + 26.0) + 18.0;
+    }
+    let ok = panel_button(Rect::new(540.0, panel.bottom() - 62.0, 200.0, 40.0), "Got it", true, press);
     if ok {
         RULES.with(|r| r.set(false));
     }
     ok
 }
 
-/// The gear in the corner and, when open, the volume panel. Drawn last, over every screen.
-pub fn settings() {
+/// The gear in the corner and, when open, the volume/HUD/update panel. Drawn last, over every screen.
+/// Returns true if the user clicked Install on a downloaded update so the game should exit cleanly.
+pub fn settings() -> bool {
+    let mut exit_for_update = false;
     let open = SETTINGS.with(|s| s.get());
     let press = is_mouse_button_pressed(MouseButton::Left);
     let gear = Rect::new(1236.0, 20.0, 32.0, 32.0);
@@ -6098,14 +6478,15 @@ pub fn settings() {
         let mp = modal_open_p();
         overlay();
         draw_rectangle(-2000.0, -2000.0, 5280.0, 5000.0, fade(OUT, 0.6 * mp));
-        let panel = Rect::new(400.0, 210.0 + (1.0 - mp) * 16.0, 480.0, 300.0);
+        let panel = Rect::new(400.0, 128.0 + (1.0 - mp) * 16.0, 480.0, 464.0);
         plate(panel, CARD);
-        stamped("Settings", 640.0, panel.y + 52.0, 34.0, fade(INK, mp));
+        stamped("Settings", 640.0, panel.y + 50.0, 34.0, fade(INK, mp));
+        right(&format!("v{}", crate::update::VERSION), panel.right() - 24.0, panel.y + 34.0, 13.0, fade(MUTED, mp));
         let (mut music, mut sound) = VOLUME.with(|v| v.get());
         let (vp_row, vp_t) = fx(|fx| fx.vol_pop);
         let vp = (1.0 - ((get_time() - vp_t) as f32 / 0.18)).clamp(0.0, 1.0);
         for (row, (label, level)) in [("Music", &mut music), ("Sound", &mut sound)].into_iter().enumerate() {
-            let y = panel.y + 90.0 + row as f32 * 62.0;
+            let y = panel.y + 82.0 + row as f32 * 56.0;
             text(label, panel.x + 36.0, y + 26.0, 22.0, fade(INK, mp));
             if panel_button(Rect::new(panel.x + 140.0, y, 40.0, 36.0), "-", false, press) {
                 *level = (*level - 1).max(0);
@@ -6123,12 +6504,49 @@ pub fn settings() {
             }
         }
         VOLUME.with(|v| v.set((music, sound)));
-        centered("M mutes everything.  N skips to the next song.", 640.0, panel.y + 230.0, 15.0, fade(MUTED, mp));
+        draw_line(panel.x + 36.0, panel.y + 194.0, panel.right() - 36.0, panel.y + 194.0, 1.0, FAINT);
+        let mut perf = PERF_HUD.with(|p| p.get());
+        for (row, (label, bit)) in [("FPS tracker", 1u8), ("Resource graph", 2u8)].into_iter().enumerate() {
+            let y = panel.y + 210.0 + row as f32 * 46.0;
+            let on = perf & bit != 0;
+            text(label, panel.x + 36.0, y + 24.0, 19.0, fade(INK, mp));
+            if panel_button(Rect::new(panel.right() - 136.0, y, 100.0, 34.0), if on { "On" } else { "Off" }, on, press) {
+                perf ^= bit;
+            }
+        }
+        PERF_HUD.with(|p| p.set(perf));
+        draw_line(panel.x + 36.0, panel.y + 306.0, panel.right() - 36.0, panel.y + 306.0, 1.0, FAINT);
+        // in-game updater row
+        let uy = panel.y + 322.0;
+        let st = crate::update::status();
+        let (st_text, st_col, btn_label, btn_on, btn_primary) = match &st {
+            crate::update::Status::Idle => ("Check GitHub Releases".to_string(), MUTED, "Check".to_string(), true, false),
+            crate::update::Status::Checking => ("Checking...".to_string(), MUTED, "...".to_string(), false, false),
+            crate::update::Status::UpToDate => ("Up to date".to_string(), MUTED, "Check".to_string(), true, false),
+            crate::update::Status::Available { version, .. } => (format!("v{version} available"), GOLD, "Update".to_string(), true, true),
+            crate::update::Status::Downloading { version, done, total } => {
+                let pct = if *total > 0 { (done * 100 / total).min(100) } else { 0 };
+                (format!("Downloading v{version}..."), GOLD, format!("{pct}%"), false, false)
+            }
+            crate::update::Status::Ready { version, .. } => (format!("v{version} ready"), GOLD, "Install".to_string(), true, true),
+            crate::update::Status::Failed(e) => (format!("Update failed: {e}"), BLOOD, "Retry".to_string(), true, false),
+        };
+        text("Updates", panel.x + 36.0, uy + 18.0, 19.0, fade(INK, mp));
+        fit_text(&st_text, panel.x + 36.0, uy + 38.0, 290.0, 13.0, fade(st_col, mp));
+        if panel_button_on(Rect::new(panel.right() - 136.0, uy + 4.0, 100.0, 34.0), &btn_label, btn_on, btn_primary, press) {
+            match st {
+                crate::update::Status::Idle | crate::update::Status::UpToDate | crate::update::Status::Failed(_) => crate::update::check(),
+                crate::update::Status::Available { .. } => crate::update::download(),
+                crate::update::Status::Ready { .. } => exit_for_update = crate::update::launch_installer(),
+                _ => {}
+            }
+        }
+        centered("M mutes everything.  N skips to the next song.", 640.0, panel.y + 392.0, 14.0, fade(MUTED, mp));
         if panel_button(Rect::new(panel.x + 50.0, panel.bottom() - 54.0, 180.0, 36.0), "How to play", false, press) {
             HOWTO.with(|h| h.set(true));
             SETTINGS.with(|s| s.set(false));
             start_modal_anim();
-            return;
+            return false;
         }
         toggle |= panel_button(Rect::new(panel.right() - 230.0, panel.bottom() - 54.0, 180.0, 36.0), "Close", true, press);
     }
@@ -6142,6 +6560,7 @@ pub fn settings() {
     if !open && HOWTO.with(|h| h.get()) && rules() {
         HOWTO.with(|h| h.set(false));
     }
+    exit_for_update
 }
 
 #[cfg(test)]

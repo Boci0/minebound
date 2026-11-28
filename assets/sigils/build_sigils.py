@@ -9,6 +9,7 @@ from PIL import Image, ImageFilter, ImageChops
 
 EMBER, TIDE, GALE, STONE, SPARK = 0xff7d4a, 0x4fa8ff, 0x5fe0a8, 0xcbb089, 0xffd84a
 COMMON, RARE, LEGEND, WHITE = 0xdcd8f4, 0x7fc0ff, 0xffc46a, None
+MEDIOCRE, CURSED = 0x9a9a9a, 0xff5d5d
 # (candidate names, first one found wins; colour)
 SIGILS = [
     # 0-2 heroes: Ashwarden, Stormreader, Deepforger (front-on heads, so the four read as a set)
@@ -55,6 +56,14 @@ SIGILS = [
     (["fishing-hook"], COMMON), (["drum"], RARE), (["magnet"], RARE), (["broken-bone"], LEGEND),
     # 101 the fifth hero, Galvanist, opened by a deed
     (["gas-mask"], SPARK),
+    # 102-107 mediocre pacts: Dull Buckler, Rusty Shiv, Chipped Compass, Bent Copper, Stale Crust, Damp Tinder
+    (["cracked-shield"], MEDIOCRE), (["rusty-sword"], MEDIOCRE), (["compass"], MEDIOCRE),
+    (["wire-coil"], MEDIOCRE), (["bread"], MEDIOCRE), (["candle-flame"], MEDIOCRE),
+    # 108-113 cursed bargain pacts: Cracked Aegis, Serrated Toll, Greed's Hook, Frayed Coil, Blood Ledger, Cinder Shackle
+    (["broken-shield"], CURSED), (["spiked-mace"], CURSED), (["grab"], CURSED),
+    (["tesla-coil"], CURSED), (["chalice-drops"], CURSED), (["manacles"], CURSED),
+    # 114-116 pure cursed burden pacts: Lead Weight, Rotting Wick, Faulty Lantern
+    (["weight"], CURSED), (["candle-holder"], CURSED), (["broken-bottle"], CURSED),
 ]
 CELL, COLS, GLYPH = 128, 8, 100
 

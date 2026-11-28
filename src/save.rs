@@ -64,11 +64,13 @@ pub struct Save {
     pub wagers_on: u32,
     /// one-run bespoke relic forged in the Crucible, carried into the next descent and consumed on entry
     pub crucible: Option<CrucibleRelic>,
+    /// semi-transparent performance overlays: bit 0 = FPS tracker, bit 1 = resource usage graph
+    pub perf_hud: u8,
 }
 
 impl Default for Save {
     fn default() -> Save {
-        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8), rules_seen: false, daily: (0, 0), endings: 0, deeds: 0, deeds_seen: 0, ore: 0, wagers: 0, wagers_on: 0, crucible: None }
+        Save { unlocked: 1, best: vec![vec![0; HEROES.len()]; EXPEDITIONS.len()], volume: (6, 8), rules_seen: false, daily: (0, 0), endings: 0, deeds: 0, deeds_seen: 0, ore: 0, wagers: 0, wagers_on: 0, crucible: None, perf_hud: 0 }
     }
 }
 
@@ -120,6 +122,7 @@ impl Save {
                 (Some("crucible"), &[b0, b1, c]) if b0 < CRUCIBLE_BOONS.len() && b1 < CRUCIBLE_BOONS.len() && b0 != b1 && c < CRUCIBLE_CURSES.len() => {
                     save.crucible = Some(CrucibleRelic { boons: [b0, b1], curse: c });
                 }
+                (Some("perf"), &[bits]) => save.perf_hud = (bits as u8) & 0b11,
                 // forge rites are gone: the ore spent on them comes back (60 each), once, as this line is not written again
                 (Some("alts"), &[have]) => save.ore += 60 * (have as u32 & ((1 << 10) - 1)).count_ones(),
                 (Some("best"), &[x, ref heroes @ ..]) if x < EXPEDITIONS.len() => {
@@ -140,6 +143,9 @@ impl Save {
         s += &format!("ore {}\nwagers {} {}\n", self.ore, self.wagers, self.wagers_on);
         if let Some(r) = self.crucible {
             s += &format!("crucible {} {} {}\n", r.boons[0], r.boons[1], r.curse);
+        }
+        if self.perf_hud != 0 {
+            s += &format!("perf {}\n", self.perf_hud);
         }
         for (x, heroes) in self.best.iter().enumerate() {
             let list: Vec<String> = heroes.iter().map(|b| b.to_string()).collect();
@@ -306,6 +312,7 @@ mod tests {
         // winning an older expedition again opens nothing new
         assert_eq!(s.record(0, 0, 3, true), None);
         s.volume = (3, 10);
+        s.perf_hud = 0b11;
         s.rules_seen = true;
         assert!(!Save::parse("rules 1\n").rules_seen, "a save that read the old rules sees the new ones");
         // a daily run keeps its day's result and touches neither bests nor unlocks

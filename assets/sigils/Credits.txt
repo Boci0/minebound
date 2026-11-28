@@ -5,10 +5,10 @@ carl-olsen: spider-alt
 caro-asercion: mole, boar
 cathelineau: witch-face
 darkzaitzev: smoke-bomb
-delapouite: wizard-face, diving-helmet, golem-head, rat, ant, goblin-head, mermaid, spell-book, coins-pile, two-coins, water-diviner-stick, meal, toolbox, time-dynamite, running-shoe, dynamite, barrel, eel, fish-monster, rock-golem, furnace, spider-bot, delivery-drone, walking-turret, battle-mech, ice-golem, flail, tortoise, executioner-hood, griffin-symbol, drum
+delapouite: wizard-face, diving-helmet, golem-head, rat, ant, goblin-head, mermaid, spell-book, coins-pile, two-coins, water-diviner-stick, meal, toolbox, time-dynamite, running-shoe, dynamite, barrel, eel, fish-monster, rock-golem, furnace, spider-bot, delivery-drone, walking-turret, battle-mech, ice-golem, flail, tortoise, executioner-hood, griffin-symbol, drum, rusty-sword, wire-coil, bread, weight
 faithtoken: nautilus-shell
 kier-heyl: dwarf-helmet
-lorc: hound, imp-laugh, spark-spirit, leeching-worm, butterfly, thorny-vine, harpy, ifrit, octopus, cultist, robot-golem, crossed-swords, horned-skull, campfire, crowned-skull, hood, rune-stone, swap-bag, sprint, thorn-helix, treasure-map, crystal-shine, burning-embers, droplets, crystal-growth, breastplate, root-tip, glowing-hands, tripwire, meditation, crystal-cluster, recycle, hourglass, knapsack, gems, shard-sword, third-eye, echo-ripples, battle-axe, jellyfish, angler-fish, evil-book, salamander, fluffy-flame, flame-spin, clockwork, lantern-flame, wax-seal, brass-eye, spectre, wyvern, bee, fishing-hook, magnet, broken-bone, gas-mask
+lorc: hound, imp-laugh, spark-spirit, leeching-worm, butterfly, thorny-vine, harpy, ifrit, octopus, cultist, robot-golem, crossed-swords, horned-skull, campfire, crowned-skull, hood, rune-stone, swap-bag, sprint, thorn-helix, treasure-map, crystal-shine, burning-embers, droplets, crystal-growth, breastplate, root-tip, glowing-hands, tripwire, meditation, crystal-cluster, recycle, hourglass, knapsack, gems, shard-sword, third-eye, echo-ripples, battle-axe, jellyfish, angler-fish, evil-book, salamander, fluffy-flame, flame-spin, clockwork, lantern-flame, wax-seal, brass-eye, spectre, wyvern, bee, fishing-hook, magnet, broken-bone, gas-mask, cracked-shield, compass, candle-flame, broken-shield, spiked-mace, grab, tesla-coil, chalice-drops, manacles, candle-holder, broken-bottle
 priorblue: battery-plus
 skoll: troll, open-treasure-chest, sound-waves, fangs, chess-knight, burning-skull
 willdabeast: chain-lightning

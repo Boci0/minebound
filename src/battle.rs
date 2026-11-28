@@ -35,7 +35,7 @@ pub const HOOKS: &[&str] = &[
     "thorns", "foe_mines", "fewer_mines", "lifesteal_pct", "opening", "shield_turn", "surge_start", "surge_pct",
     "keep_surge", "rite_bonus", "rite_burn", "first_pct", "claim_zap", "claim_heal", "claim_shield", "claim_bonus",
     "salvage", "mine_spite", "armor", "evade", "reveal_shield", "hoard_shield", "chain", "mine_surge", "sense", "echo",
-    "desperate", "heal_after", "foe_mine_gift", "enrage", "slow_enrage", "foe_surge_cap", "easy_break",
+    "desperate", "heal_after", "foe_mine_gift", "enrage", "slow_enrage", "foe_surge_cap", "easy_break", "self_burn",
 ];
 
 #[derive(Clone, Default)]
@@ -589,7 +589,16 @@ impl Battle {
             (self.f[s].hold, self.f[s].blind, self.f[s].simmer) = (false, 0, false);
             self.f[s].burn += self.f[s].mods.self_burn.max(0);
             let m = self.f[s].mods.clone();
-            self.procs(s, &[("start_shield", m.start_shield > 0), ("scouts", m.scouts > 0), ("fewer_mines", m.fewer_mines > 0), ("foe_mines", m.foe_mines > 0)]);
+            self.procs(
+                s,
+                &[
+                    ("start_shield", m.start_shield > 0),
+                    ("scouts", m.scouts > 0),
+                    ("fewer_mines", m.fewer_mines != 0),
+                    ("foe_mines", m.foe_mines > 0),
+                    ("self_burn", m.self_burn > 0),
+                ],
+            );
         }
         for s in 0..2 {
             let d = self.f[s].mods.opening;
@@ -849,7 +858,7 @@ impl Battle {
             // cave-ins pierce shield, straight to HP (like burn), so risky mining always carries a real HP price
             self.f[s].hp -= d;
             self.log.push(format!("A tunnel caves in on {name}: -{d}"));
-            self.procs(s, &[("mine_guard", d > 0 && m.mine_guard > 0)]);
+            self.procs(s, &[("mine_guard", d > 0 && m.mine_guard != 0)]);
             // some opponents feed on your mistakes
             let t = 1 - s;
             for _ in 0..self.f[t].mods.foe_mine_gift.max(0) {

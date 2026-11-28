@@ -53,11 +53,26 @@ pub struct Node {
     pub next: Vec<usize>,
 }
 
+/// Outcome of an encounter choice (or a pre-resolved notice screen), including any pacts granted.
+pub struct EventResult {
+    pub text: String,
+    pub gained: Vec<usize>,
+}
+
+/// Shown when a pact pick triggers after the player already holds every open pact.
+static ALL_PACTS_HELD: Encounter = Encounter {
+    title: "No Pacts Left",
+    text: "Every pact in the depths is already yours.",
+    choices: &[],
+};
+
 /// What the player is looking at. The UI draws it; the simulation plays it.
 pub enum Stage {
     Map,
     Battle(Battle),
     Pick(Vec<usize>),
+    /// Wild Hands wager handed over a bonus pact for this floor: (charm id, whether opening Pick follows)
+    WildHands(usize, bool),
     /// a boss fell: pick one of these skills (by index in `COMBOS`) to upgrade
     Upgrade(Vec<usize>),
     /// a shrine fight was won: pick one of these blessings (by index in `BLESSINGS`), or keep yours
@@ -69,7 +84,7 @@ pub enum Stage {
     /// the hero gained a level: choose +Max HP & Shards or +Trait Power
     LevelUp,
     Shop(Shop),
-    Event(&'static Encounter, Option<String>),
+    Event(&'static Encounter, Option<EventResult>),
     End(bool),
 }
 
@@ -356,10 +371,15 @@ impl Run {
     }
 
     /// Sets the forge's wagers for this run, before its first room; Wild Hands hands over floor 1's
-    /// pact now.
-    pub fn arm(&mut self, wagers: u32) {
+    /// pact now and returns its reveal stage when one is granted.
+    pub fn arm(&mut self, wagers: u32) -> Option<Stage> {
         self.wagers = wagers;
-        self.wild_hands();
+        self.wild_hands().map(|id| Stage::WildHands(id, true))
+    }
+
+    /// Leaves the Wild Hands reveal screen: into the opening pact pick on floor 1, or the map after.
+    pub fn after_wild_hands(&mut self, then_pick: bool) -> Stage {
+        if then_pick { self.pick() } else { Stage::Map }
     }
 
     /// Equips a one-run Crucible relic carried in from the Forge and syncs starting HP to max HP.
@@ -398,17 +418,19 @@ impl Run {
         self.wagers & 1 << k != 0
     }
 
-    /// With Wild Hands on, a random pact not yet held, as a floor begins.
-    fn wild_hands(&mut self) {
+    /// With Wild Hands on, a random pact not yet held, as a floor begins. Returns its id if granted.
+    fn wild_hands(&mut self) -> Option<usize> {
         if !self.wagered(WILD_HANDS) {
-            return;
+            return None;
         }
         let pool: Vec<usize> = (0..CHARMS.len()).filter(|&i| self.pact_open(i) && !self.charms.contains(&i)).collect();
-        if !pool.is_empty() {
-            let id = pool[self.rng.below(pool.len())];
-            self.add_charm(id);
-            self.note += &format!(" Wild Hands gives {}.", CHARMS[id].name);
+        if pool.is_empty() {
+            return None;
         }
+        let id = pool[self.rng.below(pool.len())];
+        self.add_charm(id);
+        self.note += &format!(" Wild Hands gives {}.", CHARMS[id].name);
+        Some(id)
     }
 
     /// Ore this run banks, ended as `won` after `wins` fights: 2 a fight, 10 a boss, 20 an ending,
@@ -470,13 +492,16 @@ impl Run {
     pub fn add_charm(&mut self, id: usize) {
         let before = self.max_hp();
         self.charms.push(id);
-        self.hp += self.max_hp() - before;
+        self.hp = (self.hp + self.max_hp() - before).clamp(1, self.max_hp());
     }
 
     /// Up to `n` charms the player does not own yet; rarer ones come up less often.
     /// `avoid`: ids not to offer this time (the wares a restock replaces).
-    fn offer(&mut self, n: usize, avoid: &[usize]) -> Vec<usize> {
-        let mut pool: Vec<usize> = (0..CHARMS.len()).filter(|&i| self.pact_open(i) && !self.charms.contains(&i) && !self.given.contains(&i) && !avoid.contains(&i)).collect();
+    /// `allow_burdens`: whether pure-downside cursed burdens may be rolled (random grants only, not picks/shops).
+    fn offer(&mut self, n: usize, avoid: &[usize], allow_burdens: bool) -> Vec<usize> {
+        let mut pool: Vec<usize> = (0..CHARMS.len())
+            .filter(|&i| self.pact_open(i) && (allow_burdens || !CHARMS[i].burden) && !self.charms.contains(&i) && !self.given.contains(&i) && !avoid.contains(&i))
+            .collect();
         let mut ids = vec![];
         while ids.len() < n && !pool.is_empty() {
             let total: usize = pool.iter().map(|&i| self.weight(i)).sum();
@@ -514,10 +539,17 @@ impl Run {
     }
 
     fn pick(&mut self) -> Stage {
-        let options = self.offer(3, &[]);
+        let options = self.offer(3, &[], false);
         if options.is_empty() {
             self.shards += 20;
-            return self.after_node();
+            self.note = "Every pact is already yours: +20 shards.".into();
+            return Stage::Event(
+                &ALL_PACTS_HELD,
+                Some(EventResult {
+                    text: "You pocket +20 shards instead.".into(),
+                    gained: vec![],
+                }),
+            );
         }
         Stage::Pick(options)
     }
@@ -656,6 +688,7 @@ impl Run {
             Stage::Map => "map".to_string(),
             Stage::Battle(b) => format!("battle vs {} ({} waves)", b.f[1].name, b.waves),
             Stage::Pick(v) => format!("pick a pact of {}", v.len()),
+            Stage::WildHands(id, _) => format!("wild hands ({})", CHARMS[*id].name),
             Stage::Upgrade(v) => format!("upgrade one of {}", v.len()),
             Stage::Blessing(v) => format!("blessing of {}", v.len()),
             Stage::Brand(v) => format!("brand of {}", v.len()),
@@ -847,7 +880,9 @@ impl Run {
                 Some(e) => format!("{}, past the last boss.", ENDINGS[e].name),
                 None => format!("{}, floor {}.", EXPEDITIONS[self.exp].name, self.floor + 1),
             };
-            self.wild_hands();
+            if let Some(id) = self.wild_hands() {
+                return Stage::WildHands(id, false);
+            }
         }
         Stage::Map
     }
@@ -870,14 +905,15 @@ impl Run {
     }
 
     /// `give` is the pact the player chose to give up, for choices that take one (random if None).
-    pub fn choose(&mut self, c: &Choice, give: Option<usize>) -> String {
+    pub fn choose(&mut self, c: &Choice, give: Option<usize>) -> EventResult {
         let mut msg = vec![];
-        self.apply(c.outs, give, &mut msg);
+        let mut gained = vec![];
+        self.apply(c.outs, give, &mut msg, &mut gained);
         self.given.clear();
-        msg.join(" ")
+        EventResult { text: msg.join(" "), gained }
     }
 
-    fn apply(&mut self, outs: &[Out], give: Option<usize>, msg: &mut Vec<String>) {
+    fn apply(&mut self, outs: &[Out], give: Option<usize>, msg: &mut Vec<String>, gained: &mut Vec<usize>) {
         for o in outs {
             match *o {
                 Out::MaxHp(v) => {
@@ -889,9 +925,10 @@ impl Run {
                     self.shards = (self.shards + v).max(0);
                     msg.push(format!("{v:+} shards."));
                 }
-                Out::GainCharm => match self.offer(1, &[]).first() {
+                Out::GainCharm => match self.offer(1, &[], true).first() {
                     Some(&id) => {
                         self.add_charm(id);
+                        gained.push(id);
                         msg.push(format!("Found a pact: {}.", CHARMS[id].name));
                     }
                     None => {
@@ -922,14 +959,14 @@ impl Run {
                 Out::Kindle => self.kindled = Some(self.floor),
                 Out::Chance(pct, win, lose) => {
                     let outs = if self.rng.chance(pct) { win } else { lose };
-                    self.apply(outs, give, msg);
+                    self.apply(outs, give, msg, gained);
                 }
             }
         }
     }
 
     fn stock(&mut self, restocks: i32, avoid: &[usize]) -> Shop {
-        let ids = self.offer(SHOP_SIZE, avoid);
+        let ids = self.offer(SHOP_SIZE, avoid, false);
         let sale = self.rng.below(ids.len().max(1));
         let markup = self.keys.iter().fold(100, |p, &k| p * ENDINGS[k].price_pct / 100);
         let pool = self.brand_pool();
@@ -1005,7 +1042,7 @@ impl Run {
     /// Swaps every ware on the counter for new ones.
     /// Restocking is only worth paying for while some pact is neither yours nor on the counter.
     pub fn can_restock(&self, shop: &Shop) -> bool {
-        (0..CHARMS.len()).any(|i| self.pact_open(i) && !self.charms.contains(&i) && !shop.stock.contains(&Some(i)))
+        (0..CHARMS.len()).any(|i| self.pact_open(i) && !CHARMS[i].burden && !self.charms.contains(&i) && !shop.stock.contains(&Some(i)))
     }
 
     pub fn restock(&mut self, shop: &mut Shop) -> bool {
@@ -1140,13 +1177,89 @@ mod tests {
             let (mut pact, mut brand) = (false, false);
             for seed in 0..300 {
                 let (mut run, _) = Run::with_deeds(seed, 0, 0, deeds);
-                pact |= run.offer(6, &[]).contains(&hook);
+                pact |= run.offer(6, &[], false).contains(&hook);
                 brand |= run.stock(0, &[]).brand == Some(charge);
             }
             (pact, brand)
         };
         assert_eq!(seen(0), (false, false));
         assert_eq!(seen(0b11), (true, true));
+    }
+
+    #[test]
+    fn wild_hands_shows_a_screen_on_floor_one_and_on_floor_advance() {
+        let (mut run, _) = Run::new(7, 0, 0);
+        let Some(Stage::WildHands(first, true)) = run.arm(1 << WILD_HANDS) else {
+            panic!("Wild Hands should return its floor-1 reveal stage");
+        };
+        assert_eq!(run.charms, vec![first]);
+        let Stage::Pick(options) = run.after_wild_hands(true) else {
+            panic!("dismissing floor-1 Wild Hands opens the initial pact pick");
+        };
+        assert_eq!(options.len(), 3);
+        assert!(!options.contains(&first), "opening pick must not repeat Wild Hands' pact");
+        run.add_charm(options[0]);
+        // beating floor 1's boss advances to floor 2 and shows Wild Hands again before the map
+        run.pos = Some((COLS, 0));
+        let Stage::WildHands(second, false) = run.after_node() else {
+            panic!("floor 2 should open with a Wild Hands reveal stage");
+        };
+        assert_ne!(second, first);
+        assert!(run.charms.contains(&second));
+        assert!(matches!(run.after_wild_hands(false), Stage::Map));
+    }
+
+    #[test]
+    fn encounter_gain_charm_reports_gained_ids_and_empty_pick_shows_shard_notice() {
+        let (mut run, _) = Run::new(5, 0, 0);
+        run.charms = vec![0];
+        let swap = ENCOUNTERS.iter().find(|e| e.title == "Pact Swapper").unwrap();
+        let res = run.choose(&swap.choices[0], Some(0));
+        assert_eq!(res.gained.len(), 2);
+        assert!(res.gained.iter().all(|id| run.charms.contains(id) && *id != 0));
+        // when every open pact is already held, pick() gives +20 shards with a resolved notice screen
+        run.charms = (0..CHARMS.len()).filter(|&i| run.pact_open(i)).collect();
+        let shards_before = run.shards;
+        let Stage::Event(notice, Some(res)) = run.pick() else {
+            panic!("empty pact pool should show a notice instead of skipping silently");
+        };
+        assert_eq!(notice.title, "No Pacts Left");
+        assert!(res.gained.is_empty() && res.text.contains("20 shards"));
+        assert_eq!(run.shards, shards_before + 20);
+        assert!(matches!(run.after_node(), Stage::Map));
+    }
+
+    #[test]
+    fn mediocre_and_cursed_pacts_follow_pool_rules_and_hp_clamp() {
+        let mut saw_mediocre = false;
+        let mut saw_helpful_cursed = false;
+        let mut saw_burden_in_random = false;
+        for seed in 0..400 {
+            let (mut run, stage) = Run::new(seed, 0, 0);
+            if let Stage::Pick(opts) = stage {
+                for id in opts {
+                    assert!(!CHARMS[id].burden, "Pick must never offer pure burden curses");
+                    saw_mediocre |= CHARMS[id].rarity == Rarity::Mediocre;
+                    saw_helpful_cursed |= CHARMS[id].rarity == Rarity::Cursed && !CHARMS[id].burden;
+                }
+            }
+            let shop = run.stock(0, &[]);
+            for id in shop.stock.into_iter().flatten() {
+                assert!(!CHARMS[id].burden, "Shop must never stock pure burden curses");
+            }
+            if let Some(Stage::WildHands(id, _)) = run.arm(1 << WILD_HANDS) {
+                saw_burden_in_random |= CHARMS[id].burden;
+            }
+        }
+        assert!(saw_mediocre, "Mediocre pacts should appear in normal picks");
+        assert!(saw_helpful_cursed, "Helpful cursed bargain pacts should appear in normal picks");
+        assert!(saw_burden_in_random, "Pure cursed burdens should appear in random grants like Wild Hands");
+        // adding a -max_hp curse never drops hp below 1
+        let (mut run, _) = Run::new(1, 0, 0);
+        let aegis = CHARMS.iter().position(|c| c.name == "Cracked Aegis").unwrap();
+        run.hp = 5;
+        run.add_charm(aegis);
+        assert!(run.hp >= 1 && run.hp <= run.max_hp());
     }
 
     #[test]
@@ -1393,6 +1506,7 @@ mod tests {
                     run.add_charm(id);
                     run.after_node()
                 }
+                Stage::WildHands(_, then_pick) => run.after_wild_hands(then_pick),
                 Stage::Upgrade(ids) => run.upgrade(ids[pick.below(ids.len())]),
                 Stage::Blessing(offers) => run.take_blessing(Some(offers[pick.below(offers.len())])),
                 Stage::Brand(offers) => {
@@ -1422,7 +1536,8 @@ mod tests {
                     }
                     run.leave_shop(&shop)
                 }
-                Stage::Event(e, _) => {
+                Stage::Event(_, Some(_)) => run.after_node(),
+                Stage::Event(e, None) => {
                     let ok: Vec<&Choice> = e.choices.iter().filter(|c| run.can_afford(c) && run.shows(c)).collect();
                     let c = ok[pick.below(ok.len())];
                     run.choose(c, None);
@@ -1477,7 +1592,7 @@ mod tests {
         assert!(matches!(run.leave_shop(&shop), Stage::Map));
         let Stage::Event(offer, None) = run.leave_shop(&shop) else { panic!("the eye is offered") };
         let walk_past = run.choose(&offer.choices[1], None);
-        assert!(run.keys.len() == 2 && !walk_past.is_empty(), "leaving it leaves it");
+        assert!(run.keys.len() == 2 && !walk_past.text.is_empty(), "leaving it leaves it");
         run.keys.push(2);
         let marked = run.stock(0, &[]);
         assert_eq!(Run::price(&marked, (marked.sale + 1) % marked.stock.len()), marked.stock[(marked.sale + 1) % marked.stock.len()].map(|id| CHARMS[id].rarity.price() * 125 / 100).unwrap());

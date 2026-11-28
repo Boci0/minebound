@@ -11,6 +11,7 @@ mod run;
 mod save;
 mod sfx;
 mod ui;
+mod update;
 
 use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, stop_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
@@ -236,6 +237,10 @@ async fn main() {
     let mut music = Music::new();
     let mut save = Save::load();
     ui::set_volume(save.volume);
+    ui::set_perf_hud(save.perf_hud);
+    if !ctl::on() {
+        update::check();
+    }
     // the newest open expedition and the first hero
     let mut pick = (save.unlocked - 1, 0);
     let mut screen = Screen::Title;
@@ -271,14 +276,12 @@ async fn main() {
                 Some(Go::Play) => {
                     let seed = fixed_seed.unwrap_or((miniquad::date::now() * 1000.0) as u64);
                     let (mut run, mut stage) = Run::with_deeds(seed, pick.1, pick.0, save.deeds);
-                    run.arm(save.wagers_on);
                     if let Some(relic) = save.take_crucible() {
                         run.equip_crucible(Some(relic));
                         save.store();
                     }
-                    // Wild Hands' pact is held already, so the opening pick cannot offer it again
-                    if let Stage::Pick(options) = &mut stage {
-                        options.retain(|i| !run.charms.contains(i));
+                    if let Some(wh) = run.arm(save.wagers_on) {
+                        stage = wh;
                     }
                     // debug builds only: MINEBOUND_ENDINGS=1 starts every run as Ctrl+E does, for when keys can't be sent
                     if cfg!(debug_assertions) && std::env::var_os("MINEBOUND_ENDINGS").is_some() {
@@ -369,6 +372,10 @@ async fn main() {
                             run.after_node()
                         })
                     }
+                    Stage::WildHands(id, then_pick) => {
+                        ui::status(run);
+                        ui::wild_hands(run, *id).then(|| run.after_wild_hands(*then_pick))
+                    }
                     Stage::Upgrade(ids) => {
                         ui::status(run);
                         ui::upgrade(run, ids).map(|id| run.upgrade(id))
@@ -403,7 +410,7 @@ async fn main() {
                     }
                 };
                 // you may walk away from an expedition anywhere but mid-fight; how far you got still counts
-                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Learn(_) | Stage::LevelUp | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
+                if matches!(stage, Stage::Map | Stage::Pick(_) | Stage::WildHands(..) | Stage::Upgrade(_) | Stage::Blessing(_) | Stage::Brand(_) | Stage::Learn(_) | Stage::LevelUp | Stage::Shop(_) | Stage::Event(..)) && ui::retreat() {
                     // past the last boss a retreat still counts as a win: show what it opened
                     if let Some(x) = save.finish(run, false) {
                         pick.0 = x;
@@ -435,9 +442,12 @@ async fn main() {
             screen = s;
             ui::transition();
         }
-        ui::settings();
-        if ui::volume() != save.volume {
+        if ui::settings() {
+            break;
+        }
+        if ui::volume() != save.volume || ui::perf_hud() != save.perf_hud {
             save.volume = ui::volume();
+            save.perf_hud = ui::perf_hud();
             save.store();
         }
         ui::end_frame();

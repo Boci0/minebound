@@ -46,8 +46,8 @@ full view.
 - **Element reactions**: hit a marked foe with a new element to ignite, douse, gust, crush or arc.
 - **Branching runs** across three floors: battles, elites, encounters, shops, shrines, treasure
   and a boss at the end of each floor.
-- **42 pacts** in three rarities (common, rare, legendary) that bend the rules of a turn, in six
-  **sets**: hold three of one set to wake its bonus.
+- **57 pacts** in five rarities (mediocre, common, rare, legendary, cursed) that bend the rules of a turn, in six
+  **sets**: hold three of one set to wake its bonus. Cursed pacts include both high-risk bargains and pure burdens rolled from random sources.
 - **15 brands** to burn onto rites for extra effects, one per rite level.
 - **10 blessings**: win a shrine fight to take one. You hold one at a time, and each lifts a single
   stat such as damage, shield, healing or burn.
@@ -55,6 +55,7 @@ full view.
   and more.
 - **Six expeditions**, from Shallow Mines to The Null, each harder than the last.
 - **One click to cast**: click a basic or a lit rite and it fires. You can still drag gems into a rite to choose which ones it spends.
+- **Built-in performance HUD & updater**: toggle semi-transparent FPS and CPU/GPU/RAM graphs and check/install GitHub releases directly from Settings.
 - **Seeded runs**: replay any run exactly by its seed.
 
 ## Installation
@@ -279,9 +280,12 @@ You can **Retreat** anywhere outside a battle; how far you got still counts. In 
 
 ![Choosing a pact: three cards, each with its rarity, its set and the set's bonus](docs/screenshots/pact.png)
 
-Pacts are passive items that bend the rules. They come in three rarities: common (30 shards),
-rare (45) and legendary (65). Rarer ones are offered less often. You get them at the start of a
-run, from treasure, shops and some encounters. In battle they sit at the top left and flash each
+Pacts are passive items that bend the rules. They come in five rarities: mediocre (18 shards), common (30),
+cursed (22), rare (45) and legendary (65). Rarer ones are offered less often. Cursed bargains trade a real
+drawback for strong power and appear everywhere; pure cursed burdens only roll from random grants (Wild Hands,
+risky encounters and Wild Gifts), though they still count toward sets and can be swapped or melted. You get
+pacts at the start of a run, from treasure, shops, Wild Hands (shown on a reveal screen each floor) and
+encounters (shown as full pact cards). In battle they sit at the top left and flash each
 time they take effect; if you hold more than fit, the last slot shows **+N** and lists them all
 when you hover it.
 
@@ -301,7 +305,7 @@ toward sets you already hold, and the top bar shows sets two or more deep.
 ![The Tinker's Stall: three pacts with their sets and prices, a brand with the rite to burn it onto, the lesson, restock and leave](docs/screenshots/shop.png)
 
 <details>
-<summary>All 42 pacts</summary>
+<summary>All 57 pacts</summary>
 
 | Pact | Rarity | Set | Effect |
 | --- | --- | --- | --- |
@@ -347,6 +351,21 @@ toward sets you already hold, and the top bar shows sets two or more deep.
 | War Drum | Rare | Blade | +1 power every second turn of a battle (deed: Hoarder) |
 | Damper Coil | Rare | Surge | The enemy's surge cannot pass 3 (deed: Set Bound) |
 | Bone Pact | Legendary | Blood | +1 power every turn of a battle, but 20 less max HP (deed: Two Paths) |
+| Dull Buckler | Mediocre | Guard | Gain 4 shield at the start of each wave |
+| Rusty Shiv | Mediocre | Blade | Your rites deal +2 damage |
+| Chipped Compass | Mediocre | Delver | Every board you are dealt has 1 crack propped up |
+| Bent Copper | Mediocre | Surge | Begin each turn with 2 surge |
+| Stale Crust | Mediocre | Blood | Heal 4 whenever a new wave steps in |
+| Damp Tinder | Mediocre | Cinder | Your burns deal +1 more damage each turn |
+| Cracked Aegis | Cursed | Guard | Every hit on you deals 4 less, but 15 less max HP |
+| Serrated Toll | Cursed | Blade | +3 power, but start every wave with 3 burn |
+| Greed's Hook | Cursed | Delver | +1 pick each turn, but 1 more fault on each of your boards |
+| Frayed Coil | Cursed | Surge | Begin each turn with 7 surge, but cave-ins deal 2 more damage to you |
+| Blood Ledger | Cursed | Blood | Heal for 40% of the damage your rites deal, but start every wave with 3 burn |
+| Cinder Shackle | Cursed | Cinder | Your rites add 2 burn and burns deal +2, but cave-ins deal 3 more damage to you |
+| Lead Weight | Cursed | Guard | -12 max HP, and cave-ins deal 1 more damage to you (random grants only) |
+| Rotting Wick | Cursed | Cinder | Start every wave with 2 burn (random grants only) |
+| Faulty Lantern | Cursed | Delver | 1 more fault on each of your boards (random grants only) |
 
 </details>
 
