@@ -116,9 +116,25 @@ fn parse_release_json(body: &str) -> Result<Option<(String, String, u64)>, Strin
         if let Some(url) = json_str(slice, "browser_download_url") {
             if url.starts_with(ALLOWED_PREFIX) && url.ends_with(ASSET_NAME) {
                 found_url = Some(url);
-                // Look back up to 600 bytes in the same asset object for `"size": <n>`.
-                let back_start = idx.saturating_sub(600);
-                found_size = json_u64_last(&rest[back_start..idx], "size").unwrap_or(0);
+                // Bound size lookup to this asset's enclosing JSON object (skipping nested blocks like uploader).
+                let bytes = rest.as_bytes();
+                let mut depth = 0i32;
+                let mut obj_start = None;
+                for i in (0..idx).rev() {
+                    match bytes[i] {
+                        b'}' => depth += 1,
+                        b'{' if depth == 0 => {
+                            obj_start = Some(i);
+                            break;
+                        }
+                        b'{' => depth -= 1,
+                        _ => {}
+                    }
+                }
+                let start = obj_start.unwrap_or_else(|| idx.saturating_sub(600));
+                found_size = json_u64_last(&rest[start..idx], "size")
+                    .or_else(|| json_u64_last(&rest[idx.saturating_sub(600)..idx], "size"))
+                    .unwrap_or(0);
                 break;
             }
         }
@@ -191,7 +207,8 @@ fn download_installer(version: &str, url: &str, known_size: u64) -> Result<PathB
     let dir = std::env::temp_dir();
     let tmp = dir.join(format!("Minebound-setup-{safe_ver}.tmp"));
     let dest = dir.join(format!("Minebound-setup-{safe_ver}.exe"));
-    let mut file = std::fs::File::create(&tmp).map_err(|_| "cannot write temp file".to_string())?;
+    let raw_file = std::fs::File::create(&tmp).map_err(|_| "cannot write temp file".to_string())?;
+    let mut file = std::io::BufWriter::with_capacity(256 * 1024, raw_file);
     let mut done = 0u64;
     let mut header = [0u8; 2];
     let mut head_n = 0usize;
@@ -211,8 +228,12 @@ fn download_installer(version: &str, url: &str, known_size: u64) -> Result<PathB
         }
         Ok(())
     });
+    let flush_res = {
+        use std::io::Write;
+        file.flush().map_err(|_| "disk write failed".to_string())
+    };
     drop(file);
-    if let Err(e) = res {
+    if let Err(e) = res.and(flush_res) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
@@ -311,7 +332,7 @@ mod http {
             } else {
                 0
             };
-            let mut buf = [0u8; 32 * 1024];
+            let mut buf = [0u8; 64 * 1024];
             loop {
                 let mut read = 0u32;
                 if WinHttpReadData(req.0, buf.as_mut_ptr().cast(), buf.len() as u32, &mut read) == 0 {
@@ -368,5 +389,12 @@ mod tests {
         // Reject untrusted download hosts
         let bad = r#"{"tag_name":"v9.9.9","assets":[{"size":10,"browser_download_url":"https://evil.example/Minebound-setup.exe"}]}"#;
         assert_eq!(parse_release_json(bad).unwrap(), None);
+        // Find size even when >600 bytes separate "size" and "browser_download_url"
+        let pad = "a".repeat(800);
+        let long_asset = format!(
+            r#"{{"tag_name":"v1.7.1","assets":[{{"name":"other.zip","size":123,"browser_download_url":"https://github.com/Boci0/minebound/releases/download/v1.7.1/other.zip"}},{{"name":"Minebound-setup.exe","uploader":{{"login":"bot"}},"size":49228731,"digest":"{pad}","browser_download_url":"https://github.com/Boci0/minebound/releases/download/v1.7.1/Minebound-setup.exe"}}]}}"#
+        );
+        let parsed = parse_release_json(&long_asset).unwrap().unwrap();
+        assert_eq!(parsed.2, 49_228_731);
     }
 }

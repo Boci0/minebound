@@ -145,13 +145,37 @@ impl Fighter {
     /// The gems `c` would take out of `stacks`: its cost, plus the toll paid in whatever element is most
     /// plentiful after that. None if the stacks fall short.
     pub fn payment(&self, c: &Combo, stacks: &[Element]) -> Option<Vec<Element>> {
+        self.payment_with_slotted(c, stacks, &[])
+    }
+
+    /// Like `payment`, but honors any toll gems already slotted into `c`'s sockets.
+    pub fn payment_with_slotted(&self, c: &Combo, stacks: &[Element], slotted: &[Element]) -> Option<Vec<Element>> {
         let mut paid = self.cost(c);
         if !pays(stacks, &paid) {
             return None;
         }
         let mut rest = stacks.to_vec();
         spend(&mut rest, &paid);
-        for _ in 0..self.toll(c) {
+        let mut toll_left = self.toll(c);
+        if toll_left > 0 && !slotted.is_empty() {
+            let mut chosen_toll = slotted.to_vec();
+            for &e in &paid {
+                if let Some(i) = chosen_toll.iter().position(|&x| x == e) {
+                    chosen_toll.remove(i);
+                }
+            }
+            for e in chosen_toll {
+                if toll_left == 0 {
+                    break;
+                }
+                if let Some(i) = rest.iter().position(|&x| x == e) {
+                    rest.remove(i);
+                    paid.push(e);
+                    toll_left -= 1;
+                }
+            }
+        }
+        for _ in 0..toll_left {
             let e = *rest.iter().max_by_key(|&&e| rest.iter().filter(|&&x| x == e).count())?;
             spend(&mut rest, &[e]);
             paid.push(e);
@@ -2011,5 +2035,21 @@ mod tests {
         assert!(b.dig(7));
         assert_eq!(b.f[0].hp, hp - CAVE_DMG, "cave-in deals full CAVE_DMG to HP");
         assert_eq!(b.f[0].shield, 25, "cave-in pierces shield without touching it");
+    }
+
+    #[test]
+    fn payment_with_slotted_respects_chosen_toll_gem() {
+        let mut me = Fighter::new("Me", 0, "", 50, 50, 5, &[Ember, Tide, Gale], Mods::default(), 1);
+        me.mods.toll = 1;
+        let c = combo("Raze");
+        let stacks = [Ember, Gale, Tide, Stone, Stone];
+        // Without slotted gems, payment picks the most plentiful leftover (Stone).
+        assert_eq!(me.payment(c, &stacks), Some(vec![Ember, Gale, Stone]));
+        // With Tide dragged into the toll socket, row-click honors Tide instead of Stone.
+        assert_eq!(me.payment_with_slotted(c, &stacks, &[Tide]), Some(vec![Ember, Gale, Tide]));
+        // With cost + Tide both slotted, still pays [Ember, Gale, Tide].
+        assert_eq!(me.payment_with_slotted(c, &stacks, &[Ember, Tide]), Some(vec![Ember, Gale, Tide]));
+        // Missing required cost fails even if toll is slotted.
+        assert_eq!(me.payment_with_slotted(c, &[Ember, Tide], &[Tide]), None);
     }
 }

@@ -880,7 +880,7 @@ mod perf_os {
         pdh_init: bool,
         pdh_query: *mut core::ffi::c_void,
         pdh_counter: *mut core::ffi::c_void,
-        pdh_buf: Vec<u8>,
+        pdh_buf: Vec<u64>,
     }
 
     impl Drop for Sampler {
@@ -928,11 +928,17 @@ mod perf_os {
                 if buf_sz == 0 {
                     return 0.0;
                 }
-                if self.pdh_buf.len() < buf_sz as usize {
-                    self.pdh_buf.resize(buf_sz as usize, 0);
+                let words = (buf_sz as usize).div_ceil(core::mem::size_of::<u64>());
+                if self.pdh_buf.len() < words {
+                    self.pdh_buf.resize(words, 0);
                 }
-                let mut sz = self.pdh_buf.len() as u32;
+                let buf_bytes = self.pdh_buf.len() * core::mem::size_of::<u64>();
+                let mut sz = buf_bytes as u32;
                 if PdhGetFormattedCounterArrayW(self.pdh_counter, PDH_FMT_DOUBLE, &mut sz, &mut count, self.pdh_buf.as_mut_ptr().cast()) != 0 {
+                    return 0.0;
+                }
+                let need = (count as usize).saturating_mul(core::mem::size_of::<PdhFmtCounterValueItemW>());
+                if need > buf_bytes {
                     return 0.0;
                 }
                 let items = core::slice::from_raw_parts(self.pdh_buf.as_ptr() as *const PdhFmtCounterValueItemW, count as usize);
@@ -1000,6 +1006,29 @@ mod perf_os {
 
 const PERF_SAMPLES: usize = 48;
 
+static PERF_RES_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PERF_BG_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PERF_LATEST: std::sync::Mutex<(u64, f32, f32, f32)> = std::sync::Mutex::new((0, 0.0, 0.0, 0.0));
+
+fn ensure_perf_sampler() {
+    if !PERF_BG_STARTED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        std::thread::spawn(|| {
+            let mut sampler = perf_os::Sampler::new();
+            let mut seq = 0u64;
+            loop {
+                if PERF_RES_ON.load(std::sync::atomic::Ordering::Relaxed) {
+                    let (cpu, gpu, ram) = sampler.sample();
+                    seq = seq.wrapping_add(1);
+                    if let Ok(mut latest) = PERF_LATEST.lock() {
+                        *latest = (seq, cpu, gpu, ram);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        });
+    }
+}
+
 struct PerfState {
     ema_dt: f32,
     fps_hist: [f32; PERF_SAMPLES],
@@ -1011,12 +1040,17 @@ struct PerfState {
     fps_len: usize,
     res_len: usize,
     last_fps_t: f64,
-    last_res_t: f64,
+    last_res_seq: u64,
     cpu_pct: f32,
     gpu_pct: f32,
     ram_mb: f32,
+    fps_label: String,
+    ms_label: String,
+    cpu_label: String,
+    gpu_label: String,
+    ram_label: String,
     proc_label: Option<String>,
-    sampler: perf_os::Sampler,
+    pid_label: Option<String>,
 }
 
 impl PerfState {
@@ -1032,12 +1066,17 @@ impl PerfState {
             fps_len: 0,
             res_len: 0,
             last_fps_t: -1.0,
-            last_res_t: -1.0,
+            last_res_seq: 0,
             cpu_pct: 0.0,
             gpu_pct: 0.0,
             ram_mb: 0.0,
+            fps_label: String::new(),
+            ms_label: String::new(),
+            cpu_label: String::new(),
+            gpu_label: String::new(),
+            ram_label: String::new(),
             proc_label: None,
-            sampler: perf_os::Sampler::new(),
+            pid_label: None,
         }
     }
 }
@@ -1066,11 +1105,15 @@ fn sparkline(r: Rect, buf: &[f32; PERF_SAMPLES], head: usize, len: usize, max_v:
 /// Semi-transparent, click-through FPS tracker and resource usage graph (zero work when disabled).
 fn draw_perf_hud() {
     let bits = PERF_HUD.with(|p| p.get());
+    let show_fps = bits & 1 != 0;
+    let show_res = bits & 2 != 0;
+    PERF_RES_ON.store(show_res, std::sync::atomic::Ordering::Relaxed);
     if bits == 0 {
         return;
     }
-    let show_fps = bits & 1 != 0;
-    let show_res = bits & 2 != 0;
+    if show_res {
+        ensure_perf_sampler();
+    }
     let t = get_time();
     let frame_dt = get_frame_time().clamp(0.0001, 0.5);
 
@@ -1080,25 +1123,41 @@ fn draw_perf_hud() {
         let fps = (1.0 / p.ema_dt).min(999.0);
         let ms = p.ema_dt * 1000.0;
 
-        if show_res && (p.last_fps_t < 0.0 || t - p.last_fps_t >= 0.25) {
-            let h = p.fps_head;
-            p.fps_hist[h] = fps;
-            p.fps_head = (h + 1) % PERF_SAMPLES;
-            p.fps_len = (p.fps_len + 1).min(PERF_SAMPLES);
+        if p.last_fps_t < 0.0 || t - p.last_fps_t >= 0.25 {
+            p.fps_label = format!("{fps:.0} FPS");
+            p.ms_label = format!("{ms:.1} ms");
+            if show_res {
+                let h = p.fps_head;
+                p.fps_hist[h] = fps;
+                p.fps_head = (h + 1) % PERF_SAMPLES;
+                p.fps_len = (p.fps_len + 1).min(PERF_SAMPLES);
+            }
             p.last_fps_t = t;
         }
-        if show_res && (p.last_res_t < 0.0 || t - p.last_res_t >= 0.5) {
-            let (cpu, gpu, ram) = p.sampler.sample();
-            p.cpu_pct = cpu;
-            p.gpu_pct = gpu;
-            p.ram_mb = ram;
-            let h = p.res_head;
-            p.cpu_hist[h] = cpu;
-            p.gpu_hist[h] = gpu;
-            p.ram_hist[h] = ram;
-            p.res_head = (h + 1) % PERF_SAMPLES;
-            p.res_len = (p.res_len + 1).min(PERF_SAMPLES);
-            p.last_res_t = t;
+        if show_res {
+            if let Ok(latest) = PERF_LATEST.try_lock() {
+                let (seq, cpu, gpu, ram) = *latest;
+                if seq != p.last_res_seq {
+                    p.last_res_seq = seq;
+                    p.cpu_pct = cpu;
+                    p.gpu_pct = gpu;
+                    p.ram_mb = ram;
+                    p.cpu_label = format!("CPU {cpu:3.1}%");
+                    p.gpu_label = format!("GPU {gpu:2.0}%");
+                    p.ram_label = format!("RAM {ram:.0}M");
+                    let h = p.res_head;
+                    p.cpu_hist[h] = cpu;
+                    p.gpu_hist[h] = gpu;
+                    p.ram_hist[h] = ram;
+                    p.res_head = (h + 1) % PERF_SAMPLES;
+                    p.res_len = (p.res_len + 1).min(PERF_SAMPLES);
+                }
+            }
+            if p.cpu_label.is_empty() {
+                p.cpu_label = "CPU 0.0%".into();
+                p.gpu_label = "GPU  0%".into();
+                p.ram_label = "RAM 0M".into();
+            }
         }
 
         overlay();
@@ -1116,8 +1175,8 @@ fn draw_perf_hud() {
         let mut cy = r.y;
         if show_fps {
             let fcol = if fps < 30.0 { fade(BLOOD, 0.9) } else if fps < 55.0 { fade(GOLD, 0.88) } else { fade(INK, 0.86) };
-            text(&format!("{:.0} FPS", fps), r.x + 8.0, cy + 18.0, 14.0, fcol);
-            right(&format!("{:.1} ms", ms), r.right() - 8.0, cy + 18.0, 13.0, fade(MUTED, 0.85));
+            text(&p.fps_label, r.x + 8.0, cy + 18.0, 14.0, fcol);
+            right(&p.ms_label, r.right() - 8.0, cy + 18.0, 13.0, fade(MUTED, 0.85));
             cy += 26.0;
             if show_res {
                 draw_line(r.x + 6.0, cy, r.right() - 6.0, cy, 1.0, fade(FAINT, 0.4));
@@ -1133,13 +1192,14 @@ fn draw_perf_hud() {
                     .unwrap_or_else(|| "minebound.exe".into())
             });
             text(proc_name, r.x + 8.0, cy + 13.0, 11.0, fade(MUTED, 0.85));
-            right(&format!("PID {}", std::process::id()), r.right() - 8.0, cy + 13.0, 11.0, fade(MUTED, 0.7));
+            let pid_text = p.pid_label.get_or_insert_with(|| format!("PID {}", std::process::id()));
+            right(pid_text, r.right() - 8.0, cy + 13.0, 11.0, fade(MUTED, 0.7));
             cy += 14.0;
             let gpu_col = rgb(0xff8a4c);
             let ram_col = rgb(0x6fb6ff);
-            text(&format!("CPU {:3.1}%", p.cpu_pct), r.x + 8.0, cy + 15.0, 12.0, fade(GOLD, 0.88));
-            centered(&format!("GPU {:2.0}%", p.gpu_pct), r.center().x + 4.0, cy + 15.0, 12.0, fade(gpu_col, 0.88));
-            right(&format!("RAM {:.0}M", p.ram_mb), r.right() - 8.0, cy + 15.0, 12.0, fade(ram_col, 0.88));
+            text(&p.cpu_label, r.x + 8.0, cy + 15.0, 12.0, fade(GOLD, 0.88));
+            centered(&p.gpu_label, r.center().x + 4.0, cy + 15.0, 12.0, fade(gpu_col, 0.88));
+            right(&p.ram_label, r.right() - 8.0, cy + 15.0, 12.0, fade(ram_col, 0.88));
 
             // top sparkline: CPU % (gold), GPU % (orange), RAM MB (blue)
             let g1 = Rect::new(r.x + 8.0, cy + 21.0, r.w - 16.0, 32.0);
@@ -4806,13 +4866,14 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     }
 
     // the basics, then the rites found, on the right. Click one that is lit to cast it; gems dragged into
-    // a rite's sockets choose which it spends.
+    // a rite's sockets choose which it spends and stay reserved from basics and other rites.
     let rx = 880.0;
-    let ready = b.ready(0);
+    let free_stacks: Vec<Element> = free.iter().map(|&i| me.stacks[i]).collect();
     let (basics, list): (Vec<&'static Combo>, Vec<&'static Combo>) = me.rite_list().into_iter().partition(|c| is_basic(c));
     for (k, &c) in basics.iter().enumerate() {
         let r = Rect::new(rx - 10.0 + k as f32 * 124.0, 278.0, 118.0, 42.0);
-        let lit = ready.iter().any(|x| std::ptr::eq(*x, c));
+        let basic_pay = (!b.wasted(0, c)).then(|| me.payment(c, &free_stacks)).flatten();
+        let lit = basic_pay.is_some();
         let hot = mine && lit && drag.is_none() && r.contains(mouse());
         let h = hover_lerp(r, hot);
         let kick = cast_kick.filter(|(n, _)| *n == c.name).map_or(0.0, |(_, t0)| (1.0 - (now - t0) as f32 / 0.2).clamp(0.0, 1.0));
@@ -4843,12 +4904,18 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             trace(|| format!("  on {}: lit={lit} hot={hot} cast_taken={} clicked={}", c.name, cast.is_some(), clicked()));
         }
         if hot && cast.is_none() && clicked() {
-            if let Some(paid) = me.payment(c, &me.stacks) {
+            if let Some(paid) = basic_pay {
                 cast = Some((c, paid));
             }
         } else if mine && !lit && drag.is_none() && r.contains(mouse()) && clicked() {
-            // say why instead of ignoring the click: each basic takes its own element
-            let why = if b.wasted(0, c) { "FULL HP".into() } else { format!("NO {} GEM", format!("{e:?}").to_uppercase()) };
+            // say why instead of ignoring the click: each basic takes its own loose element
+            let why = if b.wasted(0, c) {
+                "FULL HP".into()
+            } else if me.payment(c, &me.stacks).is_some() {
+                "GEM SLOTTED".into()
+            } else {
+                format!("NO {} GEM", format!("{e:?}").to_uppercase())
+            };
             fx(|fx| fx.floats.push((mouse(), why, MUTED, now, 22.0)));
             play(Sfx::Miss);
         }
@@ -4864,8 +4931,18 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
     let mut targets: Vec<(Rect, &'static Combo, Vec<Element>)> = vec![];
     for &c in &list {
         let (lvl, cost) = (me.level(c), me.cost(c));
-        let lit = ready.iter().any(|r| r.name == c.name);
         let slotted = sockets.get(c.name).cloned().unwrap_or_default();
+        let rite_pay = if b.wasted(0, c) {
+            None
+        } else if slotted.is_empty() {
+            me.payment(c, &free_stacks)
+        } else {
+            let mut avail = Vec::with_capacity(free_stacks.len() + slotted.len());
+            avail.extend_from_slice(&free_stacks);
+            avail.extend_from_slice(&slotted);
+            me.payment_with_slotted(c, &avail, &slotted)
+        };
+        let lit = rite_pay.is_some();
         let r = Rect::new(rx - 10.0, y, 370.0, rh);
         let over_row = mine && r.contains(mouse());
         let kick = cast_kick.filter(|(n, _)| *n == c.name).map_or(0.0, |(_, t0)| (1.0 - (now - t0) as f32 / 0.22).clamp(0.0, 1.0));
@@ -4957,8 +5034,8 @@ pub fn battle_screen(b: &mut Battle, run: &Run, ending: Option<Option<usize>>, a
             burst(at, 8, 110.0, 5.0, el_color(e));
             play(Sfx::Click);
         } else if lit && over_row && drag.is_none() && cast.is_none() && clicked() {
-            // a click on a lit rite casts it, paying from your gems
-            if let Some(paid) = me.payment(c, &me.stacks) {
+            // a click on a lit rite casts it, honoring gems already slotted into its sockets
+            if let Some(paid) = rite_pay {
                 cast = Some((c, paid));
             }
         } else if !lit && over_row && drag.is_none() && clicked() {
